@@ -137,7 +137,7 @@ def _descriptive_with_thirty_answers() -> dict:
         "candidate_id": "candidate-desc-30",
         "question_label": "AUDIT_C01 Q30",
         "sheet_kind": "descriptive",
-        "question_category": "Long Answer",
+        "question_category": "Composition Writing",
         "cognitive_skill": "Apply",
         "question_source": PUBLICATION,
         "question_disclaimer": "",

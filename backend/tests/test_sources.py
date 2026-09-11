@@ -1,4 +1,5 @@
-"""Multi-source tracking: concept/question dedupe across books + source merge."""
+"""Concept source merging and exact question-source provenance across books."""
+import copy
 import io
 
 import openpyxl
@@ -200,40 +201,132 @@ def test_concept_resused_across_books_merges_sources(
         assert {row["concept_source"] for row in rows} == {book}
 
 
-def test_duplicate_questions_across_books_merge_sources(client, db, first_chapter):
-    """Same question text from another book: skipped, question_source merged
-    (contract v2.0 §16: the merged cell is ``" | "``-joined)."""
+def _run_question_source_upload(client, first_chapter, book, body):
+    from tests.conftest import convert_assessment_upload, stream_result
+    files = {"file": (f"q_{book.replace(' ', '_')}.txt", io.BytesIO(body), "text/plain")}
+    response = client.post(
+        "/build-assessments/uploads",
+        params={"upload_type": "questions", "source_book": book}, files=files,
+    )
+    assert response.status_code == 200, response.text
+    job = response.json()
+    convert_assessment_upload(client, job["id"])
+    client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
+        "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
+    })
+    result = stream_result(client.post(
+        f"/build-assessments/uploads/{job['id']}/generate",
+        json={"question_type": "objective"}))
+    return job["id"], result
+
+
+def test_duplicate_questions_across_books_keep_one_source_and_audit_incoming_book(client, db, first_chapter):
+    """A duplicate keeps its original source; the second book is an audit receipt."""
     body = (b"# Qs\n\n"
             b"State the law of refraction with one worked example 4417.\n\n"
             b"Define critical angle for a glass-air interface 4417.")
-
-    from tests.conftest import convert_assessment_upload, stream_result
-
-    def run(book):
-        files = {"file": (f"q_{book.replace(' ', '_')}.txt", io.BytesIO(body), "text/plain")}
-        job = client.post(
-            f"/build-assessments/uploads?upload_type=questions&source_book={book}",
-            files=files,
-        ).json()
-        convert_assessment_upload(client, job["id"])
-        client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
-            "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
-        })
-        return stream_result(client.post(
-            f"/build-assessments/uploads/{job['id']}/generate",
-            json={"question_type": "objective"}))
-
-    first = run("S Chand")
+    _, first = _run_question_source_upload(client, first_chapter, "NCERT", body)
     assert first["created"] == 2
     assert first["duplicates_merged"] == 0
-
-    second = run("Arihant")
+    original_ids = set(first["question_ids"])
+    original_labels = {qid: db.get(models.Question, qid).question_label for qid in original_ids}
+    second_job_id, second = _run_question_source_upload(client, first_chapter, "Selina", body)
     assert second["created"] == 0
     assert second["duplicates_merged"] == 2
+    assert set(second["question_ids"]) == original_ids
+    assert second["blockers"] == []
+    assert len(second["source_receipts"]) == 2
+    db.expire_all()
+    for qid in original_ids:
+        question = db.get(models.Question, qid)
+        assert question.question_source == "NCERT"
+        assert question.question_label == original_labels[qid]
+        receipts = question.route_audit["additional_source_receipts"]
+        assert len(receipts) == 1
+        receipt = receipts[0]
+        assert receipt in second["source_receipts"]
+        assert receipt["job_id"] == second_job_id
+        assert receipt["existing_question_id"] == qid
+        assert receipt["incoming_source"] == receipt["incoming_record"]["question_source"] == "Selina"
+        assert receipt["original_fields"]["question_source"] == "NCERT"
+        assert receipt["original_source_provenance"]["question_source"] == "NCERT"
+        assert receipt["disposition"] == "retained_existing_source"
+        assert receipt["errors"] == []
+    second_job = db.get(models.UploadJob, second_job_id)
+    assert second_job.question_inventory["_assessment_source_receipts"] == second["source_receipts"]
+    assert second_job.status == "generated"
 
-    q = (db.query(models.Question)
-         .filter(models.Question.question.like("State the law of refraction%")).one())
-    assert q.question_source == "S Chand | Arihant"
+
+@pytest.mark.parametrize("historical_source", ["NCERT | Selina", "Unlisted publisher"])
+def test_duplicate_with_unapproved_historical_source_keeps_original_and_incoming_evidence(
+    client, db, first_chapter, historical_source,
+):
+    # The database fixture persists commits between parameter cases.
+    body = f"# Qs\n\nExplain the source preservation example 88291 for {historical_source}.".encode()
+    _, first = _run_question_source_upload(client, first_chapter, "NCERT", body)
+    assert first["created"] == 1
+    question = db.get(models.Question, first["question_ids"][0])
+    question.question_source = historical_source
+    question.route_audit = {}
+    db.commit()
+    before = {"id": question.id, "label": question.question_label, "text": question.question,
+              "source": question.question_source, "audit": copy.deepcopy(question.route_audit)}
+    incoming_job_id, result = _run_question_source_upload(client, first_chapter, "Selina", body)
+    assert result["created"] == result["duplicates_merged"] == 0
+    assert result["question_ids"] == []
+    assert len(result["blockers"]) == len(result["source_receipts"]) == 1
+    receipt = result["source_receipts"][0]
+    assert receipt["disposition"] == "unresolved_existing_vocabulary"
+    assert receipt["original_fields"]["question_source"] == historical_source
+    assert receipt["incoming_source"] == receipt["incoming_record"]["question_source"] == "Selina"
+    assert any("question_source" in error for error in receipt["errors"])
+    db.expire_all()
+    question = db.get(models.Question, before["id"])
+    assert (question.question_label, question.question, question.question_source, question.route_audit) == (
+        before["label"], before["text"], before["source"], before["audit"],
+    )
+    job = db.get(models.UploadJob, incoming_job_id)
+    assert job.status == "deposited"
+    assert job.question_inventory["_assessment_source_receipts"] == [receipt]
+
+
+def test_unapproved_extraction_source_is_rejected_before_question_authoring(db, first_chapter, monkeypatch):
+    from app.services import auth, build_assessments, generation
+    job = models.UploadJob(
+        owner_sub=auth.LOCAL_OWNER_SUB, module="build_assessments", filename="source_gate.txt",
+        upload_type="questions", source_book="Unlisted publisher", status="deposited",
+        mmd_text="Explain the source gate example 55182.",
+        deposit_scope_type="chapter", deposit_scope_ids=[first_chapter["id"]],
+    )
+    db.add(job)
+    db.commit()
+    monkeypatch.setattr(generation, "identify_questions_from_mmd",
+        lambda *args, **kwargs: pytest.fail("Unapproved extracted source must fail before the author"))
+    with pytest.raises(ValueError, match="question_source"):
+        build_assessments.generate_from_upload(db, job.id, question_type="objective")
+    assert job.source_book == "Unlisted publisher"
+    assert job.status == "deposited"
+
+
+def test_questions_generated_from_unlisted_book_keep_generation_source_and_original_book_evidence(db, first_chapter):
+    from app.services import auth, build_assessments
+    job = models.UploadJob(
+        owner_sub=auth.LOCAL_OWNER_SUB, module="build_assessments", filename="generated_source.txt",
+        upload_type="textbook", textbook_mode="create", source_book="Unlisted publisher",
+        status="deposited", mmd_text="Create an example of a light source numbered 91287.",
+        deposit_scope_type="chapter", deposit_scope_ids=[first_chapter["id"]],
+    )
+    db.add(job)
+    db.commit()
+    result = build_assessments.generate_from_upload(db, job.id, question_type="objective")
+    assert result["created"] == 1 and result["blockers"] == []
+    question = db.get(models.Question, result["question_ids"][0])
+    assert question.question_source == "UpSchool DB"
+    assert question.route_audit["question_source_provenance"] == {
+        "question_source": "UpSchool DB", "origin": "generated_from_upload",
+        "job_id": job.id, "recorded_source_book": "Unlisted publisher",
+    }
+    assert job.source_book == "Unlisted publisher"
 
 
 def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, first_chapter):

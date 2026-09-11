@@ -136,7 +136,7 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "source_qid": atom["source_qid"],
             "sheet_kind": "objective" if objective else "descriptive",
             "question_category": (
-                "Multiple Choice Question" if objective else "Long Answer"),
+                "Multiple Choice Question" if objective else "Short Answer Type (3 Marks)"),
             "cognitive_skill": "Remember" if objective else "Understand",
             "difficulty": "Less" if objective else "Moderate",
             "marks": 1 if objective else 3,

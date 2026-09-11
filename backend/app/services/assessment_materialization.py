@@ -21,6 +21,7 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_response_policy as response_policy
 from . import column_spec
 from . import source_task_polishing_policy as source_format
@@ -450,6 +451,13 @@ def _validate_obligation(
         raise MaterializationError("blueprint cell is not an object")
     if not isinstance(meta, Mapping):
         raise MaterializationError("materialization metadata is not an object")
+    vocabulary = (
+        profile.get(output_vocabulary.POLICY_KEY)
+        if isinstance(profile, Mapping) else None
+    )
+    vocabulary_defects = output_vocabulary.field_errors(cell, vocabulary)
+    if vocabulary_defects:
+        raise MaterializationError("; ".join(vocabulary_defects))
     cell_id = str(cell.get("cell_id") or "").strip()
     if not cell_id:
         raise MaterializationError("blueprint cell has no cell_id")
@@ -1151,6 +1159,15 @@ def _decision_payload(
     if foundation_suffix:
         payload["rules"] += foundation_suffix
         payload["critic_rules"] = critic_rules + foundation_suffix
+    vocabulary = meta.get(output_vocabulary.POLICY_KEY)
+    vocabulary_instruction = output_vocabulary.instruction(vocabulary)
+    if vocabulary_instruction:
+        payload["output_vocabulary"] = copy.deepcopy(vocabulary)
+        payload["rules"] += "\n" + vocabulary_instruction
+        payload["critic_rules"] = (
+            str(payload.get("critic_rules") or critic_rules)
+            + "\n" + vocabulary_instruction
+        )
     return visual_evidence.bind(payload, atom if atom is not None else cell)
 
 
@@ -1192,8 +1209,12 @@ def _materialize_prepared(
         ),
         critic=critic,
         store=store,
-        policy_version=(SOURCE_FORMAT_MATERIALIZE_POLICY_VERSION
-                        if source_format.applies(atom) else MATERIALIZE_POLICY_VERSION),
+        policy_version=(
+            (SOURCE_FORMAT_MATERIALIZE_POLICY_VERSION
+             if source_format.applies(atom) else MATERIALIZE_POLICY_VERSION)
+            + ((";" + str(payload["output_vocabulary"]["version"]))
+               if "output_vocabulary" in payload else "")
+        ),
         fixer=fixer,
     )
     result = _assemble(
@@ -1241,6 +1262,10 @@ def materialize_candidate(
 
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
     meta = column_spec.bind_metadata(meta, run_profile)
+    if output_vocabulary.is_current(run_profile.get(output_vocabulary.POLICY_KEY)):
+        meta[output_vocabulary.POLICY_KEY] = copy.deepcopy(
+            run_profile[output_vocabulary.POLICY_KEY]
+        )
     descriptive_answer_capacity = _descriptive_answer_capacity(
         run_profile,
         learning_phase=learning_phase,
@@ -1293,6 +1318,10 @@ def materialize_candidates(
     envelope_sha = _envelope_hash(envelope_sha256)
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
     meta = column_spec.bind_metadata(meta, run_profile)
+    if output_vocabulary.is_current(run_profile.get(output_vocabulary.POLICY_KEY)):
+        meta[output_vocabulary.POLICY_KEY] = copy.deepcopy(
+            run_profile[output_vocabulary.POLICY_KEY]
+        )
     descriptive_answer_capacity = _descriptive_answer_capacity(
         run_profile,
         learning_phase=learning_phase,

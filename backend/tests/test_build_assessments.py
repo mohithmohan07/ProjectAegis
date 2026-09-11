@@ -13,16 +13,16 @@ def test_concept_mapping_stackable_batches_generate(client, first_concept):
 
     # Two stacked blueprint batches in one session.
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Remembering", "Applying"],
+        "cognitive_skills": ["Remember", "Apply"],
         "difficulty_levels": ["Less"],
         "categories": ["Multiple Choice Question"],
         "question_type": "objective",
         "num_questions": 2,
     })
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Analysing"],
+        "cognitive_skills": ["Analyse"],
         "difficulty_levels": ["High"],
-        "categories": ["Long Answer"],
+        "categories": ["Long Answer Type (5 Marks)"],
         "question_type": "descriptive",
         "num_questions": 1,
     })
@@ -40,7 +40,7 @@ def test_chapter_scope_fans_out_to_concepts(client, first_chapter):
         "scope_type": "chapter", "scope_ids": [first_chapter["id"]],
     }).json()
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Understanding"],
+        "cognitive_skills": ["Understand"],
         "difficulty_levels": ["Moderate"],
         "categories": ["Multiple Choice Question"],
         "question_type": "objective",
@@ -66,7 +66,10 @@ def test_upload_path_extract_and_deposit(client, db, first_chapter):
     files = {"file": ("quiz.txt", io.BytesIO(
         b"What is a tangent line?\n\nDefine a chord.\n\nState the tangent-radius theorem."
     ), "text/plain")}
-    job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    job = client.post(
+        "/build-assessments/uploads?upload_type=questions&source_book=NCERT",
+        files=files,
+    ).json()
     # Upload only stages the file — no MMD yet.
     assert job["status"] == "uploaded"
     assert job["mmd_text"] == ""
@@ -86,8 +89,16 @@ def test_upload_path_extract_and_deposit(client, db, first_chapter):
     questions = [db.get(models.Question, qid) for qid in result["question_ids"]]
     assert all(question.marks == 1.0 for question in questions)
     assert all(question.question_duration == 2.0 for question in questions)
+    assert all(question.question_source == "NCERT" for question in questions)
     assert all(set(question.route_audit) == {
-        "concept_key", "basis", "evidence", "rationale", "flags", "authority"
+        "concept_key", "basis", "evidence", "rationale", "flags", "authority",
+        "_assessment_output_vocabulary", "question_source_provenance",
+    } for question in questions)
+    assert all(question.route_audit["question_source_provenance"] == {
+        "question_source": "NCERT",
+        "origin": "extracted_upload",
+        "job_id": job["id"],
+        "recorded_source_book": "NCERT",
     } for question in questions)
     assert all(
         question.route_audit["authority"]["policy_version"]
@@ -117,7 +128,10 @@ def test_upload_auto_is_default_and_generates(client, first_chapter):
         b"What is a tangent?\n\nExplain why a tangent is perpendicular to the radius."
         b"\n\nDescribe and prove the two-tangent theorem."
     ), "text/plain")}
-    job = client.post("/build-assessments/uploads?upload_type=questions", files=files).json()
+    job = client.post(
+        "/build-assessments/uploads?upload_type=questions&source_book=NCERT",
+        files=files,
+    ).json()
     convert_assessment_upload(client, job["id"])
     client.post(f"/build-assessments/uploads/{job['id']}/deposit", json={
         "scope_type": "chapter", "scope_ids": [first_chapter["id"]],

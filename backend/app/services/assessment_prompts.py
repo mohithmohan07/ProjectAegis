@@ -25,6 +25,7 @@ import math
 from typing import Any, Mapping
 
 from . import column_spec
+from . import assessment_output_vocabulary as output_vocabulary
 from . import katex_rules as kr
 from . import prompts
 
@@ -512,6 +513,15 @@ def build_prompt(
     board = str(board or policy_metadata.get("board") or "")
     policy_metadata.update(subject=subject, grade=grade, board=board)
     policy = column_spec.from_metadata(policy_metadata)
+    vocabulary = (
+        output_vocabulary.snapshot() if metadata is None
+        else policy_metadata.get(output_vocabulary.POLICY_KEY)
+    )
+    vocabulary_defects = output_vocabulary.field_errors(
+        {"question_category": category, "cognitive_skills": skill}, vocabulary,
+    )
+    if vocabulary_defects:
+        raise ValueError("; ".join(vocabulary_defects))
     parts = [
         column_spec.OUTPUT_DISCIPLINE,
         column_spec.ASSESSMENT_QUALITY,
@@ -545,6 +555,13 @@ def build_prompt(
         "COLUMN SPECIFICATION POLICY (applies to the explicitly named fields):\n"
         "column_spec_policy = " + json.dumps(policy, ensure_ascii=False, sort_keys=True),
     ]
+    vocabulary_instruction = output_vocabulary.instruction(vocabulary)
+    if vocabulary_instruction:
+        parts.append(vocabulary_instruction)
+        parts.append(
+            "Echo question_category and cognitive_skills exactly from the "
+            "recorded blueprint cell. Do not return an alias or a new label."
+        )
     return "\n\n".join(parts)
 
 

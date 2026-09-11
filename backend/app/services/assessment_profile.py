@@ -965,8 +965,11 @@ def resolve_for_metadata(
         # and profiles with an already-known subject unchanged.
         resolved[column_spec.POLICY_KEY] = column_spec.for_metadata(run_metadata)
     if output_vocabulary.POLICY_KEY not in resolved and not was_resolved:
+        # New runs adopt the owner's closed CMS catalogue. An already-resolved
+        # profile without it is historical evidence, never an implicit upgrade.
         resolved[output_vocabulary.POLICY_KEY] = output_vocabulary.snapshot()
     if output_vocabulary.POLICY_KEY in resolved:
+        _validate_output_policy_snapshots(resolved)
         existing_snapshot = resolved.get(output_vocabulary.FORMAT_SNAPSHOT_KEY)
         snapshot_selectors = (
             existing_snapshot.get("metadata", {})
@@ -978,7 +981,9 @@ def resolve_for_metadata(
             )
             for field in ("board", "grade", "subject")
         ):
-            # Freeze exact categories AND their rules. Filling previously
+            # Freeze exact categories AND their rules. The current catalogue
+            # admits only owner-approved labels; the legacy configuration
+            # remains intact for old run snapshots. Filling previously
             # unknown metadata is allowed above; retargeting known selectors
             # has already failed before this point.
             resolved[output_vocabulary.FORMAT_SNAPSHOT_KEY] = {
@@ -1204,20 +1209,66 @@ def master_workbook_contract(
     return contract
 
 
+def _validate_output_policy_snapshots(profile: Mapping[str, Any]) -> None:
+    """Refuse supplied current snapshots that disagree with their version.
+
+    A local format can expose a subset of the approved catalogue. It cannot
+    reuse a prior vocabulary's cache or authorize an additional output label.
+    Existing historical profiles keep their recorded validation semantics.
+    """
+    vocabulary = profile.get(output_vocabulary.POLICY_KEY)
+    if not output_vocabulary.is_current(vocabulary):
+        return
+    output_vocabulary.require_valid_policy(vocabulary)
+    if output_vocabulary.FORMAT_SNAPSHOT_KEY not in profile:
+        return
+    frozen = profile[output_vocabulary.FORMAT_SNAPSHOT_KEY]
+    if not isinstance(frozen, Mapping) or not isinstance(frozen.get("metadata"), Mapping):
+        raise ValueError("current output vocabulary requires a valid assessment format snapshot")
+    policy = frozen.get("policy")
+    if not isinstance(policy, Mapping):
+        raise ValueError("current assessment format snapshot policy must be an object")
+    if policy.get("output_vocabulary_version") != vocabulary["version"]:
+        raise ValueError(
+            "assessment format snapshot vocabulary version does not match "
+            "the current output vocabulary; inconsistent supplied snapshots "
+            "cannot be reused or silently rebuilt"
+        )
+    formats = policy.get("formats_by_sheet")
+    if not isinstance(formats, Mapping):
+        raise ValueError("current assessment format snapshot has no formats_by_sheet object")
+    for sheet, categories in formats.items():
+        if not isinstance(categories, Mapping):
+            raise ValueError(f"assessment format snapshot categories for {sheet!r} must be an object")
+        for category, rule in categories.items():
+            if category not in output_vocabulary.QUESTION_CATEGORIES:
+                raise ValueError(
+                    f"assessment format snapshot has unapproved category {category!r} "
+                    f"for {sheet!r}"
+                )
+            if category == "True or False" and sheet != "subjective":
+                raise ValueError("assessment format snapshot must keep True or False on subjective")
+            if not isinstance(rule, Mapping):
+                raise ValueError(f"assessment format snapshot rule for {category!r} must be an object")
+
+
 def assessment_format_policy(
     profile: Mapping | str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve the exact assessment-format policy for one run.
 
-    A metadata override replaces the generic format vocabulary; it does not
-    merge in categories that the matched board policy does not permit.  When
-    no override matches, the generic CMS policy is returned unchanged.
-    Matching is exact over the aliases declared by the profile.
+    Historical policies keep their exact metadata-selected vocabulary. A new
+    closed-CMS generic policy exposes the owner's approved catalogue. An
+    explicit local policy is intersected with that catalogue, retaining its
+    exact calibration and restrictions. It never maps an unqualified
+    Short/Long Answer label to a mark-specific category.
+    Matching metadata is exact over the aliases declared by the profile.
     """
 
     selected = _value(profile, "assessment_format")
     resolved_profile = resolve(profile)
+    _validate_output_policy_snapshots(resolved_profile)
     if isinstance(metadata, Mapping):
         # Supplying metadata is an explicit lookup and must not be
         # contaminated by selectors carried from a different run.
@@ -1260,8 +1311,9 @@ def output_question_category(
 ) -> str:
     """Serialize an already-selected category using the run's frozen labels.
 
-    Unknown values remain unchanged so the exact per-sheet gate reports the
-    defect. This helper never supplies a category for a missing decision.
+    Current policies serialize the decision verbatim so aliases are defects.
+    Older snapshots keep their declared exact spelling aliases for replay.
+    This helper never supplies a category for a missing decision.
     """
     # Read the immutable run snapshot directly on the per-row projection
     # path; copying every marks/duration table for each label is unnecessary.

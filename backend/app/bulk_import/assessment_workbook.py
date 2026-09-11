@@ -39,11 +39,13 @@ from typing import Any, Mapping
 
 import openpyxl
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-from openpyxl.styles import Alignment, Font
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from . import ANSWER_TYPES
 from .. import bulk_import as bi
 from ..services import assessment_profile
+from ..services import assessment_output_vocabulary as output_vocabulary
 from ..services import openai_usage
 from ..services import column_spec
 from ..services import assessment_release as rel
@@ -664,6 +666,19 @@ def _append_record(
             ws.cell(
                 row=row_number, column=column,
             ).number_format = NUMERIC_DISPLAY_FORMAT
+    # Unresolved controlled values remain downloadable as blank, visibly
+    # blocked cells. The full originals live in the manifest/snapshot evidence.
+    for defect in record.get("_taxonomy_output_defects") or []:
+        field = str(defect.get("field") or "question_label")
+        if field not in active_fields:
+            field = "question_label"
+        if field not in active_fields:
+            continue
+        cell = ws.cell(row=row_number, column=active_fields.index(field) + 1)
+        cell.fill = PatternFill(fill_type="solid", fgColor="FCE8E6")
+        note = "BLOCKED: " + str(defect.get("message") or "Unresolved output vocabulary")
+        previous = cell.comment.text + "\n" if cell.comment else ""
+        cell.comment = Comment((previous + note)[:32000], "Aegis")
 
 
 def _write_headers(
@@ -949,10 +964,81 @@ def multipart_parent_projection_defects(answers: Any, sub_questions: Any) -> lis
     return defects
 
 
+def _project_output_vocabulary(
+    record: dict, candidate: Mapping, profile: Mapping | str | None,
+    *, defects: list[dict] | None = None, source_book: str | None = None,
+) -> None:
+    """Blank invalid controlled cells without guessing their replacement."""
+    resolved = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+    policy = resolved.get(output_vocabulary.POLICY_KEY)
+    if not output_vocabulary.is_current(policy):
+        return
+    findings: list[dict] = []
+    errors = output_vocabulary.field_errors(
+        {**record, "sheet_kind": candidate.get("sheet_kind")},
+        policy, include_source=True,
+    )
+    policy_errors = output_vocabulary.policy_errors(policy)
+    for field in ("question_category", "cognitive_skills", "question_source"):
+        field_errors = policy_errors + [
+            error for error in errors if error.startswith(f"{field} ")
+        ]
+        if not field_errors:
+            continue
+        findings.append({
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "question_label": str(candidate.get("question_label") or ""),
+            "code": "output_vocabulary_invalid",
+            "field": field,
+            "original_value": record.get(field),
+            "projected_value": "",
+            "message": "; ".join(field_errors),
+        })
+        record[field] = ""
+    if source_book is not None:
+        expected_source = (
+            column_spec.from_profile(resolved).get("generated_question_source")
+            if candidate.get("source_policy") == rel.GENERATED_SOURCE_POLICY
+            else source_book
+        )
+        original_source = candidate.get("question_source", expected_source)
+        if original_source != expected_source:
+            findings.append({
+                "candidate_id": str(candidate.get("candidate_id") or ""),
+                "question_label": str(candidate.get("question_label") or ""),
+                "code": "question_source_provenance_mismatch",
+                "field": "question_source",
+                "original_value": original_source,
+                "expected_source": expected_source,
+                "projected_value": "",
+                "message": "question_source differs from the frozen source provenance; no replacement was inferred",
+            })
+            record["question_source"] = ""
+    # Children have no taxonomy columns of their own; still record any
+    # populated invalid metadata and mark the owning question visibly.
+    for error in rel.output_vocabulary_errors(candidate, resolved):
+        if not error.startswith("sub_questions["):
+            continue
+        findings.append({
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "question_label": str(candidate.get("question_label") or ""),
+            "code": "output_vocabulary_invalid",
+            "field": "question_label",
+            "original_value": candidate.get("sub_questions"),
+            "message": error,
+        })
+    if findings:
+        record["_taxonomy_output_defects"] = findings
+        if defects is not None:
+            defects.extend(findings)
+
+
 def _question_record(
     candidate: Mapping, sheet: str, profile: Mapping | str | None = None,
     *, truncated: list[dict] | None = None,
     descriptive_answer_slots: int = MAX_DESCRIPTIVE_ANSWERS,
+    vocabulary_defects: list[dict] | None = None,
+    source_book: str | None = None,
 ) -> dict:
     """Project one candidate onto its sheet's question columns.
 
@@ -1028,6 +1114,18 @@ def _question_record(
         "marks": candidate.get("marks", ""),
         "answer_explanation": candidate.get("answer_explanation", ""),
     }
+    resolved_profile = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+    if output_vocabulary.is_current(resolved_profile.get(output_vocabulary.POLICY_KEY)):
+        if "question_source" not in candidate:
+            # Only recorded provenance selects this field; the approved list
+            # never converts a publication into an unrelated source label.
+            generated_source = column_spec.from_profile(resolved_profile).get("generated_question_source")
+            record["question_source"] = (
+                generated_source
+                if candidate.get("source_policy") == rel.GENERATED_SOURCE_POLICY and generated_source
+                else source_book if source_book is not None
+                else assessment_profile.question_source(profile)
+            )
     answers = _mapping_array("answers", candidate.get("answers"))
     if sheet == "Objective":
         # The layout has exactly this many slots; an overflow is named at
@@ -1189,6 +1287,10 @@ def _question_record(
             record[field] = katex_rules.replace_unsupported_tables(
                 str(record.get(field) or "")
             )
+    _project_output_vocabulary(
+        record, candidate, profile, defects=vocabulary_defects,
+        source_book=source_book,
+    )
     return record
 
 
@@ -1385,6 +1487,7 @@ def render_master_file(
         })
 
     truncated: list[dict] = []
+    vocabulary_defects: list[dict] = []
     # S9's cell-shape ledger. Every entry carries the FULL value, so a cell
     # the format cannot hold is repaired in the workbook and recorded whole
     # here — the ``truncated_rows`` pattern one level down, at the cell.
@@ -1430,9 +1533,15 @@ def render_master_file(
             _question_record(
                 candidate, sheet, profile, truncated=truncated,
                 descriptive_answer_slots=descriptive_answer_slots,
+                vocabulary_defects=vocabulary_defects,
+                source_book=str(snapshot.get("source_book") or ""),
             )
         )
-        if not str(record.get("question_source") or "").strip():
+        resolved_profile = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+        if (
+            not output_vocabulary.is_current(resolved_profile.get(output_vocabulary.POLICY_KEY))
+            and not str(record.get("question_source") or "").strip()
+        ):
             # Contract v2.0 §18: the publication is a per-run scalar; a
             # candidate that predates the stamping seam takes the
             # snapshot's frozen source book. Still blank → read-back
@@ -1538,6 +1647,7 @@ def render_master_file(
         # What no XLSX cell can hold, with the whole value beside it
         # (spec-step8 S9). Refused at staging as ``render_shape_overflow``.
         "oversized_cells": oversized,
+        "output_vocabulary_defects": vocabulary_defects,
     }
     return _workbook_bytes(wb), issues
 
@@ -2252,6 +2362,14 @@ def validate_master_file(
     errors = _header_errors(parsed, schema)
     if errors:
         return errors
+    vocabulary = profile.get(output_vocabulary.POLICY_KEY)
+    if output_vocabulary.is_current(vocabulary):
+        for candidate in snapshot.get("candidates") or []:
+            identity = str(candidate.get("question_label") or candidate.get("candidate_id") or "candidate")
+            errors.extend(
+                f"{identity}: {error}"
+                for error in rel.output_vocabulary_errors(candidate, profile)
+            )
     if "subjective" not in assessment_profile.sheet_kinds(profile) and (
         parsed["sheets"]["Subjective"]["rows"]
     ):
@@ -2323,6 +2441,10 @@ def validate_master_file(
         ).strip()
         for candidate in snapshot.get("candidates") or []
         if str(candidate.get("question_label") or "").strip()
+    }
+    candidate_by_label = {
+        str(candidate.get("question_label") or ""): candidate
+        for candidate in snapshot.get("candidates") or []
     }
     # The same count the renderer used: how many question rows each concept
     # actually places. A concept with none gets ONE tail row stopping at the
@@ -2653,6 +2775,25 @@ def validate_master_file(
                     "non-blank question_label"
                 )
             label = raw_label or f"{name} row {i}"
+            errors.extend(
+                f"{label}: {error}" for error in output_vocabulary.field_errors(
+                    {**row, "sheet_kind": name.lower()},
+                    vocabulary, include_source=True,
+                )
+            )
+            if output_vocabulary.is_current(vocabulary):
+                expected_candidate = candidate_by_label.get(raw_label)
+                if expected_candidate is not None:
+                    expected_source = (
+                        column_policy.get("generated_question_source")
+                        if expected_candidate.get("source_policy") == rel.GENERATED_SOURCE_POLICY
+                        else str(snapshot.get("source_book") or "")
+                    )
+                    if row.get("question_source") != expected_source:
+                        errors.append(
+                            f"{label}: question_source differs from the frozen "
+                            "source provenance"
+                        )
             if not str(row.get("question") or "").strip():
                 errors.append(f"{label}: question must not be blank")
             appears = str(row.get("question_appears_in") or "")

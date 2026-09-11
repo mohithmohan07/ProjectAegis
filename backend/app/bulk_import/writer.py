@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,7 @@ from .. import models
 from ..services import openai_usage
 from ..services import (
     assessment_release as release_contract,
+    assessment_output_vocabulary as output_vocabulary,
     column_spec,
     directory,
     identity,
@@ -1029,6 +1031,69 @@ def _group_band_values(q: models.Question, group: models.Group) -> dict:
     }
 
 
+def _question_taxonomy_projection(q: models.Question) -> dict:
+    """Project only the vocabulary frozen onto this question's creation.
+
+    Unmarked historical database rows retain their original export policy.
+    Current rows keep invalid originals in the audit/comment receipt while
+    the controlled worksheet cells remain blank and visibly blocked.
+    """
+    raw_audit = getattr(q, "route_audit", None)
+    audit = raw_audit if isinstance(raw_audit, Mapping) else {}
+    policy = audit.get(output_vocabulary.POLICY_KEY)
+    values = {
+        "question_label": q.question_label,
+        "question_category": q.question_category,
+        "cognitive_skills": q.cognitive_skills,
+        "question_source": q.question_source,
+    }
+    if not output_vocabulary.is_current(policy):
+        return values
+    candidate = {
+        "candidate_id": str(q.id or ""),
+        "question_label": q.question_label,
+        "sheet_kind": q.sheet_kind,
+        "question_category": q.question_category,
+        "cognitive_skill": q.cognitive_skills,
+        "question_source": q.question_source,
+        "sub_questions": q.sub_questions,
+    }
+    workbook_contract._project_output_vocabulary(
+        values, candidate, {output_vocabulary.POLICY_KEY: policy},
+    )
+    provenance = audit.get("question_source_provenance")
+    if isinstance(provenance, Mapping) and "question_source" in provenance:
+        if q.question_source != provenance["question_source"]:
+            values["question_source"] = ""
+            values.setdefault("_taxonomy_output_defects", []).append({
+                "candidate_id": str(q.id or ""),
+                "question_label": q.question_label,
+                "code": "question_source_provenance_mismatch",
+                "field": "question_source",
+                "original_value": q.question_source,
+                "expected_source": provenance["question_source"],
+                "projected_value": "",
+                "message": "question_source differs from its frozen provenance",
+            })
+    return values
+
+
+def _write_question_taxonomy_notes(ws, row: int, q: models.Question, sheet_layout) -> None:
+    for defect in _question_taxonomy_projection(q).get("_taxonomy_output_defects") or []:
+        field = str(defect.get("field") or "question_label")
+        column = sheet_layout.column("question", field)
+        if column is None:
+            column = sheet_layout.column("question", "question_label")
+        if column is None:
+            continue
+        cell = ws.cell(row=row, column=column + 1)
+        cell.fill = PatternFill(fill_type="solid", fgColor="FCE8E6")
+        original = json.dumps(defect.get("original_value"), ensure_ascii=False, default=str)
+        note = f"BLOCKED: {defect['message']}\nOriginal evidence: {original}"
+        previous = cell.comment.text + "\n" if cell.comment else ""
+        cell.comment = Comment((previous + note)[:32000], "Aegis")
+
+
 def _question_band_values(
     q: models.Question, sheet_layout: layouts.SheetLayout,
 ) -> dict:
@@ -1336,6 +1401,7 @@ def _question_band_values(
             )
             values[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
             values[f"sq{n}_keyword_{m}"] = keyword_content
+    values.update(_question_taxonomy_projection(q))
     return values
 
 
@@ -1724,8 +1790,10 @@ def _question_to_row(q: models.Question, kind: str,
         concept_question_labels=q.question_label,
     ))
     row += _band_cells(sheet_layout, "group", _group_band_values(q, group))
-    row += _band_cells(
-        sheet_layout, "question", _question_band_values(q, sheet_layout))
+    question_values = _question_band_values(q, sheet_layout)
+    row += _band_cells(sheet_layout, "question", question_values)
+    if decisions is not None:
+        decisions.extend(question_values.get("_taxonomy_output_defects") or [])
 
     expected = len(sheet_layout.fields) + (
         len(concept_fields) - len(sheet_layout.block_fields("concept")))
@@ -2315,6 +2383,9 @@ def write_workbook(db: Session, dest: Path | None = None,
                     column=i,
                     value=value,
                 )
+            _write_question_taxonomy_notes(
+                ws, next_row[q.sheet_kind], q, _target_sheet(q.sheet_kind),
+            )
             next_row[q.sheet_kind] += 1
             concepts_with_rows.add(group.concept_id)
     if question_ids is None:
@@ -2526,7 +2597,25 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                     (index.sheet_meta.get(loc[0]) or {}).get("q_src_col")
                     if loc else None
                 )
-                if loc and q.question_source and col is not None:
+                audit = q.route_audit if isinstance(q.route_audit, Mapping) else {}
+                strict_vocabulary = output_vocabulary.is_current(audit.get(output_vocabulary.POLICY_KEY))
+                if loc and col is not None and strict_vocabulary:
+                    sheet_name, row_i = loc
+                    projection = _question_taxonomy_projection(q)
+                    decisions.extend(projection.get("_taxonomy_output_defects") or [])
+                    header = next(wb[sheet_name].iter_rows(min_row=2, max_row=2, values_only=True), ())
+                    current_layout = _identified_sheet(sheet_name, header, q.sheet_kind)
+                    for field in ("question_category", "cognitive_skills", "question_source"):
+                        field_column = current_layout.column("question", field)
+                        if field_column is None:
+                            continue
+                        cell = wb[sheet_name].cell(row=row_i, column=field_column + 1)
+                        if projection[field] != str(cell.value or ""):
+                            _set_cell_value(cell, projection[field])
+                            if field == "question_source":
+                                appended["sources_updated"] += 1
+                    _write_question_taxonomy_notes(wb[sheet_name], row_i, q, current_layout)
+                elif loc and q.question_source and col is not None:
                     sheet_name, row_i = loc
                     cell = wb[sheet_name].cell(row=row_i, column=col + 1)
                     merged = merge_sources(str(cell.value or ""), q.question_source)
@@ -2569,13 +2658,15 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
             index.labels.add(q.question_label)
             for i, value in enumerate(row_values, start=1):
                 _write_cell(ws, row=target, column=i, value=value)
+            _write_question_taxonomy_notes(ws, target, q, sheet_layout)
             appended[q.sheet_kind] += 1
             if is_tag:
                 appended["tagged"] += 1
 
     workbook_sync.atomic_save_workbook(wb, path)
-    if decisions:
-        appended["fixer_decisions"] = decisions
+    fixer_decisions = [decision for decision in decisions if "decision_sha256" in decision]
+    if fixer_decisions:
+        appended["fixer_decisions"] = fixer_decisions
     # Symmetric with ``append_concepts``: the same defect on the same row
     # composer reaches the release-issue channel from either entry point.
     issues = [
@@ -2583,10 +2674,21 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
         for decision in decisions
         if decision["code"] in {
             ROW_WIDTH_MISMATCH, WORKBOOK_CAPACITY_ERROR,
+            "output_vocabulary_invalid", "question_source_provenance_mismatch",
         }
     ]
     if issues:
         appended["issues"] = issues
+    vocabulary_issues = [
+        issue for issue in issues
+        if issue["code"] in {
+            "output_vocabulary_invalid", "question_source_provenance_mismatch",
+        }
+    ]
+    if vocabulary_issues:
+        appended["output_vocabulary_defects"] = vocabulary_issues
+        appended["valid"] = False
+        appended["readiness"] = "blocked_for_database_upload"
     if index.mismatches:
         appended["layout_mismatches"] = list(index.mismatches)
     return appended

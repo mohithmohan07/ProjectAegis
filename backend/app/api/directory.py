@@ -7,7 +7,8 @@ from .. import bulk_import as bi
 from .. import models, schemas
 from ..config import use_live_generation, use_live_workbooks
 from ..db import get_db
-from ..services import directory, mmd
+from ..services import directory, mmd, assessment_profile
+from ..services import assessment_output_vocabulary as output_vocabulary
 
 router = APIRouter(prefix="/directory", tags=["directory"])
 
@@ -37,13 +38,17 @@ def get_concept(concept_id: int, db: Session = Depends(get_db)):
 @router.get("/vocab", response_model=schemas.Vocab)
 def get_vocab():
     """Controlled vocabularies for Blueprint settings and upload flows."""
+    current_profile = assessment_profile.resolve_for_metadata(None, {})
     return schemas.Vocab(
         boards=bi.BOARDS,
         grades=bi.GRADES,
         question_types=bi.QUESTION_TYPES,
-        cognitive_skills=bi.COGNITIVE_SKILLS,
+        cognitive_skills=list(output_vocabulary.COGNITIVE_SKILLS),
         difficulty_levels=bi.DIFFICULTY_LEVELS,
-        question_categories=bi.QUESTION_CATEGORIES,
+        question_categories={
+            sheet: list(categories)
+            for sheet, categories in assessment_profile.question_categories(current_profile).items()
+        },
         group_types=bi.GROUP_TYPES,
         upload_types=mmd.UPLOAD_TYPES,
         book_sources=bi.BOOK_SOURCES,

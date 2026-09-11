@@ -29,6 +29,7 @@ from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import assessment_workbook
 from . import assessment_profile
+from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
 from . import generation_recovery
@@ -1194,6 +1195,18 @@ def upload_master_to_database(
                 route_audit={
                     "release_uid": release.release_uid,
                     "version": release.version,
+                    **({
+                        output_vocabulary.POLICY_KEY: copy.deepcopy(
+                            run_profile[output_vocabulary.POLICY_KEY]
+                        ),
+                        "question_source_provenance": {
+                            "question_source": candidate.get("question_source"),
+                            "source_policy": candidate.get("source_policy"),
+                            "source_book": snapshot.get("source_book"),
+                        },
+                    } if output_vocabulary.is_current(
+                        run_profile.get(output_vocabulary.POLICY_KEY)
+                    ) else {}),
                 },
             ))
             written_here.add(label)

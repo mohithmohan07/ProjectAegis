@@ -20,9 +20,11 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_response_policy as response_policy
 from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
+from .response_schemas import assessment_cell_schema, ResponseSchema
 
 
 CELL_POLICY_VERSION = "assessment-cell-4-response-mechanism-sop-2026-09-09"
@@ -238,7 +240,7 @@ def _profile_payload(
         raise CellDecisionError(
             "assessment cell decisions require an explicit appears_in profile value"
         )
-    return {
+    evidence = {
         "name": str(run_profile.get("name") or ""),
         "allowed_sheet_kinds": list(_allowed_sheet_kinds(run_profile)),
         "appears_in": appears_in,
@@ -246,6 +248,10 @@ def _profile_payload(
             assessment_profile.assessment_format_policy(run_profile, meta)
         ),
     }
+    vocabulary = run_profile.get(output_vocabulary.POLICY_KEY)
+    if output_vocabulary.is_current(vocabulary):
+        evidence["output_vocabulary"] = copy.deepcopy(vocabulary)
+    return evidence
 
 
 def _verdict_checker(
@@ -254,6 +260,7 @@ def _verdict_checker(
     allowed_sheet_kinds: tuple[str, ...],
     format_policy: Mapping[str, Any],
     source_atom: Mapping[str, Any] | None = None,
+    *, vocabulary: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     """Mechanics only: identity, required fields, enums, and numeric shape.
 
@@ -322,7 +329,9 @@ def _verdict_checker(
                 f"{tuple(allowed_categories)} for sheet_kind "
                 f"{response.get('sheet_kind')!r} (got {category!r})"
             )
-        if response.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
+        if output_vocabulary.is_current(vocabulary):
+            defects.extend(output_vocabulary.field_errors(response, vocabulary))
+        elif response.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
             defects.append(
                 "cognitive_skill must be one of "
                 f"{bi.COGNITIVE_SKILLS} "
@@ -451,10 +460,12 @@ def _cell_checker(
     allowed_sheet_kinds: tuple[str, ...],
     format_policy: Mapping[str, Any],
     source_atom: Mapping[str, Any] | None = None,
+    *, vocabulary: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     return _verdict_checker(
         "source_qid", source_qid, allowed_sheet_kinds, format_policy,
         source_atom,
+        vocabulary=vocabulary,
     )
 
 
@@ -462,9 +473,11 @@ def _generated_cell_checker(
     pre_question_id: str,
     allowed_sheet_kinds: tuple[str, ...],
     format_policy: Mapping[str, Any],
+    *, vocabulary: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     return _verdict_checker(
-        "pre_question_id", pre_question_id, allowed_sheet_kinds, format_policy
+        "pre_question_id", pre_question_id, allowed_sheet_kinds, format_policy,
+        vocabulary=vocabulary,
     )
 
 
@@ -489,22 +502,63 @@ def _decision_authority(decision: Mapping[str, Any]) -> dict[str, Any]:
     return authority
 
 
+def _cell_response_schema(payload: Mapping[str, Any]) -> ResponseSchema | None:
+    """Use a closed provider object only for the new vocabulary policy."""
+    profile = payload.get("profile") or {}
+    vocabulary = profile.get("output_vocabulary")
+    if not output_vocabulary.is_current(vocabulary):
+        return None
+    output_vocabulary.require_valid_policy(vocabulary)
+    generated = payload.get("stage") == "assessment.generated_cell"
+    identity_field = "pre_question_id" if generated else "source_qid"
+    source = payload.get("generated_question" if generated else "source_atom") or {}
+    return assessment_cell_schema(
+        identity_field=identity_field,
+        identity_value=str(source.get(identity_field) or ""),
+        sheet_kinds=tuple(profile["allowed_sheet_kinds"]),
+        question_categories=tuple(vocabulary["question_categories"]),
+        cognitive_skills=tuple(vocabulary["cognitive_skills"]),
+    )
+
+
+def _bind_vocabulary_rules(payload: dict[str, Any]) -> None:
+    vocabulary = (payload.get("profile") or {}).get("output_vocabulary")
+    instruction = output_vocabulary.instruction(vocabulary)
+    if instruction:
+        payload["rules"] += "\n" + instruction
+        schema = _cell_response_schema(payload)
+        payload["response_schema_contract"] = schema.identity()
+
+
+def _cell_policy_version(base: str, payload: Mapping[str, Any]) -> str:
+    vocabulary = (payload.get("profile") or {}).get("output_vocabulary")
+    return base + (
+        ";" + str(vocabulary["version"])
+        if output_vocabulary.is_current(vocabulary) else ""
+    )
+
+
 def _live_cell(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    schema = _cell_response_schema(payload)
     return generation._openai_json(
-        CELL_SYSTEM,
+        str(payload.get("rules") or CELL_SYSTEM),
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(payload),
+        **({"response_schema": schema} if schema is not None else {}),
     )
 
 
 def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    instruction = output_vocabulary.instruction(
+        (payload.get("profile") or {}).get("output_vocabulary")
+    )
     return generation._openai_json(
-        CELL_CRITIC_SYSTEM,
+        CELL_CRITIC_SYSTEM + ("\n" + instruction if instruction else ""),
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
         image_urls=visual_evidence.image_inputs(payload),
@@ -514,19 +568,25 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
 def _live_generated_cell(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    schema = _cell_response_schema(payload)
     return generation._openai_json(
-        GENERATED_CELL_SYSTEM + _foundation_instruction(payload),
+        str(payload.get("rules") or GENERATED_CELL_SYSTEM) + _foundation_instruction(payload),
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(payload),
+        **({"response_schema": schema} if schema is not None else {}),
     )
 
 
 def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    instruction = output_vocabulary.instruction(
+        (payload.get("profile") or {}).get("output_vocabulary")
+    )
     return generation._openai_json(
-        GENERATED_CELL_CRITIC_SYSTEM + _foundation_instruction(payload),
+        GENERATED_CELL_CRITIC_SYSTEM + _foundation_instruction(payload)
+        + ("\n" + instruction if instruction else ""),
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
         image_urls=visual_evidence.image_inputs(payload),
@@ -626,6 +686,7 @@ def decide_cells(
             "source_atom": source_atom,
         }
         visual_evidence.bind(payload, source_atom)
+        _bind_vocabulary_rules(payload)
         decision = kernel.decide(
             kind="assessment.cell",
             unit_id=source_qid,
@@ -633,11 +694,12 @@ def decide_cells(
             payload=payload,
             provider=provider,
             checker=_cell_checker(
-                source_qid, allowed_sheet_kinds, format_policy, source_atom
+                source_qid, allowed_sheet_kinds, format_policy, source_atom,
+                vocabulary=profile_evidence.get("output_vocabulary"),
             ),
             critic=critic,
             store=store,
-            policy_version=CELL_POLICY_VERSION,
+            policy_version=_cell_policy_version(CELL_POLICY_VERSION, payload),
             fixer=fixer,
         )
         response = copy.deepcopy(dict(decision["response"]))
@@ -834,6 +896,7 @@ def decide_generated_cells(
             ),
         }
         visual_evidence.bind(payload, question, payload["pre_concept"])
+        _bind_vocabulary_rules(payload)
         decision = kernel.decide(
             kind="assessment.generated_cell",
             unit_id=pre_question_id,
@@ -841,12 +904,13 @@ def decide_generated_cells(
             payload=payload,
             provider=provider,
             checker=_generated_cell_checker(
-                pre_question_id, allowed_sheet_kinds, format_policy
+                pre_question_id, allowed_sheet_kinds, format_policy,
+                vocabulary=profile_evidence.get("output_vocabulary"),
             ),
             critic=critic,
             store=store,
             policy_version=(
-                GENERATED_CELL_POLICY_VERSION
+                _cell_policy_version(GENERATED_CELL_POLICY_VERSION, payload)
                 + _foundation_policy_suffix(payload)
             ),
             fixer=fixer,

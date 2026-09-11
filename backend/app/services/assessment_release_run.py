@@ -54,6 +54,7 @@ from . import assessment_release_service as release_service
 from . import assessment_routing as routing
 from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
+from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_response_policy as response_policy
 from . import build_concepts_release
 from . import identity
@@ -2413,10 +2414,23 @@ def run_release_for_job(
 
     # Q32: generated questions name UpSchool DB; source questions retain
     # the frozen publication. Old profiles have no generated-source override.
-    publication = str(bridge.get("source_book") or "").strip()
+    vocabulary = profile.get(output_vocabulary.POLICY_KEY)
+    strict_vocabulary = output_vocabulary.is_current(vocabulary)
+    publication = str(bridge.get("source_book") or "")
+    if not strict_vocabulary:
+        publication = publication.strip()
     generated_source = column_spec.from_profile(profile).get("generated_question_source")
     for candidate in candidates:
         candidate["question_source"] = generated_source if generate_lane and generated_source else publication
+    selected_source = generated_source if generate_lane and generated_source else publication
+    if strict_vocabulary and selected_source not in vocabulary.get("question_sources", ()):
+        progress.log(
+            "Assessment release: the recorded Question Source is outside the "
+            "approved CMS list. The source provenance remains in the evidence; "
+            "its output cell will be blank and visibly blocked. Downloads remain "
+            "available, but database upload cannot pass until this is resolved.",
+            level="warning",
+        )
     if not publication and not (generate_lane and generated_source):
         progress.log(
             "Assessment release: the run has no publication (source book); "

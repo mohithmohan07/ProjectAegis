@@ -34,6 +34,8 @@ from aegis_pipeline.openai_policy import (
 from .. import bulk_import as bi
 from .. import config, models
 from . import column_spec
+from . import assessment_output_vocabulary as output_vocabulary
+from . import assessment_response_policy as response_policy
 from . import concept_cleanup
 from . import concept_validator as cv
 from . import containers
@@ -301,6 +303,12 @@ def generate_questions_for_concept(
         raise ValueError(f"unknown recorded difficulty {difficulty!r}")
     if not str(category or "").strip():
         raise ValueError("question_category must be recorded before generation")
+    vocabulary_defects = output_vocabulary.field_errors(
+        {"question_category": category, "cognitive_skills": cognitive_skill},
+        output_vocabulary.snapshot(),
+    )
+    if vocabulary_defects:
+        raise ValueError("; ".join(vocabulary_defects))
     marks = _positive_recorded_number(marks, "marks")
     question_duration = _positive_recorded_number(
         question_duration, "question_duration")
@@ -425,6 +433,19 @@ def _live_questions_for_concept(
     def _parse(data: dict) -> list[dict]:
         records: list[dict] = []
         for n, row in enumerate(data.get("questions", [])[:count]):
+            vocabulary_defects = output_vocabulary.field_errors(
+                row, output_vocabulary.snapshot(),
+            )
+            if vocabulary_defects:
+                raise ValueError("; ".join(vocabulary_defects))
+            if (
+                row.get("question_category") != category
+                or row.get("cognitive_skills") != cognitive_skill
+            ):
+                raise ValueError(
+                    "assessment author must echo the recorded question_category "
+                    "and cognitive_skills exactly"
+                )
             answers = []
             for a in row.get("answers", []) or []:
                 a = dict(a)
@@ -725,10 +746,10 @@ def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> 
             f"- objective: {prompts.get_text('identify.type_hint.objective')}\n"
             f"- subjective: {prompts.get_text('identify.type_hint.subjective')}\n"
             f"- descriptive: {prompts.get_text('identify.type_hint.descriptive')}\n"
-            "Preserve a question's natural type — do NOT force everything into one "
-            "type. A long/multi-part question with parts (a),(b),(c) is descriptive "
-            "and MUST keep its parts in the sub_questions slots, never split into "
-            "separate questions."
+            "Read each complete task, its answer evidence, options, shared context "
+            "and media to judge its actual response mechanism. Independent tasks "
+            "remain separate even when printed under one number; genuinely "
+            "dependent parts retain their shared context and structured children."
         )
     else:
         type_block = (
@@ -736,11 +757,14 @@ def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> 
             f"{prompts.get_text('identify.type_hint.' + question_type)}\n"
             f"Set \"sheet_kind\" to \"{question_type}\" on every question."
         )
-    return prompts.render(
+    system = prompts.render(
         "identify.system",
         intent=intent, type_block=type_block,
         content_format=prompts.get_text("content.katex_rules.v2"),
         output=prompts.get_text("assessment.output"),
+    )
+    return system + "\n\n" + response_policy.AUTHOR_RULES + "\n\n" + output_vocabulary.instruction(
+        output_vocabulary.snapshot()
     )
 
 
@@ -757,13 +781,13 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         return None
     kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
             if auto else question_type)
-    category = str(row.get("question_category") or "").strip()
-    if not category:
-        raise ValueError("identified question has no recorded question_category")
-    skill = bi.normalize_cognitive_skills(row.get("cognitive_skills") or "")
-    if skill not in bi.COGNITIVE_SKILLS:
-        raise ValueError(
-            "identified question has no valid recorded cognitive_skills")
+    vocabulary_defects = output_vocabulary.field_errors(
+        row, output_vocabulary.snapshot(),
+    )
+    if vocabulary_defects:
+        raise ValueError("; ".join(vocabulary_defects))
+    category = row["question_category"]
+    skill = row["cognitive_skills"]
     difficulty = bi.normalize_difficulty(
         row.get("level_of_difficulty") or "")
     if difficulty not in bi.DIFFICULTY_LEVELS:
@@ -780,7 +804,7 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         "cognitive_skills": skill,
         # Contract v2.0 §18: the publication is a run variable, filled from
         # the concept's recorded source at persistence, never a constant.
-        "question_source": str(row.get("question_source") or "").strip(),
+        "question_source": "",
         "level_of_difficulty": difficulty,
         "marks": marks,
         "question_duration": duration,

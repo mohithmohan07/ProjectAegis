@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import writer
-from . import assessment_grouping
+from . import assessment_grouping, assessment_output_vocabulary
 
 
 def assessment_tagging(db: Session, questions: list[models.Question]) -> dict:
@@ -60,7 +60,10 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
     # a broken semantic hand-off, not blank cells this compatibility renderer
     # may repair locally.  Validate the complete batch before mutating anything.
     for question in questions:
-        if not bi.normalize_cognitive_skills(question.cognitive_skills):
+        current_vocabulary = assessment_output_vocabulary.is_current(
+            (getattr(question, "route_audit", None) or {}).get(assessment_output_vocabulary.POLICY_KEY)
+        )
+        if not current_vocabulary and not bi.normalize_cognitive_skills(question.cognitive_skills):
             raise ValueError(
                 f"question {question.question_label or question.id!r} has no "
                 "recorded cognitive-skill verdict"
@@ -92,7 +95,13 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
     filled = 0
     for q in questions:
         changed = False
-        if not q.question_source:
+        current_vocabulary = assessment_output_vocabulary.is_current(
+            (getattr(q, "route_audit", None) or {}).get(assessment_output_vocabulary.POLICY_KEY)
+        )
+        # New-policy values are evidence, including unresolved defects. The
+        # final writer records/blank-flags invalid fields; this compatibility
+        # pass must not hide them by replacing aliases or borrowing a source.
+        if not current_vocabulary and not q.question_source:
             # Contract v2.0 §18: question_source is the publication the
             # question's concept was built from — never an origin-system
             # constant. A concept with no recorded source leaves the value
@@ -110,10 +119,11 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
         if appears != q.question_appears_in:
             q.question_appears_in = appears
             changed = True
-        skills = bi.normalize_cognitive_skills(q.cognitive_skills)
-        if skills != q.cognitive_skills:
-            q.cognitive_skills = skills
-            changed = True
+        if not current_vocabulary:
+            skills = bi.normalize_cognitive_skills(q.cognitive_skills)
+            if skills != q.cognitive_skills:
+                q.cognitive_skills = skills
+                changed = True
         # question_text: never blank when the question has content; backfill
         # with the plain-text question (the AI evaluator's context field).
         if not q.question_text and q.question:

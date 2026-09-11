@@ -278,7 +278,7 @@ def _generate_over(client, concept_ids, *, count):
         "scope_type": "concept", "scope_ids": list(concept_ids),
     }).json()
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Remembering"],
+        "cognitive_skills": ["Remember"],
         "difficulty_levels": ["Less"],
         "categories": ["Multiple Choice Question"],
         "question_type": "objective",

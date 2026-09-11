@@ -111,7 +111,7 @@ def _add_subjective(snapshot: dict) -> None:
         "candidate_id": "CAND-3",
         "question_label": "06MSMA_T01_TwoDim Q03",
         "sheet_kind": "subjective",
-        "question_category": "Fill in the blanks",
+        "question_category": "Fill in the Blanks",
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 2.0,
