@@ -19,6 +19,7 @@ from . import (
     model_provider,
     generation_quality_policy as quality,
     generation_repair_policy as repair,
+    reviewed_file_workflow_policy as workflow,
 )
 
 
@@ -40,11 +41,13 @@ def recorded_profile_for_job(job):
         raise ValueError("invalid saved model routing record")
     if repair.KEY in record and record[repair.KEY] != repair.VERSION:
         raise ValueError("Unknown saved generation repair policy")
+    if workflow.KEY in record and record[workflow.KEY] != workflow.VERSION:
+        raise ValueError("Unknown saved reviewed-file workflow policy")
     profile = record["profile"]
     return None if profile is None else model_provider.validate_profile(profile)
 
 
-def save_profile_for_job(job, profile, *, quality_version=None, repair_version=None):
+def save_profile_for_job(job, profile, *, quality_version=None, repair_version=None, workflow_version=None):
     """Persist an explicit run profile, including None for historical restore."""
     profile = None if profile is None else model_provider.validate_profile(profile)
     path = _record_path(job)
@@ -57,6 +60,10 @@ def save_profile_for_job(job, profile, *, quality_version=None, repair_version=N
         if repair_version != repair.VERSION:
             raise ValueError("Unknown saved generation repair policy")
         record[repair.KEY] = repair_version
+    if workflow_version is not None:
+        if workflow_version != workflow.VERSION:
+            raise ValueError("Unknown saved reviewed-file workflow policy")
+        record[workflow.KEY] = workflow_version
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
@@ -83,6 +90,7 @@ def profile_for_job(job):
         job, None if historical else model_provider.new_profile(),
         quality_version=None if historical else quality.VERSION,
         repair_version=None if historical else repair.VERSION,
+        workflow_version=None if historical else workflow.VERSION,
     )
 
 
@@ -94,6 +102,7 @@ def bind_job(job, *, require_pre: bool = False):
         model_provider.bind_profile(profile),
         quality.bind_run(record.get(quality.KEY)),
         repair.bind_run(record.get(repair.KEY)),
+        workflow.bind_run(record.get(workflow.KEY)),
     ):
         if profile is not None and not config.allow_dry() and not config._live_disabled():
             providers = {

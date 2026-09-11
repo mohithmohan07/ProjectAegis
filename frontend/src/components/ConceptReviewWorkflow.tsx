@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useRunConsole } from "../RunConsole";
 import type {
@@ -108,7 +108,8 @@ export default function ConceptReviewWorkflow({
   onJob: (job: UploadJob) => void;
   onMasterGenerated?: (job: UploadJob) => void;
 }) {
-  const { run } = useRunConsole();
+  const { run, restore, record, watch, state: consoleState } = useRunConsole();
+  const watchedJob = useRef<number | null>(null);
   const [busyLane, setBusyLane] = useState<Lane | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +128,22 @@ export default function ConceptReviewWorkflow({
     setLocalInputs({});
   }, [job.id]);
 
+  useEffect(() => { restore(job); }, [job, restore]);
+
+  useEffect(() => {
+    if (!job.generation_running) { watchedJob.current = null; return; }
+    if (consoleState.active || watchedJob.current === job.id) return;
+    watchedJob.current = job.id;
+    void watch("Step 2 · Master generation", {
+      module: "concepts", jobId: job.id, operation: "master",
+      recoverResult: async () => {
+        const fresh = await api.getUploadJob("concepts", job.id);
+        onJob(fresh);
+        return fresh;
+      },
+    }).catch(() => { /* The console displays the actual backend error. */ });
+  }, [job.id, job.generation_running, consoleState.active, watch, onJob]);
+
   const inputMeta = useMemo(() => ({
     // The durable projection is authoritative after refresh. Local state is
     // only a short-lived fallback for an acknowledgement response that did
@@ -140,11 +157,13 @@ export default function ConceptReviewWorkflow({
     setBusyLane(lane);
     setError(null);
     setNotice(null);
+    record(job, `Receiving reviewed ${laneLabel(lane)} file: ${file.name}`);
     try {
       // This route stages the corrected input only. In particular, do not
       // call the legacy uploadEditedWorkbook route here: that route performs
       // an authenticated CMS publication for historical releases.
       const response = await api.uploadCorrectedConceptInput(job.id, lane, file);
+      record(job, `${laneLabel(lane)} file received. Questions will be extracted when you generate Master files.`, "success");
       const responseRecord = response && typeof response === "object"
         && !Array.isArray(response) ? response as Record<string, unknown> : null;
       let fresh: UploadJob | null = isUploadJob(response)
@@ -189,6 +208,7 @@ export default function ConceptReviewWorkflow({
         setError(`${laneLabel(lane)} upload was accepted, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
       }
     } catch (uploadError) {
+      record(job, `${laneLabel(lane)} upload failed: ${readableError(uploadError)}`, "error");
       // A provider or proxy can report an error after the review round has
       // committed. Refresh once and adopt only the lane state returned by the
       // server; otherwise leave any previously accepted lane (such as Pre)
@@ -244,6 +264,9 @@ export default function ConceptReviewWorkflow({
       );
       const fresh = await api.getUploadJob("concepts", job.id);
       onJob(fresh);
+      if (fresh.review_workflow?.status === "master_failed") {
+        throw new Error("The backend could not finish all Master files. See the Activity log, then retry Step 2.");
+      }
       onMasterGenerated?.(fresh);
       const status = fresh.review_workflow?.status ?? fresh.status;
       setNotice(status === "released" || fresh.status === "released"
@@ -264,31 +287,28 @@ export default function ConceptReviewWorkflow({
   }
 
   const waiting = isConceptReviewWaiting(job);
-  const masterRunning = job.generation_running
-    || job.review_workflow?.status === "master_building";
+  const masterRunning = Boolean(job.generation_running) || continuing;
+  const interrupted = !masterRunning && job.review_workflow?.status === "master_building";
 
   return (
     <section className="card concept-review-workflow" aria-labelledby="concept-review-workflow-title">
       <div className="row">
         <div>
           <div className="section-title" id="concept-review-workflow-title">
-            Review Concept Files before generating Masters
+            Step 2 · Generate Masters from reviewed files
           </div>
           <p className="muted mt-8">
-            Download both Concept Files and review every question, topic,
-            concept, Type and Case. In the Post-Learning file you may omit,
-            add or move questions when correcting it. Upload the same edited
-            Excel only when you need one; a file you leave unchanged is
-            retained as generated input. You may also add relevant prerequisite
-            concepts to the Pre-Learning file, including when it was empty.
-            The original chapter and source selection stays locked; keep the
-            concept ID when renaming or moving a concept. Context, images and
-            other dependencies stay attached unless you deliberately edit them.
+            Step 1 is complete: your Concept files are ready for review.
+            You may add, remove, combine, rename or reorder content and change
+            the layout. Original concept IDs and row counts are not required.
+            Upload your reviewed files below, or keep a generated file unchanged.
+            The next step reads those files, extracts their questions and builds
+            the Masters. Include all context, tables and images the questions need.
           </p>
         </div>
         <div className="spacer" />
-        <span className={`badge ${waiting ? "yellow" : masterRunning ? "accent" : "green"}`}>
-          {waiting ? "waiting for review" : masterRunning ? "Master generation running" : "Concept review"}
+        <span className={`badge ${masterRunning ? "accent" : waiting ? "yellow" : "green"}`}>
+          {masterRunning ? "Step 2 running" : interrupted ? "Step 2 stopped · retry available" : job.review_workflow?.status === "master_failed" ? "Master generation needs attention" : waiting ? "waiting for review" : "Concept review"}
         </span>
       </div>
 
@@ -317,8 +337,8 @@ export default function ConceptReviewWorkflow({
                 <input
                   id={inputId}
                   type="file"
-                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  disabled={disabled || continuing || Boolean(busyLane)}
+                  accept=".xlsx,.csv,.tsv,.docx,.pdf,.txt,.md"
+                  disabled={disabled || masterRunning || Boolean(busyLane)}
                   data-testid={`corrected-input-${lane}`}
                   onChange={(event) => {
                     const selected = event.target.files?.[0];
@@ -330,13 +350,13 @@ export default function ConceptReviewWorkflow({
                 <button
                   className="ghost"
                   type="button"
-                  disabled={disabled || continuing || Boolean(busyLane)}
+                  disabled={disabled || masterRunning || Boolean(busyLane)}
                   onClick={() => document.getElementById(inputId)?.click()}
                   data-testid={`upload-corrected-${lane}`}
                 >
                   {busyLane === lane
                     ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-                    : `Upload edited ${label} Excel`}
+                    : `Upload reviewed ${label} file`}
                 </button>
               </div>
               {input ? (
@@ -348,7 +368,7 @@ export default function ConceptReviewWorkflow({
                     <span> · Accepted {formatAcceptedAt(input.acceptedAt)}</span>
                   )}
                   {input.status && <span> · State: {input.status}</span>}
-                  <div>Using this edited Concept workbook for the next Master run.</div>
+                  <div>This file is the input for Step 2. Extraction starts with Generate Master Files.</div>
                 </div>
               ) : (
                 <div className="hint mt-8">No replacement uploaded; the generated Concept File will be used.</div>
@@ -363,10 +383,9 @@ export default function ConceptReviewWorkflow({
         <div>
           <strong>Continue only when both Concept Files are reviewed</strong>
           <div className="hint mt-4">
-            This starts the Master stages on the same job and uses every
-            corrected input already accepted above. Pre-Learning questions are
-            generated automatically from the reviewed Pre concepts. It does
-            not publish to the CMS.
+            Read reviewed files → extract questions → generate Master files.
+            Missing Pre diagnostic questions are generated from the reviewed
+            concepts. Existing source-book rows are not required to match.
           </div>
         </div>
         <button
@@ -383,6 +402,7 @@ export default function ConceptReviewWorkflow({
       </div>
 
       {notice && <div className="muted mt-12" role="status">{notice}</div>}
+      <div className="hint mt-8">Supported: XLSX, CSV, TSV, DOCX, PDF, TXT and Markdown. Follow progress in the Activity log.</div>
       {error && <div className="error-box mt-12" role="alert">{error}</div>}
     </section>
   );

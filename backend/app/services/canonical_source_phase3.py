@@ -543,6 +543,8 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
     from . import generation_quality_policy, generation_repair_policy
     identity.update(generation_quality_policy.fields(metadata))
     identity.update(generation_repair_policy.fields(metadata))
+    from . import reviewed_file_workflow_policy
+    identity.update(reviewed_file_workflow_policy.fields(metadata))
     return _sha256_json(identity)
 
 

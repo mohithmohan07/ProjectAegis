@@ -1217,6 +1217,7 @@ _LEAK_GUARD_SKIPPED_KEYS = frozenset({
     # Corrected Pre scope retains the complete prior derived receipts only
     # for audit. The paired redactor keeps source identities out of Pre files.
     "_reviewed_pre_superseded",
+    "reviewed_file_receipt",
 })
 
 
@@ -1525,9 +1526,9 @@ def run_pre_release_for_job(
     # Check the short independent reservation can run before any provider
     # spend, and check again at allocation if a callback changed the session.
     _require_master_allocation_session(db)
-    generation_recovery.require_mutation_allowed(
-        job, operation="build the pre Master file"
-    )
+    from . import reviewed_file_input
+    if not reviewed_file_input.active(build_concepts_release.release_payload(job, lane="pre")):
+        generation_recovery.require_mutation_allowed(job, operation="build the pre Master file")
     questions = build_concepts_release.staged_generated_questions(job)
     if questions is None:
         # OD4 numbering: the Pre concept file is Output 01, its Master 02.
@@ -1621,9 +1622,9 @@ def run_release_for_job(
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     db.refresh(job)
-    generation_recovery.require_mutation_allowed(
-        job, operation="build a Master file"
-    )
+    from . import reviewed_file_input
+    if not reviewed_file_input.active(build_concepts_release.release_payload(job, lane=lane)):
+        generation_recovery.require_mutation_allowed(job, operation="build a Master file")
     _require_master_allocation_session(db)
     authorities = dict(authorities or {})
     generate_lane = generated_questions is not None
@@ -1681,7 +1682,7 @@ def run_release_for_job(
     # job, Pre included), and it is precisely the material that must not
     # reach Output 04.
     source_qids = source_inventory_qids(inventory)
-    if generate_lane:
+    if generate_lane and not reviewed_file_input.active(staged_release):
         # The Pre release payload holds none of this set, by design (see
         # the helper): it is read from the job column and the Post
         # sibling instead, so that Output 03 can obey the steer's "no QID
@@ -1805,6 +1806,12 @@ def run_release_for_job(
                 where=where,
             )
 
+    from . import reviewed_file_input, canonical_source_contract
+    if reviewed_file_input.active(staged_release) and envelope_sha256 is None and decision_store is None:
+        envelope_sha256 = release_snapshot.source_release_sha256(staged_release)
+        decision_store = kernel.DecisionStore(
+            canonical_source_contract._artifact_directory(job.id) / "reviewed-master-decisions"
+        )
     envelope_sha, store, snapshot_directory = _decision_context(
         job.id,
         envelope_sha256=envelope_sha256,

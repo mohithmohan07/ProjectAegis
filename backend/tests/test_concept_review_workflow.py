@@ -17,7 +17,7 @@ from app.services import build_concepts_release_contract as release_contract
 from app.services import build_concepts_release_api_contract as release_api
 from app.services import build_concepts_release_files as release_files
 from app.services import auth, openai_usage, run_state, uploads
-from app.services import release_workbook_edits
+from app.services import release_workbook_edits, reviewed_file_input
 from app.services.concept_question_review import ReviewRows
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -318,8 +318,8 @@ def test_corrected_upload_model_round_uses_same_run_and_pauses_again(
 
     monkeypatch.setattr(release_api, "read_limited_upload", read_upload)
     monkeypatch.setattr(
-        release_api.release_workbook_edits,
-        "apply_workbook_for_review",
+        reviewed_file_input,
+        "queue",
         apply_review,
     )
     from fastapi import UploadFile
@@ -365,8 +365,8 @@ def test_corrected_upload_failure_persists_usage_and_run_history(
 
     monkeypatch.setattr(release_api, "read_limited_upload", read_upload)
     monkeypatch.setattr(
-        release_api.release_workbook_edits,
-        "apply_workbook_for_review",
+        reviewed_file_input,
+        "queue",
         failed_review,
     )
     from fastapi import HTTPException, UploadFile
@@ -421,8 +421,8 @@ def test_corrected_upload_retry_keeps_run_id_and_adds_only_new_receipt(
 
     monkeypatch.setattr(release_api, "read_limited_upload", read_upload)
     monkeypatch.setattr(
-        release_api.release_workbook_edits,
-        "apply_workbook_for_review",
+        reviewed_file_input,
+        "queue",
         apply_review,
     )
     from fastapi import HTTPException, UploadFile

@@ -347,7 +347,8 @@ def test_explicit_rebuild_claims_job_lock_but_in_run_sibling_does_not(
         rollback=lambda: None,
         refresh=lambda _job: None,
     )
-    fake_job = SimpleNamespace(id=job_id, generation_recovery={})
+    fake_job = SimpleNamespace(id=job_id, generation_recovery={}, question_inventory={})
+    monkeypatch.setattr(release_contract, "_lane_master_eligibility", lambda *a, **k: (True, ""))
     capacity = storage_capacity.CapacitySnapshot(
         path=str(config.DATA_DIR),
         available_bytes=10_000,

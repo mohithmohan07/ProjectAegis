@@ -112,6 +112,10 @@ def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):
             "post": {"release_id": "test-post-master"},
         },
     )
+    # This publication test scripts semantic generation; the independent-file
+    # parser is covered with real staging in test_independent_reviewed_files.
+    from app.services import reviewed_file_input
+    monkeypatch.setattr(reviewed_file_input, "prepare", lambda *args, **kwargs: None)
     master_result = stream_result(client.post(
         f"/build-concepts/uploads/{job['id']}/concept-review/master",
     ))
@@ -205,6 +209,10 @@ def test_post_learning_groups_concepts_under_one_topic(
             "post": {"release_id": "test-post-master"},
         },
     )
+    # This publication test scripts semantic generation; the independent-file
+    # parser is covered with real staging in test_independent_reviewed_files.
+    from app.services import reviewed_file_input
+    monkeypatch.setattr(reviewed_file_input, "prepare", lambda *args, **kwargs: None)
     master_result = stream_result(client.post(
         f"/build-concepts/uploads/{job['id']}/concept-review/master",
     ))

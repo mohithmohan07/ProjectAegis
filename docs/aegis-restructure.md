@@ -2872,3 +2872,41 @@ Keep Q45 vocabulary, Q46 mini routing, frozen question contracts, independent
 reviewers, refiners, Fixer and publication gates. Regression coverage uses the
 sanitized eight-concept job 129 shape and scripted APIs, plus normal CI; no paid
 generation is required. The already authorized merge/deployment flow continues.
+
+### Q49 — DECIDED — independent reviewed files and a visible two-step workflow
+
+**Owner follow-up (11 September 2026):** Source to Concept files is Step 1.
+Master generation is Step 2, extracting questions from the reviewed files.
+Reviewed uploads must be flexible; omitted original rows or changed layouts must
+not cause a refusal. The frontend must explain backend execution and show logs.
+
+An upload now stores the readable reviewed document without semantic processing.
+XLSX, CSV, TSV, DOCX, PDF, TXT and Markdown inputs may add, remove, combine, rename
+or reorder content. Original concept IDs, headers and row counts are not required.
+Step 2 independently extracts concepts, questions and their relationships through
+an API author, independent critic and the existing bounded Fixer. Complete block
+accounting and quote/shape checks retain evidence; semantic grouping remains an
+API decision. Preserve dependent subquestions, essential context, complete tables
+and required images. Prior source content, question inventories and semantic
+routes are not supplied to these decisions or silently restored. Chapter and
+publication metadata remain selected by the user.
+
+Each accepted file creates its own versioned Concept snapshot and Master decision
+identity. Keep prior versions and the reviewed document in audit. A failed read
+or extraction leaves the previous downloads available and reports the failure.
+Identical completed inputs reuse their decisions; pending/failed work remains
+retryable. Questions explicitly present in the reviewed Pre file are extracted;
+missing diagnostic coverage is generated solely from its accepted Pre concepts.
+
+New source runs freeze `concepts-then-reviewed-masters-2026-09-11-v1` and stop
+Step 1 before Pre question generation. Accepting an unchanged Concept file reads
+the generated workbook as the Step 2 input. Historical runs keep their recorded
+workflow until an explicit reviewed upload creates an independent revision.
+All new semantic work uses GPT-5.4 mini and retains the closed CMS vocabulary,
+independent review, refinement, Fixer and publication contracts.
+
+The review screen restores durable history, logs upload receipts and errors,
+and attaches to active Master work after refresh. Running, waiting, interrupted
+and failed states are distinct. Historical journal terminal events cannot stop
+watching a later active segment. Verify the new handoff with offline tests and
+normal CI, then continue the already authorized merge and Fly deployment.

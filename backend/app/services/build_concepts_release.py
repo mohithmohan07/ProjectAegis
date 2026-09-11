@@ -34,6 +34,7 @@ lane's authority.
 from __future__ import annotations
 
 import copy
+from . import reviewed_file_workflow_policy
 import hashlib
 import json
 import re
@@ -3442,6 +3443,7 @@ def stage_release(
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
+        **reviewed_file_workflow_policy.run_fields(),
         **(generation_quality_fields(generation_policy, chapter_id=target)
            or generation_quality_fields(checkpoint_value, chapter_id=target)),
         # The SCHEMA version above; the DRAFT version here. Minted, not
@@ -4496,6 +4498,8 @@ def stage_pre_release(
     )
     qc_issues, qc_blocking = release_qc.audit({
         "records": raw_rows,
+        **reviewed_file_workflow_policy.fields(source),
+        "pre_questions_deferred": questions_source.get("deferred_until_master") is True,
         "issues": [],
         "question_task_inventory": dict(inventory or {}),
         RELEASE_LANE_FIELD: LANE_PRE,
@@ -4563,6 +4567,7 @@ def stage_pre_release(
         **foundation_fields,
         **generation_quality_policy.fields(source),
         **generation_repair_policy.fields(source),
+        **reviewed_file_workflow_policy.fields(source),
         **({model_provider.PROFILE_KEY: model_provider.validate_profile(source[model_provider.PROFILE_KEY])}
            if generation_repair_policy.active(source) and source.get(model_provider.PROFILE_KEY) is not None else {}),
         "source_book": job.source_book,
@@ -4627,6 +4632,7 @@ def stage_pre_release(
         # projected from one snapshot and the assessment lane never
         # re-derives Pre meaning.
         "generated_questions": _json_safe(generated),
+        "pre_questions_deferred": questions_source.get("deferred_until_master") is True,
         "generated_question_plans": _json_safe(
             questions_source.get("plans") or {}
         ),

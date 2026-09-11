@@ -141,3 +141,13 @@ test("only the explicit Generate Master action starts the second run", async () 
 test("master_ready exits the review boundary for the historical output surface", () => {
   expect(isConceptReviewWaiting(job("master_ready"))).toBe(false);
 });
+
+
+test("a stopped Master worker permits revised uploads and a Step 2 retry", () => {
+  const current = { ...job("master_building"), generation_running: false };
+  render(<RunConsoleProvider><ConceptReviewWorkflow job={current} onJob={vi.fn()} /></RunConsoleProvider>);
+  expect(screen.getByText("Step 2 stopped · retry available")).toBeDefined();
+  expect((screen.getByTestId("corrected-input-post") as HTMLInputElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "Generate Master Files" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByTestId("corrected-input-post") as HTMLInputElement).accept).toContain(".pdf");
+});

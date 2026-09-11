@@ -615,6 +615,9 @@ def audit(
     _pass("coverage", _run_coverage)
 
     def _run_pre_question_coverage() -> None:
+        from . import reviewed_file_workflow_policy as workflow
+        if workflow.active(dict(payload)) and payload.get("pre_questions_deferred") is True:
+            return  # Step 1 emits concepts; Step 2 owns diagnostic questions.
         pre_issues, pre_blocking = _pre_question_coverage_findings(payload)
         issues.extend(pre_issues)
         blocking.extend(pre_blocking)

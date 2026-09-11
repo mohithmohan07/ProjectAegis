@@ -168,12 +168,7 @@ async def _concept_review_upload_endpoint(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Apply one corrected Concept workbook as a segment of the same run.
-
-    Mechanical workbook validation and the optional model author/critic pass
-    execute in the worker thread. The durable run is resumed for that work,
-    then paused again until the reviewer explicitly starts Master authoring.
-    """
+    """Receive an independent reviewed file; extraction belongs to Step 2."""
     try:
         resolved = release_svc.normalize_lane(lane)
         job = uploads.get_job(
@@ -186,10 +181,7 @@ async def _concept_review_upload_endpoint(
                 "this upload is not waiting for Concept review; generate the "
                 "Concept files first",
             )
-        if state.get("status") in {
-            release_svc.CONCEPT_REVIEW_MASTER_BUILDING,
-            release_svc.CONCEPT_REVIEW_MASTER_READY,
-        }:
+        if state.get("status") == release_svc.CONCEPT_REVIEW_MASTER_READY:
             raise HTTPException(
                 409,
                 "Master authoring has started or completed for this upload; "
@@ -216,7 +208,7 @@ async def _concept_review_upload_endpoint(
 
     temp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(suffix=Path(file.filename or "reviewed.xlsx").suffix, delete=False) as handle:
             handle.write(raw_bytes)
             temp_path = Path(handle.name)
         def apply_review_round():
@@ -232,12 +224,12 @@ async def _concept_review_upload_endpoint(
                         uploads.update_run_stage(
                             worker_db,
                             job_id,
-                            "Applying reviewed Concept workbook",
+                            "Receiving reviewed Concept file",
                             progress_value=0.70,
                             owner_sub=user.sub,
                         )
                         progress.step(
-                            "Applying reviewed Concept workbook",
+                            "Receiving reviewed Concept file",
                             value=0.70,
                         )
                         worker_job = uploads.get_job(
@@ -246,11 +238,13 @@ async def _concept_review_upload_endpoint(
                             owner_sub=user.sub,
                             module="build_concepts",
                         )
-                        result = release_workbook_edits.apply_workbook_for_review(
+                        from . import reviewed_file_input
+                        result = reviewed_file_input.queue(
                             worker_db,
                             worker_job,
                             lane=resolved,
-                            workbook_path=temp_path,
+                            path=temp_path,
+                            filename=file.filename or "reviewed.xlsx",
                             owner_sub=user.sub,
                         )
                         worker_job = uploads.get_job(
@@ -353,6 +347,8 @@ async def _concept_review_upload_endpoint(
         ) from exc
     except generation_recovery.NonResumableRunError as exc:
         raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:

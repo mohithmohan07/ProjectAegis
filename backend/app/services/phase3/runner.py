@@ -605,28 +605,36 @@ def _run_bound(
     # map any more than a leak in the Pre map discards a finished Post
     # one. The map ships without questions, loudly, and the run
     # completes.
+    from .. import reviewed_file_workflow_policy as workflow
     progress.step(
-        "Phase 3 — Pre-Learning: coverage plan and generated questions",
+        "Step 1 — Finalizing Concept files" if workflow.active(env)
+        else "Phase 3 — Pre-Learning: coverage plan and generated questions",
         value=0.915,
     )
     try:
-        pre_questions = prequestions_mod.build(
-            env,
-            pre_map,
-            provider=injected.get("prequestions"),
-            author_provider=injected.get("prequestions_author"),
-            critic=injected.get("critic"),
-            store=store,
-            fixer=injected.get("fixer"),
-            # Question authoring owns 0.915 → 0.93 and creeps per
-            # authored pre-concept for the same reason as the map above.
-            progress_span=progress.Span(
-                0.915, 0.93,
-                label=(
-                    "Phase 3 — Pre-Learning: authoring generated questions"
+        if workflow.active(env):
+            pre_questions = {"plans": {}, "questions": {}, "blocked": {}, "review_flags": {},
+                             "decision_flags": {}, "deferred_until_master": True}
+            pre_map.update(workflow.fields(env))
+            progress.log("Step 1 complete: Pre concepts are ready. Diagnostic questions will be generated in Step 2 from the reviewed file.")
+        else:
+            pre_questions = prequestions_mod.build(
+                env,
+                pre_map,
+                provider=injected.get("prequestions"),
+                author_provider=injected.get("prequestions_author"),
+                critic=injected.get("critic"),
+                store=store,
+                fixer=injected.get("fixer"),
+                # Question authoring owns 0.915 → 0.93 and creeps per
+                # authored pre-concept for the same reason as the map above.
+                progress_span=progress.Span(
+                    0.915, 0.93,
+                    label=(
+                        "Phase 3 — Pre-Learning: authoring generated questions"
+                    ),
                 ),
-            ),
-        )
+            )
     except (
         premap_mod.PreExtractionError,
         prequestions_mod.PreQuestionError,
