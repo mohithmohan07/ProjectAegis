@@ -53,6 +53,19 @@ BLOCKED = "blocked_for_database_upload"
 # can read, rather than a bare ``continue``.
 QUESTION_LABEL_REISSUED = "question_label_reissued"
 
+# The recorded name for the reviewer's SECOND round on a lane that was already
+# published (contract §44 / Q51 Step 03). A new release version of the same
+# ``release_uid`` carries the reviewed content, and the rows its earlier
+# version published are UPDATED in place rather than skipped: skipping them is
+# how a reviewed round reached "published" without reaching the database.
+QUESTION_LABEL_UPDATED = "question_label_updated"
+
+# Why a label was passed over without a write. The only resolvable reason is
+# "the database already carries exactly this content"; every other reason
+# refuses the act instead of returning a success that did not happen.
+QUESTION_LABEL_UNCHANGED = "unchanged: this release already published this "\
+    "exact content, so nothing was written"
+
 # ``models.Question.origin`` values this release lane may mint.  A
 # reused source question keeps the long-standing value; a GENERATED
 # pre-learning question carries its own explicit one.  Before this, the
@@ -947,6 +960,110 @@ def _question_origin(candidate: Mapping) -> str:
     return declared
 
 
+def _question_values(
+    candidate: Mapping,
+    *,
+    group_id: int,
+    label: str,
+    release: models.AssessmentRelease,
+    run_profile: Mapping,
+    snapshot: Mapping,
+    forced_blank: set,
+) -> dict:
+    """Every column one snapshot candidate projects into ``models.Question``.
+
+    The ONE projection: the insert of a new row and the update of a row this
+    same release published in an earlier version both go through it, so an
+    updated row cannot drift from what an insert would have written —
+    ``origin``, ``route_audit``, ``source_qid``, ``blueprint_cell_id`` and the
+    answer/sub-question projections included.
+    """
+
+    return {
+        "group_id": group_id,
+        "sheet_kind": str(candidate.get("sheet_kind") or ""),
+        "question_label": label,
+        "question_category": str(candidate.get("question_category") or ""),
+        "cognitive_skills": str(candidate.get("cognitive_skill") or ""),
+        "question_source": str(candidate.get(
+            "question_source",
+            assessment_profile.question_source(run_profile),
+        ) or ""),
+        "question_disclaimer": (
+            "" if "question_disclaimer" in forced_blank
+            else str(candidate.get("question_disclaimer") or "")
+        ),
+        "question_appears_in": str(candidate.get("question_appears_in") or ""),
+        "level_of_difficulty": str(candidate.get("difficulty") or ""),
+        "question": str(candidate.get("question") or ""),
+        "question_text": str(candidate.get("question_text") or ""),
+        "marks": float(candidate.get("marks") or 0),
+        "question_duration": float(candidate.get("question_duration") or 0),
+        "math_keyboard": str(candidate.get("math_keyboard") or ""),
+        "display_answer": str(candidate.get("display_answer") or ""),
+        "answer_explanation": str(candidate.get("answer_explanation") or ""),
+        "answers": copy.deepcopy(list(candidate.get("answers") or [])),
+        "sub_questions": copy.deepcopy(
+            list(candidate.get("sub_questions") or [])),
+        "origin": _question_origin(candidate),
+        "answer_restriction": str(candidate.get("answer_restriction") or ""),
+        "source_qid": ", ".join(candidate.get("source_atom_ids") or []),
+        "blueprint_cell_id": str(candidate.get("blueprint_cell_id") or ""),
+        "route_audit": {
+            "release_uid": release.release_uid,
+            "version": release.version,
+            **({
+                output_vocabulary.POLICY_KEY: copy.deepcopy(
+                    run_profile[output_vocabulary.POLICY_KEY]
+                ),
+                "question_source_provenance": {
+                    "question_source": candidate.get("question_source"),
+                    "source_policy": candidate.get("source_policy"),
+                    "source_book": snapshot.get("source_book"),
+                },
+            } if output_vocabulary.is_current(
+                run_profile.get(output_vocabulary.POLICY_KEY)
+            ) else {}),
+        },
+    }
+
+
+def _audit_content(audit: Mapping | None) -> dict:
+    """One row's route audit WITHOUT the version that wrote it.
+
+    The version is bookkeeping, not content: a new release version of the
+    same uid carrying byte-identical content must stay Rule G's idempotent
+    second act that writes nothing (T5-2), so it is excluded from the
+    content comparison and only ever rewritten alongside a real change.
+    """
+
+    return {
+        key: value for key, value in dict(audit or {}).items()
+        if key != "version"
+    }
+
+
+def _question_row_changes(row: models.Question, values: Mapping) -> list[str]:
+    """The columns of an already published row this release would change.
+
+    Mechanical field comparison — no judgment about whether the reviewer's
+    edit is an improvement (CLAUDE.md Rule 1: their decision is applied
+    verbatim). An empty list means the database already carries exactly what
+    this release projects, and nothing is written.
+    """
+
+    changed: list[str] = []
+    for field, value in values.items():
+        current = getattr(row, field, None)
+        if field == "route_audit":
+            if _audit_content(current) != _audit_content(value):
+                changed.append(field)
+            continue
+        if current != value:
+            changed.append(field)
+    return changed
+
+
 def upload_master_to_database(
     db: Session, release: models.AssessmentRelease, *, owner_sub: str,
 ) -> dict:
@@ -956,6 +1073,16 @@ def upload_master_to_database(
     immutable snapshot (never from mutable current rows), commits one
     transaction, and is idempotent on (release uid, version, master hash).
     A failure rolls back and the downloads survive untouched.
+
+    A label this SAME ``release_uid`` published under an earlier version is
+    UPDATED from this version's snapshot inside that one transaction — the
+    reviewer's second Step 03 round is their explicit, authenticated decision
+    and it is applied verbatim (contract §44, Q51). Passing those labels over
+    is what let a reviewed round record ``published`` while the database and
+    the CMS export still carried the superseded wording. A label belonging to
+    a DIFFERENT release uid is still a genuine collision and still refuses,
+    and a label that can be neither created nor updated refuses by name rather
+    than returning a success that did not happen (Q13).
     """
     if release.owner_sub != owner_sub:
         raise ReleaseNotFound("release not found")
@@ -1022,6 +1149,19 @@ def upload_master_to_database(
     try:
         groups_by_key: dict[str, models.Group] = {}
         groups_created = 0
+        # Blank shells this act has already given a key to. ``SessionLocal``
+        # is ``autoflush=False`` (db.py:40), so the ``record.group_key``
+        # assignment below is NOT written before the next tier's
+        # ``group_key == ""`` query runs: that query re-selected the same row
+        # from the database and the identity map handed back the SAME ORM
+        # object, already carrying the previous group's key. Two distinct
+        # snapshot groups then collapsed onto one Group row — the earlier
+        # identity destroyed, ``groups_created`` under-reporting, and both
+        # groups' questions pointing at the survivor. Flushing the claim makes
+        # it visible to the query; the claimed-id set is the second guard, so
+        # the collapse cannot come back through a query that does not filter
+        # on ``group_key`` (identity accounting, no judgment).
+        claimed_shell_ids: set[int] = set()
         for group in snapshot.get("groups") or []:
             concept_id = concept_ids.get(str(group.get("concept_key") or ""))
             if concept_id is None:
@@ -1045,11 +1185,14 @@ def upload_master_to_database(
                     "different or duplicate database group")
             record = exact_matches[0] if exact_matches else None
             if record is None:
-                blank_shells = db.query(models.Group).filter(
-                    models.Group.concept_id == concept_id,
-                    models.Group.group_type == group_type,
-                    models.Group.group_key == "",
-                ).all()
+                blank_shells = [
+                    shell for shell in db.query(models.Group).filter(
+                        models.Group.concept_id == concept_id,
+                        models.Group.group_type == group_type,
+                        models.Group.group_key == "",
+                    ).all()
+                    if int(shell.id or 0) not in claimed_shell_ids
+                ]
                 if len(blank_shells) > 1:
                     raise UploadRefused(
                         f"concept {concept_id} has duplicate blank "
@@ -1064,6 +1207,8 @@ def upload_master_to_database(
                     db.add(record)
                     db.flush()
                     groups_created += 1
+                else:
+                    claimed_shell_ids.add(int(record.id or 0))
             record.group_key = group_key
             record.group_name = str(group.get("group_name") or "")
             record.group_display_name = str(
@@ -1073,6 +1218,8 @@ def upload_master_to_database(
                 group.get("group_status") or "Active")
             record.group_description = str(
                 group.get("semantic_description") or "")
+            # The claim, written before the next group's shell query reads it.
+            db.flush()
             groups_by_key[group_key] = record
 
         # The label a row was published under, with the release that published
@@ -1109,8 +1256,50 @@ def upload_master_to_database(
                 prior_uid and prior_uid == release.release_uid
             ):
                 existing_by_label[label] = prior_uid
+        snapshot_labels = [
+            str(candidate.get("question_label") or "")
+            for candidate in snapshot.get("candidates") or []
+        ]
+        # The rows THIS release uid already published, for the labels this
+        # version is about to publish again. Materialised as ORM objects only
+        # for those labels — bounded by the release, never the corpus — because
+        # a second reviewed round has to WRITE to them: the reviewer's edited
+        # version N carries the same labels under the same ``release_uid``, and
+        # passing them over is exactly how an edit reached ``status:
+        # published`` without reaching a single published row.
+        owned_labels = sorted({
+            label for label in snapshot_labels
+            if label and existing_by_label.get(label)
+            and existing_by_label[label] == release.release_uid
+        })
+        owned_rows: dict[str, models.Question] = {}
+        ambiguous_labels: set[str] = set()
+        if owned_labels:
+            for row in (
+                db.query(models.Question)
+                .filter(models.Question.question_label.in_(owned_labels))
+                .order_by(models.Question.id)
+                .all()
+            ):
+                if str(
+                    (row.route_audit or {}).get("release_uid") or ""
+                ) != release.release_uid:
+                    # A foreign row squatting on the same label. The row THIS
+                    # release owns is the one it may update; the foreign one is
+                    # never touched (T5-3).
+                    continue
+                row_label = str(row.question_label or "")
+                if row_label in owned_rows:
+                    ambiguous_labels.add(row_label)
+                else:
+                    owned_rows[row_label] = row
         questions_created = 0
+        questions_updated = 0
+        labels_created: list[str] = []
+        labels_updated: list[str] = []
         labels_reissued: list[str] = []
+        updated_fields: dict[str, list[str]] = {}
+        unresolved: list[tuple[str, str]] = []
         # Rows this loop has already inserted are not in the query above, and
         # they are the one collision the freeze-time check cannot cover for a
         # release FROZEN BEFORE T5-1 existed: its ``payload_errors`` were
@@ -1142,16 +1331,12 @@ def upload_master_to_database(
                 raise UploadRefused(
                     f"{label}: two candidates in this release carry the same "
                     "question label")
-            if label in existing_by_label:
-                prior_uid = existing_by_label[label]
-                if prior_uid and prior_uid == release.release_uid:
-                    # Rule G's idempotent second act: this exact release
-                    # already put this exact label in the database. Skipping is
-                    # correct — but it is RECORDED, because an unflagged
-                    # ``continue`` here is what made a learner's question
-                    # disappear between the release and the database (R4).
-                    labels_reissued.append(label)
-                    continue
+            reissue = bool(
+                label in existing_by_label
+                and existing_by_label[label]
+                and existing_by_label[label] == release.release_uid
+            )
+            if label in existing_by_label and not reissue:
                 # A different candidate wants a label that is already
                 # published. Never drop it: refuse the whole upload, keep both
                 # downloads, and let a reviewer resolve the collision.
@@ -1161,70 +1346,118 @@ def upload_master_to_database(
             if group is None:
                 raise UploadRefused(
                     f"{label}: home group is not part of this release")
-            db.add(models.Question(
+            values = _question_values(
+                candidate,
                 group_id=group.id,
-                sheet_kind=str(candidate.get("sheet_kind") or ""),
-                question_label=label,
-                question_category=str(
-                    candidate.get("question_category") or ""),
-                cognitive_skills=str(candidate.get("cognitive_skill") or ""),
-                question_source=str(candidate.get(
-                    "question_source",
-                    assessment_profile.question_source(run_profile),
-                ) or ""),
-                question_disclaimer=(
-                    "" if "question_disclaimer" in forced_blank
-                    else str(candidate.get("question_disclaimer") or "")
-                ),
-                question_appears_in=str(
-                    candidate.get("question_appears_in") or ""),
-                level_of_difficulty=str(candidate.get("difficulty") or ""),
-                question=str(candidate.get("question") or ""),
-                question_text=str(candidate.get("question_text") or ""),
-                marks=float(candidate.get("marks") or 0),
-                question_duration=float(
-                    candidate.get("question_duration") or 0
-                ),
-                math_keyboard=str(candidate.get("math_keyboard") or ""),
-                display_answer=str(candidate.get("display_answer") or ""),
-                answer_explanation=str(
-                    candidate.get("answer_explanation") or ""),
-                answers=list(candidate.get("answers") or []),
-                sub_questions=list(candidate.get("sub_questions") or []),
-                origin=_question_origin(candidate),
-                answer_restriction=str(
-                    candidate.get("answer_restriction") or ""),
-                source_qid=", ".join(
-                    candidate.get("source_atom_ids") or []),
-                blueprint_cell_id=str(
-                    candidate.get("blueprint_cell_id") or ""),
-                route_audit={
-                    "release_uid": release.release_uid,
-                    "version": release.version,
-                    **({
-                        output_vocabulary.POLICY_KEY: copy.deepcopy(
-                            run_profile[output_vocabulary.POLICY_KEY]
-                        ),
-                        "question_source_provenance": {
-                            "question_source": candidate.get("question_source"),
-                            "source_policy": candidate.get("source_policy"),
-                            "source_book": snapshot.get("source_book"),
-                        },
-                    } if output_vocabulary.is_current(
-                        run_profile.get(output_vocabulary.POLICY_KEY)
-                    ) else {}),
-                },
-            ))
+                label=label,
+                release=release,
+                run_profile=run_profile,
+                snapshot=snapshot,
+                forced_blank=forced_blank,
+            )
+            if reissue:
+                # THE SECOND ROUND. This release uid already published this
+                # label under an earlier version, and this version is the
+                # reviewer's explicit, authenticated decision about that same
+                # question (contract §44, Q51 Step 03). Applying it to the
+                # published row is the act; passing over it and reporting
+                # success is the R4 loss wearing a receipt.
+                written_here.add(label)
+                row = owned_rows.get(label)
+                if row is None or label in ambiguous_labels:
+                    unresolved.append((
+                        label,
+                        "two published rows carry this label under this "
+                        "release" if label in ambiguous_labels else
+                        "its published row could not be identified",
+                    ))
+                    continue
+                changed = _question_row_changes(row, values)
+                if not changed:
+                    # Rule G's idempotent second act: the database already
+                    # carries exactly this content, so nothing is written — but
+                    # it is RECORDED, because an unflagged ``continue`` here is
+                    # what made a learner's question disappear between the
+                    # release and the database (R4).
+                    labels_reissued.append(label)
+                    continue
+                for field, value in values.items():
+                    setattr(row, field, value)
+                questions_updated += 1
+                labels_updated.append(label)
+                updated_fields[label] = list(changed)
+                continue
+            db.add(models.Question(**values))
             written_here.add(label)
+            labels_created.append(label)
             questions_created += 1
 
+        if unresolved:
+            # Never a success that did not happen: the act refuses, the
+            # transaction rolls back, both downloads survive and the labels it
+            # could not write are named for the reviewer to resolve.
+            raise UploadRefused(
+                "this release already published "
+                + ", ".join(
+                    f"{label} ({reason})" for label, reason in unresolved
+                )
+                + "; the reviewed version was not applied to "
+                + ("those rows" if len(unresolved) > 1 else "that row")
+                + " and nothing was written"
+            )
+
+        # Labels an EARLIER version of this release published that this
+        # version no longer carries (the reviewer omitted them in this round).
+        # Their rows stay: a published question_label is a durable reservation
+        # (Q36) and this act has no mandate to delete learner content. Named
+        # here so the omission is visible rather than silent.
+        in_this_version = {label for label in snapshot_labels if label}
+        labels_retained_from_earlier_versions = sorted(
+            label for label, uid in existing_by_label.items()
+            if uid and uid == release.release_uid
+            and label not in in_this_version
+        )
         result = {
             "release_uid": release.release_uid,
             "version": release.version,
             "groups_created": groups_created,
             "questions_created": questions_created,
+            "questions_updated": questions_updated,
+            "labels_created": list(labels_created),
+            "labels_updated": list(labels_updated),
+            "updated_fields": {
+                label: list(fields) for label, fields in updated_fields.items()
+            },
             "labels_reissued": list(labels_reissued),
+            "labels_skipped": [
+                {
+                    "question_label": label,
+                    "reason": QUESTION_LABEL_UNCHANGED,
+                }
+                for label in labels_reissued
+            ],
+            "labels_retained_from_earlier_versions":
+                labels_retained_from_earlier_versions,
         }
+        if labels_updated:
+            notes = list((release.diagnostics or {}).get("release_notes") or [])
+            note = {
+                "code": QUESTION_LABEL_UPDATED,
+                "release_uid": release.release_uid,
+                "version": release.version,
+                "question_labels": list(labels_updated),
+                "detail": (
+                    "an earlier version of this release published these "
+                    "labels; this version's reviewed content was applied to "
+                    "their published rows"
+                ),
+            }
+            if note not in notes:
+                notes.append(note)
+                release.diagnostics = {
+                    **(release.diagnostics or {}),
+                    "release_notes": notes,
+                }
         if labels_reissued:
             notes = list((release.diagnostics or {}).get("release_notes") or [])
             note = {

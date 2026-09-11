@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .. import schemas
 from ..db import SessionLocal, get_db
@@ -712,13 +713,35 @@ async def submit_reviewed_master_file(
         raw_bytes = await read_limited_upload(
             file, description="reviewed Master workbook",
         )
-        return master_review.submit_reviewed_master(
-            db, job,
-            lane=resolved,
-            workbook_bytes=raw_bytes,
-            filename=str(file.filename or ""),
-            owner_sub=user.sub,
-        )
+
+        def apply_reviewed_master():
+            # Its own session, exactly as the Concept review upload does
+            # (build_concepts_release_api_contract.py:339): the request session
+            # belongs to the event loop's thread, and a Session is not shared
+            # across threads.
+            worker_db = SessionLocal()
+            try:
+                worker_job = uploads.get_job(
+                    worker_db, job_id, owner_sub=user.sub,
+                    module="build_concepts",
+                )
+                return master_review.submit_reviewed_master(
+                    worker_db, worker_job,
+                    lane=resolved,
+                    workbook_bytes=raw_bytes,
+                    filename=str(file.filename or ""),
+                    owner_sub=user.sub,
+                )
+            finally:
+                worker_db.close()
+
+        # Everything after the awaited read is blocking: parsing the uploaded
+        # workbook, re-rendering BOTH workbooks, staging file IO, two commits
+        # and a Node subprocess for KaTeX validation. On the event loop, with
+        # one worker deployed, that stalls every other request for the whole
+        # duration. The response payload is plain JSON-safe dicts, so nothing
+        # in it outlives the worker session.
+        return await run_in_threadpool(apply_reviewed_master)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 — mapped to readable HTTP errors

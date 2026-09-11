@@ -11,15 +11,19 @@ path plus the shared CMS workbook append, idempotent on repeat.
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import io
+import uuid
 from pathlib import Path
 
 import openpyxl
 import pytest
+from sqlalchemy import text as sa_text
 
 from app import config, models
+from app import db as app_db
 from app.bulk_import import assessment_workbook as aw
 from app.services import assessment_release_run as run
 from app.services import assessment_release_service as svc
@@ -44,7 +48,7 @@ from tests.test_pre_release_lane_wiring import (
 # Fixtures: a job whose Post Master was built offline and is ready for review
 # --------------------------------------------------------------------------- #
 
-def _routed_post_job(db, chapter) -> models.UploadJob:
+def _routed_post_job(db, chapter, records=None) -> models.UploadJob:
     """A Post job whose staged Concept release is mechanically complete.
 
     The Type/Case routes and the source inventory are the lane-wiring
@@ -71,7 +75,7 @@ def _routed_post_job(db, chapter) -> models.UploadJob:
         db,
         job,
         target_chapter_id=chapter.id,
-        records=_routed_post_records(),
+        records=copy.deepcopy(records) if records else _routed_post_records(),
         inventory=copy.deepcopy(SOURCE_INVENTORY),
         mined_types=_post_mined_types(),
         reason="recorded Output-03 fixture",
@@ -80,11 +84,15 @@ def _routed_post_job(db, chapter) -> models.UploadJob:
     return job
 
 
-def _master_ready_job(db):
+def _master_ready_job(db, records=None):
     """One job at the Step 03 boundary: Post Concept staged, Post Master
-    published by the offline scripted pipeline, review marker master_ready."""
+    published by the offline scripted pipeline, review marker master_ready.
+
+    ``records`` overrides the staged Concept rows, which is how a test asks
+    for its OWN topic/concept identity instead of the shared fixture one.
+    """
     chapter = _chapter_with_concepts(db)
-    job = _routed_post_job(db, chapter)
+    job = _routed_post_job(db, chapter, records)
     authorities, _ = _authorities(db, chapter)
     published = run.run_release_for_job(
         db, job.id, owner_sub=OWNER, authorities=authorities,
@@ -912,3 +920,307 @@ def test_group_description_edits_reach_the_group_and_identity_cells_do_not(db):
     assert any("concept_details" in flag and "Step 02" in flag for flag in result["issues"])
     assert new_release.payload["master_review"]["group_edits"][0]["group_key"] == group_key
     assert result["readiness"] in {svc.READY, svc.RELEASED_WITH_WARNINGS}, result["issues"]
+
+
+# --------------------------------------------------------------------------- #
+# (i) the SECOND reviewed round on a lane that is already published
+#
+# Finding 1 (blocker). ``submit_reviewed_master`` freezes the edited version
+# with ``create_release(..., supersedes=release)``: the SAME ``release_uid``,
+# version N+1. ``upload_master_to_database`` used to read "a label this
+# release_uid already published" as Rule G's idempotent repeat, append it to
+# ``labels_reissued`` and ``continue`` — so every cell the reviewer changed in
+# round 2 was passed over, while ``publish_reviewed_master`` never looked at
+# that list and recorded ``status: published`` with a receipt claiming
+# success. The edits now reach the published rows inside the same
+# transaction, and a label the act can neither create nor update refuses it.
+# --------------------------------------------------------------------------- #
+
+def test_a_second_reviewed_round_reaches_the_published_rows_and_the_receipt(
+    db, tmp_path, monkeypatch,
+):
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, published = _master_ready_job(db)
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    first = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+    assert first["database"]["questions_created"] == 2
+
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    edited = _label(sheet, row)
+    untouched = next(
+        str(candidate["question_label"])
+        for candidate in published.concept_snapshot["candidates"]
+        if str(candidate["question_label"]) != edited
+    )
+    sheet.cell(row=row, column=columns["question"]).value = (
+        "Which of these objects is a solid?")
+    sheet.cell(row=row, column=columns["level_of_difficulty"]).value = "Moderate"
+    reviewed = _submit(db, job, _bytes(workbook))
+    assert reviewed["version"] == 2
+
+    second = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+
+    # The reviewer's second-round edit is IN the published row.
+    stored = db.query(models.Question).filter(
+        models.Question.question_label == edited).one()
+    db.refresh(stored)
+    assert stored.question == "Which of these objects is a solid?"
+    assert stored.level_of_difficulty == "Moderate"
+    assert stored.route_audit["version"] == 2
+    assert stored.route_audit["release_uid"] == published.release_uid
+    # An update writes what an insert would have written, the projections
+    # included.
+    assert stored.origin == svc.QUESTION_ORIGIN_ASSESSMENT_RELEASE
+    assert stored.blueprint_cell_id == _candidate(
+        db.get(models.AssessmentRelease, reviewed["release_id"]), edited,
+    )["blueprint_cell_id"]
+    assert stored.answers and stored.group.concept_id
+    assert db.query(models.Question).filter(
+        models.Question.question_label == edited).count() == 1
+
+    # …and the receipt says exactly what happened, to nobody's surprise.
+    receipt = second["database"]
+    assert second["version"] == 2
+    assert second["publication_status"] == "published"
+    assert first["database"]["questions_updated"] == 0
+    assert receipt["questions_created"] == 0
+    assert receipt["labels_created"] == []
+    assert receipt["questions_updated"] == 1
+    assert receipt["labels_updated"] == [edited]
+    # The columns the reviewer's version differs in. (``route_audit`` is not
+    # one of them: its content is the same and only the version it records
+    # rides along with the write.)
+    assert {"question", "question_text", "level_of_difficulty"} == set(
+        receipt["updated_fields"][edited])
+    assert receipt["labels_reissued"] == [untouched]
+    assert receipt["labels_skipped"] == [
+        {"question_label": untouched, "reason": svc.QUESTION_LABEL_UNCHANGED},
+    ]
+    # The question nobody edited was not rewritten.
+    other = db.query(models.Question).filter(
+        models.Question.question_label == untouched).one()
+    assert other.route_audit["version"] == 1
+
+    db.refresh(job)
+    marker = release.concept_review_state(job)
+    lane_state = marker["master_review"]["post"]
+    assert lane_state["status"] == "published"
+    assert lane_state["published"]["version"] == 2
+    assert lane_state["published"]["database"]["labels_updated"] == [edited]
+    assert lane_state["published"]["cms_workbook"][
+        "labels_updated_in_database"] == [edited]
+    assert second["review_workflow"] == marker
+    new_release = db.get(models.AssessmentRelease, reviewed["release_id"])
+    notes = {
+        note["code"]: note
+        for note in new_release.diagnostics["release_notes"]
+    }
+    assert notes[svc.QUESTION_LABEL_UPDATED]["question_labels"] == [edited]
+    assert notes[svc.QUESTION_LABEL_REISSUED]["question_labels"] == [untouched]
+
+    # Still one idempotent act: repeating writes nothing new.
+    again = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+    assert again["database"] == second["database"]
+    assert db.query(models.Question).filter(
+        models.Question.question_label.in_([edited, untouched])).count() == 2
+    stored = db.query(models.Question).filter(
+        models.Question.question_label == edited).one()
+    assert stored.question == "Which of these objects is a solid?"
+
+
+def test_a_second_round_that_cannot_reach_its_row_refuses_instead_of_succeeding(
+    db, tmp_path, monkeypatch,
+):
+    """Two published rows under one label cannot be resolved — so the act
+    refuses (409) and names them, rather than returning a publication that
+    did not happen (Q13, CLAUDE.md)."""
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, published = _master_ready_job(db)
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    edited = _label(sheet, row)
+    sheet.cell(row=row, column=columns["question"]).value = "A second round edit?"
+    reviewed = _submit(db, job, _bytes(workbook))
+    assert reviewed["version"] == 2
+
+    owned = db.query(models.Question).filter(
+        models.Question.question_label == edited).one()
+    # The database ``_ensure_question_label_index`` declines to index rather
+    # than crash on: one label, two rows, both claiming this release.
+    db.execute(sa_text(f"DROP INDEX IF EXISTS {app_db.QUESTION_LABEL_INDEX}"))
+    db.commit()
+    twin = models.Question(
+        group_id=owned.group_id,
+        sheet_kind=owned.sheet_kind,
+        question_label=edited,
+        question="A duplicate row under the same label.",
+        route_audit=dict(owned.route_audit or {}),
+    )
+    db.add(twin)
+    db.commit()
+    try:
+        with pytest.raises(master_review.MasterReviewConflict) as refusal:
+            master_review.publish_reviewed_master(
+                db, job, lane="post", owner_sub=OWNER)
+        assert edited in str(refusal.value)
+        assert "nothing was written" in str(refusal.value)
+        # Nothing published, nothing lost: the rows are as they were and the
+        # marker still records version 1 as the published one.
+        db.refresh(owned)
+        assert owned.question != "A second round edit?"
+        db.refresh(job)
+        lane_state = release.concept_review_state(job)["master_review"]["post"]
+        assert lane_state["published"]["version"] == 1
+    finally:
+        db.delete(twin)
+        db.commit()
+        db.execute(sa_text(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {app_db.QUESTION_LABEL_INDEX} "
+            "ON questions(question_label) WHERE question_label <> ''"))
+        db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# (j) Finding 2 — two snapshot groups of one tier, one blank shell
+#
+# ``SessionLocal`` is ``autoflush=False``: the ``record.group_key``
+# assignment was not written before the NEXT same-tier group queried for
+# ``group_key == ""``, so that query re-selected the same row and the
+# identity map handed back the object already carrying the first group's key.
+# The Post fixture is exactly this shape — AG01 and AG02 under one concept
+# with a single blank Advanced shell — so Step 03's publication collapsed two
+# groups into one row and put both learners' questions in it.
+# --------------------------------------------------------------------------- #
+
+def test_two_groups_of_one_tier_do_not_collapse_onto_one_blank_shell(
+    db, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", tmp_path / "out.xlsx")
+    # Its own topic identity, so the concept this publishes reaches the Master
+    # act with its shells unclaimed however the suite is ordered.
+    records = copy.deepcopy(_routed_post_records())
+    records[0]["topic"] = f"Solids {uuid.uuid4().hex[:8]}"
+    job, published = _master_ready_job(db, records)
+    snapshot = published.concept_snapshot
+    keys = [str(group["group_key"]) for group in snapshot["groups"]]
+    tiers = [str(group["group_type"]) for group in snapshot["groups"]]
+    assert len(keys) == len(set(keys)) == 4
+    assert tiers.count("Advanced") == 2, "the fixture must carry AG01 and AG02"
+
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    concept_key = str(snapshot["topics"][0]["concepts"][0]["concept_key"])
+    concept_id = svc._resolve_snapshot_concept_ids(db, snapshot)[concept_key]
+    blank = db.query(models.Group).filter(
+        models.Group.concept_id == concept_id,
+        models.Group.group_type == "Advanced",
+        models.Group.group_key == "",
+    ).all()
+    assert len(blank) == 1, "one blank Advanced shell is the collapsing case"
+
+    result = master_review.publish_reviewed_master(
+        db, job, lane="post", owner_sub=OWNER)
+
+    # Every snapshot group is its own row; the second Advanced group was
+    # created rather than stolen from the first.
+    rows = db.query(models.Group).filter(models.Group.group_key.in_(keys)).all()
+    assert sorted(row.group_key for row in rows) == sorted(keys)
+    assert len({row.id for row in rows}) == 4
+    assert result["database"]["groups_created"] == 1
+    for candidate in snapshot["candidates"]:
+        stored = db.query(models.Question).filter(
+            models.Question.question_label == candidate["question_label"]).one()
+        assert stored.group.group_key == candidate["group_key"]
+    questions = [
+        db.query(models.Question).filter(
+            models.Question.question_label == candidate["question_label"]).one()
+        for candidate in snapshot["candidates"]
+    ]
+    assert questions[0].group_id != questions[1].group_id
+
+
+# --------------------------------------------------------------------------- #
+# (k) Finding 3 — the submit route does its blocking work off the event loop
+# --------------------------------------------------------------------------- #
+
+def test_the_submit_route_runs_its_blocking_work_off_the_event_loop(
+    client, db, monkeypatch,
+):
+    """Parsing, two re-renders, staging IO, two commits and a Node KaTeX
+    subprocess ran on the asyncio loop; with one deployed worker that stalled
+    every other request for the whole upload."""
+    job, published = _master_ready_job(db)
+    seen: dict[str, bool] = {}
+    real = master_review.submit_reviewed_master
+
+    def spy(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            seen["on_event_loop"] = False
+        else:
+            seen["on_event_loop"] = True
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(master_review, "submit_reviewed_master", spy)
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    row = _question_rows(sheet)[0]
+    sheet.cell(
+        row=row, column=_columns(sheet)["level_of_difficulty"],
+    ).value = "Moderate"
+    response = _post_file(
+        client,
+        f"/build-concepts/uploads/{job.id}/master-review/submit?lane=post",
+        _bytes(workbook),
+        "edited.xlsx",
+    )
+
+    assert seen == {"on_event_loop": False}
+    # The route's JSON contract is unchanged.
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["round_recorded"] is True
+    assert body["version"] == 2
+    assert body["filename"] == "edited.xlsx"
+    assert [edit["field"] for edit in body["changed_fields"]] == [
+        "level_of_difficulty"]
+
+
+def test_a_round_that_omits_a_question_names_the_row_it_leaves_published(
+    db, tmp_path, monkeypatch,
+):
+    """An omission in round 2 is not a deletion of published learner content:
+    a published ``question_label`` is a durable reservation (Q36). The act
+    says so in the receipt instead of leaving the row unaccounted for."""
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, published = _master_ready_job(db)
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Descriptive"]
+    rows = _question_rows(sheet)
+    omitted_label = _label(sheet, rows[0])
+    sheet.delete_rows(rows[0], 1)
+    assert _submit(db, job, _bytes(workbook))["version"] == 2
+
+    second = master_review.publish_reviewed_master(
+        db, job, lane="post", owner_sub=OWNER)
+
+    receipt = second["database"]
+    assert receipt["questions_created"] == 0
+    assert receipt["questions_updated"] == 0
+    assert receipt["labels_retained_from_earlier_versions"] == [omitted_label]
+    assert db.query(models.Question).filter(
+        models.Question.question_label == omitted_label).count() == 1

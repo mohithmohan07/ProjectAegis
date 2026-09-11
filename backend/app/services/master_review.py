@@ -1524,7 +1524,16 @@ def publish_reviewed_master(
     lane: object,
     owner_sub: str = "",
 ) -> dict[str, Any]:
-    """Write the lane's live Master to the database and the CMS workbook."""
+    """Write the lane's live Master to the database and the CMS workbook.
+
+    A second round on a lane that was already published is the same act: the
+    reviewed version carries the same ``release_uid``, and the database write
+    UPDATES the rows its earlier version published instead of passing over
+    them. The receipt names what was created, what was updated and what was
+    skipped because it was already identical; a label the write can neither
+    create nor update refuses the act (409) rather than recording a
+    publication that did not happen.
+    """
 
     resolved = concept_release.normalize_lane(lane)
     db.refresh(job)
@@ -1574,6 +1583,24 @@ def publish_reviewed_master(
     cms_workbook = _append_master_questions_to_cms_workbook(
         db, config.BULK_IMPORT_OUTPUT, question_ids,
     )
+    updated_labels = [str(label) for label in (database.get("labels_updated") or [])]
+    if updated_labels:
+        # Honest about the CMS half of a SECOND round: the shared workbook is
+        # written by the append-only writer, which skips a (label, placement)
+        # it already carries. The database rows above now carry the reviewer's
+        # edit; the workbook rows those labels already had were not rewritten
+        # by this act, so the receipt says so instead of implying the export
+        # was re-rendered.
+        cms_workbook = {
+            **cms_workbook,
+            "labels_updated_in_database": list(updated_labels),
+            "existing_rows_not_appended": (
+                "the shared workbook already carried these question "
+                "placements, so the append-only CMS writer added no row for "
+                "them and refreshed only the category, cognitive-skill and "
+                "source cells it keeps current on a row it already has"
+            ),
+        }
     publication_status = (
         "published" if cms_workbook.get("status") == "published" else "queued"
     )
@@ -1605,7 +1632,8 @@ def publish_reviewed_master(
     job.detail = (
         f"{resolved.capitalize()} Master v{release.version} published: "
         f"{int(database.get('questions_created') or 0)} question(s) written "
-        f"to the database; CMS workbook append {publication_status}."
+        f"and {int(database.get('questions_updated') or 0)} updated in the "
+        f"database; CMS workbook append {publication_status}."
     )
     marker = concept_release.update_concept_review_state(
         db, job, status=status_update, master_review={resolved: lane_state},
