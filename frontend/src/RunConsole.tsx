@@ -9,7 +9,7 @@ import {
   fourOutputCompletionFromResult,
   incompleteFourOutputLabel,
 } from "./fourOutputCompletion";
-import type { GenerationRecovery, OpenAIUsage } from "./types";
+import type { GenerationRecovery, OpenAIUsage, UploadJob } from "./types";
 
 export interface RunLine {
   level: string;
@@ -20,6 +20,7 @@ export interface RunLine {
 }
 
 export interface RunState {
+  jobId?: number;
   active: boolean;          // a run is in progress
   open: boolean;            // console panel expanded
   title: string;
@@ -67,6 +68,8 @@ interface RunConsoleApi {
   state: RunState;
   setOpen: (open: boolean) => void;
   clear: () => void;
+  restore: (job: UploadJob) => void;
+  record: (job: UploadJob, message: string, level?: string) => void;
   /** POST a streaming endpoint, piping its events into the console. */
   run: <T = unknown>(
     title: string,
@@ -203,6 +206,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       ? {
         ...previous,
         active: true,
+        status: "running",
         open: true,
         title,
         // A continuation is the same durable job. Keep the prior percentage
@@ -235,6 +239,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
         progressLabel: "Starting…", status: "running",
       };
     stateRef.current = nextState;
+    nextState.jobId = reattach?.jobId;
     setState(nextState);
     openRef.current = true;
 
@@ -333,14 +338,15 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             lastPollOk = Date.now();
             outageNoted = false;
             delay = 2000;
-            for (const event of tail.events) {
+            for (const [index, event] of tail.events.entries()) {
               if (runIdRef.current !== runId) throw err;
               applyOnce(event);
               if (event.type === "result") {
+                if (tail.running || index < tail.events.length - 1) continue;
                 if (isHistoricalResult(event.data, reattach.operation)) continue;
                 return event.data as T;
               }
-              if (event.type === "error") throw new Error(event.message);
+              if (event.type === "error" && !tail.running && index === tail.events.length - 1) throw new Error(event.message);
             }
             if (tail.running) continue;
             // Journal exhausted, worker not running, no terminal event:
@@ -448,6 +454,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       active: true,
       open: true,
       title,
+      jobId: reattach.jobId,
       progressLabel: "Attaching to the running job…",
       status: "running",
     });
@@ -508,14 +515,15 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           continue;
         }
         delay = 2000;
-        for (const event of batch.events) {
+        for (const [index, event] of batch.events.entries()) {
           if (runIdRef.current !== runId) return { kind: "detached" };
           applyOnce(event);
           if (event.type === "result") {
+            if (batch.running || index < batch.events.length - 1) continue;
             if (isHistoricalResult(event.data, reattach.operation)) continue;
             return { kind: "result", data: event.data as T };
           }
-          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "error" && !batch.running && index === batch.events.length - 1) throw new Error(event.message);
         }
         if (batch.running) {
           await visibilitySleep(delay);
@@ -552,6 +560,9 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             data: resultWithIncompleteRecovery(recovered, blockedRecovery),
           };
         }
+        if (reviewWorkflowStatus(job) === "master_failed") {
+          return { kind: "result", data: reattach.recoverResult ? await reattach.recoverResult() : job as unknown as T };
+        }
         if (isConceptReviewJob(job, reattach.operation)) {
           note("Waiting for the reviewer to approve the Concept Files.");
           return { kind: "stopped" };
@@ -577,7 +588,9 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       .then((outcome) => {
         if (runIdRef.current === runId) {
           if (outcome.kind === "result") {
-            setState((s) => terminalResultState(s, outcome.data));
+            setState((s) => isPausedResult(outcome.data)
+              ? {...stateWithResultUsage(s, outcome.data), active: false, status: "paused", progressLabel: pauseLabel(outcome.data)}
+              : terminalResultState(s, outcome.data));
           } else if (outcome.kind === "stopped") {
             setState((s) => ({ ...s, active: false, status: "paused" }));
           }
@@ -604,6 +617,36 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     setState((s) => ({ ...s, open }));
   }, []);
 
+  const restore = useCallback((job: UploadJob) => {
+    if (stateRef.current.active || (stateRef.current.jobId === job.id && stateRef.current.status !== "idle")) return;
+    const workflow = job.review_workflow?.status;
+    const running = Boolean(job.generation_running);
+    const stage = job.run_state?.stage || (workflow === "master_building"
+      ? "Step 2 · Generating Master files" : workflow === "master_failed"
+        ? "Step 2 · Master generation needs attention" : workflow === "master_ready"
+          ? "Master files ready" : workflow ? "Step 1 complete · Waiting for reviewed files" : job.detail);
+    const lines: RunLine[] = (job.generation_log ?? []).flatMap((event) => {
+      const message = event.message || event.label;
+      return message ? [{level: event.type === "step" ? "step" : event.level || "info", message, ts: event.ts ?? Date.now() / 1000}] : [];
+    });
+    if (stage && !lines.some(line => line.message === stage)) lines.push({level: "step", message: stage, ts: Date.now() / 1000});
+    const restored: RunState = {...INITIAL, jobId: job.id, open: true,
+      title: `Build Concepts · ${job.filename}`, lines, usage: job.openai_usage ?? null,
+      usagePresentation: {cumulative: true, filename: job.filename},
+      progress: job.run_state?.progress ?? job.checkpoint_progress ?? 0,
+      progressLabel: stage || "Saved run loaded", active: false,
+      status: running ? "running" : workflow === "master_failed" ? "error"
+        : workflow === "master_ready" ? "done" : workflow ? "paused" : "idle"};
+    stateRef.current = restored;
+    setState(restored);
+  }, []);
+
+  const record = useCallback((job: UploadJob, message: string, level = "info") => {
+    restore(job);
+    setState(s => ({...s, open: true, jobId: job.id, progressLabel: message,
+      lines: [...s.lines, {level, message, ts: Date.now() / 1000}].slice(-MAX_LINES)}));
+  }, [restore]);
+
   const clear = useCallback(() => {
     runIdRef.current += 1;
     const cleared = {
@@ -614,8 +657,8 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const api = useMemo<RunConsoleApi>(
-    () => ({ state, setOpen, clear, run, watch }),
-    [state, setOpen, clear, run, watch],
+    () => ({ state, setOpen, clear, run, watch, restore, record }),
+    [state, setOpen, clear, run, watch, restore, record],
   );
 
   return <RunConsoleContext.Provider value={api}>{children}</RunConsoleContext.Provider>;
@@ -682,6 +725,12 @@ function terminalResultState(state: RunState, data: unknown): RunState {
   // otherwise the console can freeze on the last live subtotal even though
   // the result contains later Master-lane spend.
   const terminalState = stateWithResultUsage(state, data);
+  if (reviewWorkflowStatus(data) === "master_failed") {
+    return { ...terminalState, active: false, status: "error",
+      progressLabel: "Step 2 failed · retry Master generation",
+      lines: [...terminalState.lines, { level: "error", ts: Date.now() / 1000,
+        message: "The backend could not finish Master generation. Your reviewed files are saved; retry Step 2." }] };
+  }
   const incomplete = incompleteRunResult(data);
   if (incomplete) {
     // The server staged what the run had already produced, but generation did
@@ -803,7 +852,7 @@ function isPausedResult(data: unknown): boolean {
   if (result.status === "awaiting_decision" && Boolean(result.pending_decision)) {
     return true;
   }
-  return isConceptReviewJob(result);
+  return ["pending_review", "reviewed"].includes(reviewWorkflowStatus(result) ?? "");
 }
 
 function isConceptReviewJob(

@@ -774,3 +774,20 @@ def test_the_pre_learning_questions_ship_on_their_own_carry_channel(
     )
     assert snapshot["plans"] == pre_questions["plans"]
     assert snapshot["questions"] == pre_questions["questions"]
+
+
+def test_new_two_step_workflow_stops_before_pre_question_authoring(golden_envelope, replay_providers, tmp_path):
+    import copy
+    from app.services import reviewed_file_workflow_policy as workflow
+    from app.services.phase3 import envelope
+    env = copy.deepcopy(golden_envelope)
+    env["metadata"].update({workflow.KEY: workflow.VERSION})
+    env["envelope_sha256"] = envelope.seal_sha256(env)
+    def forbidden(_):
+        pytest.fail("Step 1 must not generate Pre questions")
+    providers = {**replay_providers, "prequestions": forbidden, "prequestions_author": forbidden}
+    result = runner.run(env, store_dir=tmp_path / "decisions", providers=providers)
+    assert result["pre_questions"]["deferred_until_master"] is True
+    assert result["pre_questions"]["questions"] == {}
+    assert result["pre_map"]["rows"]
+    assert workflow.active(result["pre_map"])

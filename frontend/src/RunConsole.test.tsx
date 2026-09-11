@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import type { StreamEvent } from "./api/client";
 import { RunConsoleProvider, useRunConsole } from "./RunConsole";
 import RunConsolePanel from "./components/RunConsolePanel";
-import type { OpenAIUsage } from "./types";
+import type { OpenAIUsage, UploadJob } from "./types";
 
 const pending = vi.hoisted(() => [] as Array<{
   onEvent: (event: StreamEvent) => void;
@@ -954,4 +954,40 @@ test("a non-transient catch-up failure stops the poll instead of spinning foreve
     getUploadJobMock.mockReset();
     getRunEventsMock.mockReset();
   }
+});
+
+
+test("Master watch ignores earlier segment errors and reports the latest failure", async () => {
+  pending.length = 0;
+  getRunEventsMock.mockReset();
+  getRunEventsMock.mockResolvedValueOnce({
+    events: [
+      { type: "error", message: "Old upload error", ts: 100, seq: 1 },
+      { type: "step", label: "Extracting reviewed file", ts: 101, seq: 2 },
+      { type: "result", data: { review_workflow: { status: "master_failed" } }, ts: 102, seq: 3 },
+    ], next: 3, running: false,
+  });
+  render(<RunConsoleProvider><Probe /></RunConsoleProvider>);
+  await act(async () => { fireEvent.click(screen.getByText("Watch master")); });
+  expect(pending.length).toBe(0);
+  expect(screen.getByTestId("status").textContent).toBe("error");
+  expect(screen.getByTestId("progress-label").textContent).toContain("Step 2 failed");
+  expect(screen.getByTestId("console-lines").textContent).toContain("Extracting reviewed file");
+});
+
+
+test("restores saved backend log and review status after reopening", async () => {
+  function RestoreProbe() {
+    const { restore } = useRunConsole();
+    return <button onClick={() => restore({ id: 91, filename: "chapter.pdf",
+      review_workflow: { status: "pending_review" },
+      generation_log: [{ type: "log", level: "success", message: "Concept files saved", ts: 1 }],
+      generation_running: false,
+    } as UploadJob)}>Restore saved job</button>;
+  }
+  render(<RunConsoleProvider><Probe /><RestoreProbe /></RunConsoleProvider>);
+  await act(async () => { fireEvent.click(screen.getByText("Restore saved job")); });
+  expect(screen.getByTestId("console-lines").textContent).toContain("Concept files saved");
+  expect(screen.getByTestId("status").textContent).toBe("paused");
+  expect(screen.getByTestId("progress-label").textContent).toContain("Waiting for reviewed files");
 });

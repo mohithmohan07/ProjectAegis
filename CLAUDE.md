@@ -1,5 +1,20 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q49 (reviewed-file handoff and visible progress).**
+Treat generation as two steps: source to Concept files, then reviewed files to
+Master files. Reviewed uploads may change layout, row counts, titles and IDs,
+and may remove, add, combine or reorder content. Do not require them to match
+the previous staged Concept set. Upload stores the reviewed input; Step 2 uses
+an independent API author, critic and existing Fixer to extract its concepts
+and questions. Previous source text, inventories, routes and cached semantic
+decisions are history, not Step 2 inputs. Preserve the selected chapter and
+publication metadata. Pre questions absent from the reviewed file are generated
+from its accepted concepts only. Fresh runs defer Pre question generation to
+Step 2; historical sealed runs retain their recorded workflow. All new work uses
+GPT-5.4 mini and the closed CMS vocabulary. Show saved logs after refresh, live
+Step 2 progress, upload receipts/errors and accurate running/waiting/failure
+states. Continue the authorized checks, merge and deployment workflow.
+
 **Latest owner amendment: Q48 (11 September 2026, job 129).**
 Repair missing Pre questions and weak concepts using the attached diagnostics.
 The API may infer supported foundations from grade, subject and source task

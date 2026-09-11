@@ -367,6 +367,10 @@ def _lane_master_eligibility(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=owner_sub, module="build_concepts")
+        from . import reviewed_file_input
+        if (((job.question_inventory or {}).get(reviewed_file_input.INPUTS) or {}).get(lane)
+                or reviewed_file_input.active(release.release_payload(job, lane=lane))):
+            return True, ""
         # Restructure A (owner approval, 2026-08-29): "is this run
         # finished" was decided ONCE, at staging, and recorded on the
         # payload as its explicit terminal verdict. This gate READS that
@@ -474,9 +478,11 @@ def rebuild_lane_master(
             module="build_concepts",
         )
         db.refresh(job)
-        generation_recovery.require_mutation_allowed(
-            job, operation=f"rebuild the {lane} Master file"
-        )
+        from . import reviewed_file_input
+        if not reviewed_file_input.has_input(job, lane):
+            generation_recovery.require_mutation_allowed(
+                job, operation=f"rebuild the {lane} Master file"
+            )
         eligible, reason = _lane_master_eligibility(
             db,
             job_id,
@@ -504,6 +510,9 @@ def rebuild_lane_master(
                     f"before provider spend ({capacity.available_bytes} "
                     "bytes available)."
                 )
+                from . import reviewed_file_input
+                reviewed_job = uploads.get_job(db, job_id, owner_sub=owner_sub, module="build_concepts")
+                reviewed_file_input.prepare(db, reviewed_job, lane=lane, owner_sub=owner_sub)
                 if lane == release.LANE_PRE:
                     reviewed_job = uploads.get_job(
                         db, job_id, owner_sub=owner_sub, module="build_concepts"
@@ -1030,6 +1039,9 @@ def _regenerate_pre_questions_after_review(
     pre_payload = release.release_payload(job, lane=release.LANE_PRE)
     if pre_payload is None:
         return None
+    from . import reviewed_file_input
+    if reviewed_file_input.active(pre_payload):
+        return reviewed_file_input.ensure_pre_questions(db, job, owner_sub=owner_sub)
     if not corrected_changed and not _reviewed_pre_recovery_needed(job, state):
         return None
     current_uid = str(pre_payload.get(release.STAGED_RELEASE_UID_FIELD) or "")
@@ -1331,27 +1343,43 @@ def build_review_masters(
             db, job, status=release.CONCEPT_REVIEW_REVIEWED
         )
 
-    # A corrected Pre Concept workbook changes the prerequisite evidence that
-    # owns its generated question bank. Re-enter the existing Phase 03
-    # prequestions path once per corrected Pre release UID before Master
-    # authoring; Post's reviewed source bank is left untouched.
-    if _reviewed_pre_recovery_needed(job, state) or (
-        isinstance(state.get("corrected_inputs"), Mapping)
-        and isinstance(
-            (state.get("corrected_inputs") or {}).get(release.LANE_PRE),
-            Mapping,
-        )
-        and bool(
-            ((state.get("corrected_inputs") or {}).get(release.LANE_PRE) or {}).get(
-                "changed"
+    release.update_concept_review_state(db, job, status=release.CONCEPT_REVIEW_MASTER_BUILDING)
+    try:
+        # Step 2 owns extraction from the reviewed files; previous inventories
+        # and matching rules do not enter these independent decisions.
+        from . import reviewed_file_input
+        for reviewed_lane in (release.LANE_POST, release.LANE_PRE):
+            from . import reviewed_file_workflow_policy as workflow
+            if ((job.question_inventory or {}).get(reviewed_file_input.INPUTS)
+                    or workflow.active(release.release_payload(job, lane=reviewed_lane))):
+                with storage_capacity.reserve_master_capacity(job_id=job_id, lane=reviewed_lane):
+                    reviewed_file_input.prepare(db, job, lane=reviewed_lane, owner_sub=owner_sub)
+
+        # A corrected Pre Concept workbook changes the prerequisite evidence that
+        # owns its generated question bank. Re-enter the existing Phase 03
+        # prequestions path once per corrected Pre release UID before Master
+        # authoring; Post's reviewed source bank is left untouched.
+        if _reviewed_pre_recovery_needed(job, state) or (
+            isinstance(state.get("corrected_inputs"), Mapping)
+            and isinstance(
+                (state.get("corrected_inputs") or {}).get(release.LANE_PRE),
+                Mapping,
             )
-        )
-    ):
-        _regenerate_pre_questions_after_review(db, job, owner_sub=owner_sub)
-        job = uploads.get_job(
-            db, job_id, owner_sub=owner_sub, module="build_concepts"
-        )
-        state = release.concept_review_state(job)
+            and bool(
+                ((state.get("corrected_inputs") or {}).get(release.LANE_PRE) or {}).get(
+                    "changed"
+                )
+            )
+        ):
+            _regenerate_pre_questions_after_review(db, job, owner_sub=owner_sub)
+            job = uploads.get_job(
+                db, job_id, owner_sub=owner_sub, module="build_concepts"
+            )
+            state = release.concept_review_state(job)
+    except Exception as exc:
+        release.update_concept_review_state(db, job, status=release.CONCEPT_REVIEW_MASTER_FAILED)
+        progress.log("Step 2 could not prepare the reviewed files: " + str(exc), level="error")
+        raise
 
     started = datetime.now(timezone.utc).isoformat()
     uploads.update_run_stage(

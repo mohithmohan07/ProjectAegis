@@ -56,6 +56,8 @@ def boundary_fields(env: Mapping[str, Any]) -> dict[str, str]:
     fields.update(foundation.fields(env))
     fields.update(quality.fields(env))
     fields.update(repair.fields(env))
+    from . import reviewed_file_workflow_policy
+    fields.update(reviewed_file_workflow_policy.fields(env))
     return fields
 
 
