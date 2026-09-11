@@ -1319,10 +1319,12 @@ def build_review_masters(
             "this upload is not paused for Concept review; use the legacy "
             "release or Master workflow"
         )
-    if (
+    if state.get("status") == release.CONCEPT_REVIEW_PUBLISHED or (
         state.get("status") == release.CONCEPT_REVIEW_MASTER_READY
         and not _reviewed_pre_recovery_needed(job, state)
     ):
+        # Q51: a published run is complete; Step 2 is never re-entered after
+        # Step 3 (a different Concept input needs a new run).
         return {
             "job_id": int(job_id),
             "concept_review": state,

@@ -2980,8 +2980,10 @@ itself cites; the audit list is in the review document §4.
 the edited Master workbook (same layout as the download) is parsed with the
 existing read-back parser, rows are matched by `question_label`, every changed
 question-band cell is applied verbatim as the reviewer's decision, absent rows
-are omissions, unknown rows are reviewer additions under an existing group, and
-a new immutable release version is rendered, read back and validated exactly
+are omissions, a row with an unknown or blank label is refused with guidance to
+add the question in Step 02's Concept file (a Master row carries no source
+provenance and the Post Master is source-only), and a new immutable release
+version is rendered, read back and validated exactly
 like the Step 2 version (a value outside the closed CMS vocabulary blocks
 publication with the issue named; the reviewer's value is retained in the
 receipt). Publish: the lane's Concept file publishes first through the

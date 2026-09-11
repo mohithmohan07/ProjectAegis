@@ -181,7 +181,10 @@ async def _concept_review_upload_endpoint(
                 "this upload is not waiting for Concept review; generate the "
                 "Concept files first",
             )
-        if state.get("status") == release_svc.CONCEPT_REVIEW_MASTER_READY:
+        if state.get("status") in {
+            release_svc.CONCEPT_REVIEW_MASTER_READY,
+            release_svc.CONCEPT_REVIEW_PUBLISHED,
+        }:
             raise HTTPException(
                 409,
                 "Master authoring has started or completed for this upload; "
@@ -310,6 +313,7 @@ async def _concept_review_upload_endpoint(
                             )
                             if workflow_state and workflow_state.get("status") not in {
                                 release_svc.CONCEPT_REVIEW_MASTER_READY,
+                                release_svc.CONCEPT_REVIEW_PUBLISHED,
                             }:
                                 uploads.pause_run_for_review(
                                     worker_db,
@@ -380,7 +384,10 @@ def _concept_review_master_endpoint(
         state = release_svc.concept_review_state(job)
         if not state:
             raise HTTPException(409, "this upload has no Concept review gate")
-        if state.get("status") == release_svc.CONCEPT_REVIEW_MASTER_READY:
+        if state.get("status") in {
+            release_svc.CONCEPT_REVIEW_MASTER_READY,
+            release_svc.CONCEPT_REVIEW_PUBLISHED,
+        }:
             return {
                 "job_id": int(job_id),
                 "concept_review": state,

@@ -23,6 +23,7 @@ from .build_concepts_release import (
     LANE_PRE,
     PRE_LANE_VERDICT_FIELD,
     CONCEPT_REVIEW_MASTER_READY,
+    CONCEPT_REVIEW_PUBLISHED,
     STAGED_RELEASE_UID_FIELD,
     ReleaseUnavailableError,
     _lift_resolved_related_concepts,
@@ -217,7 +218,11 @@ def upload_release_to_database(
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
     review_state = concept_review_state(job)
-    if review_state and review_state.get("status") != CONCEPT_REVIEW_MASTER_READY:
+    # Q51: a Concept-lane publication is legitimate once the Masters are ready
+    # and stays an idempotent second act after the lane's Master was published.
+    if review_state and review_state.get("status") not in {
+        CONCEPT_REVIEW_MASTER_READY, CONCEPT_REVIEW_PUBLISHED,
+    }:
         raise ValueError(
             "Concept review is still active; submit/accept the reviewed "
             "Concept inputs and build the Master files before publication"

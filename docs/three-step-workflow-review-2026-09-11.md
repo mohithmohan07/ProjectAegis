@@ -198,8 +198,11 @@ and accepted no edited file. Step 03 adds, per lane:
    release's frozen candidates by `question_label`; every changed cell of the
    question band is applied **verbatim** as the reviewer's decision (§7 of the
    register: the human is the last word on their own correction). Rows absent
-   from the file are omissions; rows without a known label are reviewer
-   additions under an existing group. The result is a **new immutable release
+   from the file are omissions. A row without a known label is refused with a
+   readable message: a Master row carries no source provenance (source atom,
+   blueprint cell, restriction reason) and the Post Master is source-only
+   (Q39/Q41), so new questions are added in Step 02's Concept file and the
+   Master is rebuilt from it. The result is a **new immutable release
    version** (contract §44) rendered, read back and validated exactly like the
    Step 2 version; a value outside the closed CMS vocabulary or any mechanical
    defect makes readiness *blocked* with the issue named, never a silent
@@ -237,7 +240,7 @@ otherwise. Items marked *approval required* are **not** implemented.
 | D6 | Master critic stack (joint item review, group QA, refiner critics) and per-row Concept Refiner: keep Q31 defaults. | Kept. Any reduction would be measured first with the existing switches. |
 | D7 | Gate the legacy force-release, revisions and release-review routes off for review-workflow jobs (one of them re-reads `job.mmd_text` after Step 2). | *Approval required.* Recommendation: yes; historical jobs keep them. |
 | D8 | File-supplied Pre questions pass through the mechanical display renderer (heading/solution stripping, image tags) before authoring. | Unchanged (Q49 behaviour); say if they should be frozen byte-for-byte instead. |
-| D9 | Step 03 Master edits: every question-band cell applied verbatim; omissions honoured; additions accepted only under an existing group; placement moves recorded as a flag rather than applied. | Implemented as described. |
+| D9 | Step 03 Master edits: every question-band cell applied verbatim (question, question text, options/answers/explanations/placeholders, sub-question blocks, marks, duration, keyboard, category, cognitive skill, difficulty, appears-in, answer restriction, group description); omissions honoured; rows with an unknown or blank label refused with guidance to add questions in Step 02; chapter/topic/concept and group-identity cells and placement moves recorded as flags rather than applied. | Implemented as described. Say if Step 03 should also accept brand-new Master rows (they would need source provenance the Post Master contract requires). |
 | D10 | "Upload to CMS" for Masters = append the published questions to the shared Bulk Import output workbook, mirroring the Concept act. | Implemented. |
 | D11 | Explicit per-lane Master retry spend and logs are persisted on the job. | Implemented (accounting fix). |
 | D12 | Teaching-order receipt recorded on reviewed concepts. | Implemented (mechanical fix). |
