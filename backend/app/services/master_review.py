@@ -27,11 +27,22 @@ follow it:
   through the same transactional-outbox shape the Concept publication uses
   (§40: one idempotent transaction).
 
-Additions are refused here by design. A reviewer-authored row carries no
-source provenance (``source_atom_ids``, blueprint cell, restriction
-rationale) and the Post Master is source-only (Q39/Q41); the documented
-path for a new question is Step 02's Concept file, whose independent API
-author and Fixer extract it (Q49). The refusal names that path.
+Additions are accepted, with their provenance told straight (Q51 §7 D9
+follow-up, owner-approved). A reviewer may write a new question directly on
+a Master row, and it is minted here — but only when the row's Group band
+names an existing group of this release, since that group is what gives the
+question its concept, its chapter home and its published identity; a row
+naming no resolvable group is still refused, readably. The new question
+carries NO source provenance and never borrows one: no source atom, its own
+minted blueprint cell, the generated-question source label, and the
+``ADDED_AUTHOR`` markers below recorded on the candidate, in the release's
+``master_review`` record and in the lane receipt, so an auditor reads "the
+Step 03 reviewer wrote this" rather than "the chapter said this". Its label
+is minted through the same durable reservation every other label uses
+(Q36), so it can never collide with or reuse a retired number. A question
+that should carry the chapter's own evidence still belongs in Step 02's
+Concept file, whose independent API author and Fixer extract it (Q49); the
+refusal message names that path too.
 """
 from __future__ import annotations
 
@@ -57,7 +68,7 @@ from . import assessment_profile
 from . import assessment_release as rel
 from . import assessment_release_service as release_service
 from . import build_concepts_release as concept_release
-from . import column_spec, generation_recovery, release_core, uploads
+from . import column_spec, generation_recovery, identity, release_core, uploads
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +77,26 @@ _LOGGER = logging.getLogger(__name__)
 POLICY_VERSION = "master-review-2026-09-11-v1"
 LANE_STATUS_REVIEWED = "reviewed"
 LANE_STATUS_PUBLISHED = "published"
+
+# Step 03 additions (Q51 §7 D9 follow-up, owner-approved). A row the reviewer
+# typed into the Master workbook under an EXISTING group of this release is a
+# new question, minted here. It carries no source provenance and never
+# pretends to: its ``source_atom_ids`` are empty, it declares the one
+# ``source_policy`` the contract allows an atom-less candidate
+# (``rel.GENERATED_SOURCE_POLICY``, which is also what makes the renderer
+# stamp the generated-question source rather than the chapter's publication),
+# and these markers say, in the immutable release itself, who authored it.
+ADDED_AUTHOR = "step03_master_reviewer"
+ADDED_PROVENANCE_VERSION = "master-review-addition-2026-09-11-v1"
+# ``restriction_reason`` is required non-empty by the contract gate and has
+# no workbook cell of its own, so it is not something the reviewer can have
+# supplied. It is written as the recorded fact it is — who decided the
+# restriction — never as an invented rationale about the source.
+ADDED_RESTRICTION_REASON = (
+    "Answer restriction set by the Step 03 Master reviewer, who authored this "
+    "question directly in the Master workbook; no chapter source evidence "
+    "backs it."
+)
 
 _ANSWER_BLOCK_RE = re.compile(r"^answer_type_(\d+)$")
 _SUBQUESTION_RE = re.compile(r"^sub_question_(\d+)$")
@@ -877,6 +908,327 @@ def _reverse_row(
 
 
 # --------------------------------------------------------------------------- #
+# Step 03 additions: a reviewer-authored row under an existing group
+# --------------------------------------------------------------------------- #
+
+def _snapshot_groups(release: models.AssessmentRelease) -> list[dict]:
+    """Every group the rendered Master could have shown, shells included."""
+    return [
+        dict(group)
+        for group in (release.concept_snapshot or {}).get("groups") or []
+        if isinstance(group, Mapping) and str(group.get("group_key") or "")
+    ]
+
+
+def _group_lookup(release: models.AssessmentRelease) -> dict[str, list[dict]]:
+    """Visible group identity -> the group(s) that answer to it.
+
+    The Master renderer writes the group's own key into ``group_name`` and
+    ``group_display_name`` (``_complete_required_shells``), so a reviewer who
+    copied a row already carries the machine identity. Reading three cells
+    rather than one is mechanics, not a guess: a value that answers to more
+    than one group is reported as ambiguous instead of picked.
+    """
+    lookup: dict[str, list[dict]] = {}
+    for group in _snapshot_groups(release):
+        for field in ("group_key", "group_name", "group_display_name"):
+            value = _text(group.get(field)).strip()
+            if not value:
+                continue
+            entries = lookup.setdefault(value, [])
+            if all(
+                str(entry.get("group_key")) != str(group.get("group_key"))
+                for entry in entries
+            ):
+                entries.append(group)
+    return lookup
+
+
+def _concept_by_key(release: models.AssessmentRelease) -> dict[str, dict]:
+    concepts: dict[str, dict] = {}
+    for topic in (release.concept_snapshot or {}).get("topics") or []:
+        if not isinstance(topic, Mapping):
+            continue
+        for concept in topic.get("concepts") or []:
+            if isinstance(concept, Mapping):
+                concepts[str(concept.get("concept_key") or "")] = dict(concept)
+    return concepts
+
+
+def _resolve_added_group(
+    row: Mapping[str, Any], lookup: Mapping[str, list[dict]],
+) -> tuple[dict | None, str]:
+    """The existing group a new row names, or the reason it names none."""
+    named = [
+        value
+        for field in ("group_name", "group_display_name")
+        if (value := _text(row.get(field)).strip())
+    ]
+    if not named:
+        return None, (
+            "its Group band names no group (group_name is blank), so there "
+            "is nothing to attach a new question to"
+        )
+    resolved: list[dict] = []
+    for value in named:
+        for group in lookup.get(value, []):
+            if all(
+                str(found.get("group_key")) != str(group.get("group_key"))
+                for found in resolved
+            ):
+                resolved.append(group)
+    if not resolved:
+        return None, (
+            f"group {named[0]!r} is not a group of this release; copy an "
+            "existing group's group_name onto the new row"
+        )
+    if len(resolved) > 1:
+        keys = ", ".join(sorted(str(g.get("group_key")) for g in resolved))
+        return None, (
+            f"group {named[0]!r} answers to more than one group of this "
+            f"release ({keys}); use the group_key itself"
+        )
+    return resolved[0], ""
+
+
+def _added_identity(digest: str, sheet: str, number: int, taken: set[str]) -> str:
+    """A stable id for one added row: the same file yields the same id."""
+    stem = hashlib.sha256(
+        f"{digest}:{sheet}:{number}".encode("utf-8")
+    ).hexdigest()[:12]
+    candidate_id = f"REV-{stem}"
+    suffix = 1
+    while candidate_id in taken:
+        suffix += 1
+        candidate_id = f"REV-{stem}-{suffix}"
+    taken.add(candidate_id)
+    return candidate_id
+
+
+def _added_candidate_base(
+    *, candidate_id: str, cell_id: str, label: str, group: Mapping,
+    sheet_kind: str,
+) -> dict:
+    """The empty shell a reviewer-authored row is applied onto.
+
+    Every question-band value comes from the reviewer's own cells through
+    the same reverse projection an edit uses. What is set here is identity
+    and provenance only — and the provenance is the honest absence of a
+    source, never a borrowed one.
+    """
+    return {
+        "candidate_id": candidate_id,
+        "blueprint_cell_id": cell_id,
+        "question_label": label,
+        "concept_key": str(group.get("concept_key") or ""),
+        "group_key": str(group.get("group_key") or ""),
+        "sheet_kind": sheet_kind,
+        "question": "",
+        "question_text": "",
+        "question_category": "",
+        "cognitive_skill": "",
+        "difficulty": "",
+        "marks": "",
+        "question_duration": "",
+        "question_appears_in": "",
+        "answer_restriction": "",
+        "restriction_reason": ADDED_RESTRICTION_REASON,
+        "math_keyboard": "",
+        "display_answer": "",
+        "answer_explanation": "",
+        "question_disclaimer": "",
+        "answers": [],
+        "sub_questions": [],
+        # No source atom, and no pretence of one: the contract's own marker
+        # for a candidate that reuses no source question.
+        "source_atom_ids": [],
+        "source_policy": rel.GENERATED_SOURCE_POLICY,
+        "authored_by": ADDED_AUTHOR,
+        "authoring_policy_version": ADDED_PROVENANCE_VERSION,
+    }
+
+
+def _added_blueprint_cell(candidate: Mapping, *, cell_id: str) -> dict:
+    """The lone cell the added candidate answers to, mirroring its own values."""
+    return {
+        "cell_id": cell_id,
+        "concept_key": str(candidate.get("concept_key") or ""),
+        "sheet_kind": str(candidate.get("sheet_kind") or ""),
+        "question_category": candidate.get("question_category", ""),
+        "cognitive_skill": candidate.get("cognitive_skill", ""),
+        "difficulty": candidate.get("difficulty", ""),
+        "marks": candidate.get("marks", ""),
+        "count": 1,
+        "appears_in": bi.split_multi(
+            str(candidate.get("question_appears_in") or "")
+        ),
+        "source_policy": rel.GENERATED_SOURCE_POLICY,
+        "source_atom_ids": [],
+        "authored_by": ADDED_AUTHOR,
+        "rationale": (
+            "cell minted for a question the Step 03 Master reviewer authored "
+            "in the Master workbook"
+        ),
+    }
+
+
+def _apply_added_row(
+    context: _RowContext, addition: dict, *, flags: list[str],
+) -> dict:
+    """Apply one reviewer-authored row onto its freshly minted candidate.
+
+    The SAME reverse projection an edit goes through: the row is compared
+    against what the renderer would write for an empty candidate of this
+    group, and every populated cell is applied verbatim (Rule 1 — the
+    reviewer's wording is the decision, and nothing here judges it). The
+    contract gates then run on the result exactly as they do for an edit.
+    """
+    sheet = addition["sheet"]
+    label = addition["question_label"]
+    base = _added_candidate_base(
+        candidate_id=addition["candidate_id"],
+        cell_id=addition["cell_id"],
+        label=label,
+        group=addition["group"],
+        sheet_kind=sheet.lower(),
+    )
+    expected = dict(assessment_workbook._question_record(
+        base, sheet, context.profile,
+        descriptive_answer_slots=context.slots,
+        source_book=context.source_book,
+    ))
+    row = dict(addition["row"])
+    hierarchy_fields, group_fields, _question_fields = _band_fields(
+        addition["fields"]
+    )
+    # An added row's hierarchy and Group cells are decided by the group it
+    # names, not by what it carries: hold them equal so the reverse
+    # projection records no phantom "was not applied" flag for a band that
+    # was never in question.
+    for field in list(hierarchy_fields) + list(group_fields):
+        expected[field] = row.get(field)
+    if not _populated(row.get("question_source")):
+        # Not a field the reviewer can have decided from the chapter: a
+        # question they authored has no publication behind it, so it keeps
+        # the generated-question source the renderer stamps for an
+        # atom-less candidate. Said out loud rather than filled in silence.
+        row["question_source"] = expected.get("question_source")
+        flags.append(
+            f"{label}: added by the Step 03 reviewer, so its question_source "
+            f"is the authored value {str(expected.get('question_source'))!r} "
+            "(no chapter source backs it); a value typed into that cell "
+            "would be applied verbatim and named by the contract gate"
+        )
+    cell_values: list[dict] = []
+    edited = _reverse_row(
+        context, base, sheet, expected, row, addition["fields"],
+        edits=cell_values, flags=flags, group_edits={},
+    )
+    # A blank source cell leaves the base carrying no key at all, which is
+    # "missing", not "authored": take the value the renderer stamps for an
+    # atom-less candidate so the recorded provenance is explicit.
+    if "question_source" not in edited:
+        edited["question_source"] = expected.get("question_source")
+    # Identity and provenance are this act's, never the row's.
+    edited["candidate_id"] = addition["candidate_id"]
+    edited["blueprint_cell_id"] = addition["cell_id"]
+    edited["question_label"] = label
+    edited["concept_key"] = addition["concept_key"]
+    edited["group_key"] = addition["group_key"]
+    edited["sheet_kind"] = sheet.lower()
+    edited["source_atom_ids"] = []
+    edited["source_policy"] = rel.GENERATED_SOURCE_POLICY
+    edited["authored_by"] = ADDED_AUTHOR
+    edited["authoring_policy_version"] = ADDED_PROVENANCE_VERSION
+    supplied = str(addition.get("supplied_label") or "")
+    if supplied:
+        flags.append(
+            f"{label}: the added row carried question_label {supplied!r}, "
+            "which is no question of this release; the label above was "
+            "minted from the concept's durable sequence instead (a retired "
+            "number is never reused)"
+        )
+    addition["cell_values"] = cell_values
+    return edited
+
+
+def _added_placement(record: Mapping, groups: Mapping[str, Mapping]) -> dict:
+    """The home placement of an added question, in the payload's own shape.
+
+    Its evidence is the only evidence there is: the row of the reviewed
+    Master file the reviewer wrote it on. No route was decided and none is
+    claimed — the group they named IS the placement.
+    """
+    group = groups.get(str(record.get("group_key") or "")) or {}
+    return {
+        "candidate_id": str(record.get("candidate_id") or ""),
+        "concept_key": str(record.get("concept_key") or ""),
+        "concept_id": group.get("concept_id", record.get("concept_key")),
+        "group_key": str(record.get("group_key") or ""),
+        "secondary_placements": [],
+        "basis": ADDED_AUTHOR,
+        "evidence": (
+            f"{record.get('sheet')} row {record.get('row')} of the reviewed "
+            "Master file the Step 03 reviewer uploaded"
+        ),
+        "rationale": (
+            "placed in the group the reviewer wrote the question under; no "
+            "route was decided and no chapter source backs it"
+        ),
+        "flags": ["step03_master_review_addition"],
+        "authority": {
+            "decision_key": "",
+            "policy_version": ADDED_PROVENANCE_VERSION,
+            "review_flags": [],
+            "mechanical_basis": "reviewer_named_group",
+        },
+    }
+
+
+def _reserve_added_labels(
+    db: Session, release: models.AssessmentRelease,
+    additions: list[dict], concepts: Mapping[str, dict], *, digest: str,
+) -> None:
+    """Mint each addition's ``question_label`` durably (Q36).
+
+    The same reservation machinery every other label goes through
+    (``question_label_sequences.reserve_label_indices``, reached through
+    ``identity``): one atomic range per concept family, keyed so a retried
+    upload of the same file reuses its own numbers instead of burning new
+    ones. The counter outlives deleted questions and superseded releases, so
+    a minted label can never be a retired one.
+    """
+    counts: dict[str, int] = {}
+    for addition in additions:
+        concept = concepts.get(addition["concept_key"]) or {}
+        base = release_service._machine_id(concept)
+        addition["label_base"] = base
+        counts[base] = counts.get(base, 0) + 1
+    reservation_key = rel.sha256_json({
+        "policy": ADDED_PROVENANCE_VERSION,
+        "release_uid": str(release.release_uid),
+        "version": int(release.version),
+        "sha256": digest,
+        "rows": [
+            {
+                "sheet": addition["sheet"],
+                "row": addition["row_number"],
+                "base": addition["label_base"],
+            }
+            for addition in additions
+        ],
+    })
+    cursor = identity.reserve_label_indices(
+        db, counts, reservation_key=reservation_key,
+    )
+    for addition in additions:
+        base = addition["label_base"]
+        addition["question_label"] = f"{base} Q{cursor[base]:02d}"
+        addition["reservation_key"] = reservation_key
+        cursor[base] += 1
+
+
+# --------------------------------------------------------------------------- #
 # Submit: the reviewed Master becomes a new release version
 # --------------------------------------------------------------------------- #
 
@@ -1122,6 +1474,16 @@ def submit_reviewed_master(
     group_edits: dict[str, dict[str, Any]] = {}
     edited_by_label: dict[str, dict] = {}
     seen_labels: set[str] = set()
+    # Q51 §7 D9 follow-up (owner-approved): a data row whose label is blank or
+    # unknown is a question the reviewer WROTE here. It is accepted only when
+    # its Group band names an existing group of this release — the same rule
+    # the old refusal described — and refused readably when it names none.
+    group_lookup = _group_lookup(release)
+    concepts_by_key = _concept_by_key(release)
+    taken_candidate_ids = {
+        str(candidate.get("candidate_id") or "") for candidate in candidates
+    }
+    additions: list[dict] = []
     for sheet in assessment_workbook.SHEET_ORDER:
         data = parsed["sheets"][sheet]
         fields = list(data["fields"])
@@ -1133,11 +1495,38 @@ def submit_reviewed_master(
                 continue
             label = _text(row.get("question_label")).strip()
             if not label or label not in candidate_by_label or label not in expected_index:
-                refusals.append(
-                    f"{sheet} row {number}: question_label {label!r} matches "
-                    f"no question in Master release {release.release_uid} "
-                    f"v{release.version}"
+                group, reason = _resolve_added_group(row, group_lookup)
+                if group is None:
+                    refusals.append(
+                        f"{sheet} row {number}: question_label {label!r} "
+                        f"matches no question in Master release "
+                        f"{release.release_uid} v{release.version}, and "
+                        f"{reason}"
+                    )
+                    continue
+                concept_key = str(group.get("concept_key") or "")
+                if concept_key not in concepts_by_key:
+                    refusals.append(
+                        f"{sheet} row {number}: group "
+                        f"{str(group.get('group_key'))!r} has no concept in "
+                        "this release, so a new question cannot attach to it"
+                    )
+                    continue
+                candidate_id = _added_identity(
+                    digest, sheet, int(number), taken_candidate_ids,
                 )
+                additions.append({
+                    "candidate_id": candidate_id,
+                    "cell_id": f"{candidate_id}-CELL",
+                    "sheet": sheet,
+                    "row_number": int(number),
+                    "row": row,
+                    "fields": fields,
+                    "group": group,
+                    "group_key": str(group.get("group_key") or ""),
+                    "concept_key": concept_key,
+                    "supplied_label": label,
+                })
                 continue
             if label in seen_labels:
                 refusals.append(
@@ -1163,11 +1552,52 @@ def submit_reviewed_master(
         raise MasterReviewRefused(
             "the reviewed Master file was not applied: "
             + "; ".join(refusals)
-            + ". Reviewer-authored questions cannot be added in Step 03 — "
-            "add them in Step 02's Concept file (Types/Cases) and rebuild "
-            "the Master files; to keep an existing question, restore its "
-            "question_label exactly as downloaded"
+            + ". To ADD a question here, put it on a row whose Group band "
+            "carries an existing group_name of this Master (its label is "
+            "minted for you); to KEEP an existing question, restore its "
+            "question_label exactly as downloaded; to add it with the "
+            "chapter's own source evidence behind it, add it in Step 02's "
+            "Concept file (Types/Cases) and rebuild the Master files"
         )
+
+    added_candidates: list[dict] = []
+    added_cells: list[dict] = []
+    added_records: list[dict] = []
+    group_by_key = {
+        str(group.get("group_key") or ""): group
+        for group in _snapshot_groups(release)
+    }
+    if additions:
+        _reserve_added_labels(
+            db, release, additions, concepts_by_key, digest=digest,
+        )
+        for addition in additions:
+            added_candidates.append(_apply_added_row(
+                context, addition, flags=flags,
+            ))
+            added_cells.append(_added_blueprint_cell(
+                added_candidates[-1], cell_id=addition["cell_id"],
+            ))
+            added_records.append({
+                "question_label": addition["question_label"],
+                "candidate_id": addition["candidate_id"],
+                "blueprint_cell_id": addition["cell_id"],
+                "sheet_kind": str(added_candidates[-1].get("sheet_kind") or ""),
+                "sheet": addition["sheet"],
+                "row": addition["row_number"],
+                "group_key": addition["group_key"],
+                "concept_key": addition["concept_key"],
+                "supplied_label": addition["supplied_label"],
+                "label_reservation_key": addition["reservation_key"],
+                "authored_by": ADDED_AUTHOR,
+                "authoring_policy_version": ADDED_PROVENANCE_VERSION,
+                "source_atom_ids": [],
+                "source_policy": rel.GENERATED_SOURCE_POLICY,
+                "question_source": str(
+                    added_candidates[-1].get("question_source") or ""
+                ),
+                "cells": addition["cell_values"],
+            })
 
     omitted = [
         {
@@ -1182,7 +1612,7 @@ def submit_reviewed_master(
     ]
     group_changes = list(group_edits.values())
 
-    if not edits and not omitted and not group_changes:
+    if not edits and not omitted and not group_changes and not added_candidates:
         # Nothing to version: the reviewer confirmed the current Master.
         return _unchanged_round(
             db, job, release, state, previous_lane_state,
@@ -1196,13 +1626,48 @@ def submit_reviewed_master(
     payload = copy.deepcopy(dict(release.payload or {}))
     omitted_ids = {item["candidate_id"] for item in omitted}
     omitted_labels = {item["question_label"] for item in omitted}
+    added_by_group: dict[str, list[dict]] = {}
+    for candidate in added_candidates:
+        added_by_group.setdefault(
+            str(candidate.get("group_key") or ""), [],
+        ).append(candidate)
     new_candidates: list[dict] = []
     for candidate in candidates:
         label = str(candidate.get("question_label") or "")
         if label in omitted_labels:
             continue
         new_candidates.append(edited_by_label.get(label, candidate))
+    if added_by_group:
+        # Mechanical placement only: an addition sits after the last
+        # surviving question of the group it named, so the rendered workbook
+        # keeps its group's rows together. Nothing about teaching order is
+        # decided here.
+        ordered: list[dict] = []
+        placed: set[str] = set()
+        for position, candidate in enumerate(new_candidates):
+            ordered.append(candidate)
+            group_key = str(candidate.get("group_key") or "")
+            if group_key in placed:
+                continue
+            following = new_candidates[position + 1:]
+            if any(
+                str(later.get("group_key") or "") == group_key
+                for later in following
+            ):
+                continue
+            ordered.extend(added_by_group.get(group_key, []))
+            placed.add(group_key)
+        for group_key, candidates_for_group in added_by_group.items():
+            if group_key not in placed:
+                # An addition under a group whose every question was omitted,
+                # or under an empty required shell.
+                ordered.extend(candidates_for_group)
+        new_candidates = ordered
     payload["candidates"] = new_candidates
+    if added_cells:
+        payload["blueprint_cells"] = list(
+            payload.get("blueprint_cells") or []
+        ) + added_cells
     # The frozen blueprint cell records the API's category/skill/difficulty/
     # marks decision for its candidate, and the format contract requires the
     # two to agree. A reviewer's edit to one of those fields is the human
@@ -1248,6 +1713,9 @@ def submit_reviewed_master(
                 isinstance(placement, Mapping)
                 and str(placement.get("candidate_id") or "") in omitted_ids
             )
+        ] + [
+            _added_placement(record, group_by_key)
+            for record in added_records
         ]
     review_record = {
         "policy_version": POLICY_VERSION,
@@ -1262,7 +1730,10 @@ def submit_reviewed_master(
         "blueprint_cell_edits": blueprint_cell_edits,
         "omitted": omitted,
         "removed_groups": removed_groups,
-        "added": [],
+        "added": added_records,
+        "added_blueprint_cells": [
+            dict(cell) for cell in added_cells
+        ],
         "flags": flags,
     }
     history = list(payload.get("master_review_history") or [])
@@ -1280,7 +1751,9 @@ def submit_reviewed_master(
         "edit_count": len(edits),
         "group_edit_count": len(group_changes),
         "omitted_count": len(omitted),
-        "added_count": 0,
+        "added_count": len(added_records),
+        "added_labels": [record["question_label"] for record in added_records],
+        "added_authored_by": ADDED_AUTHOR if added_records else "",
         "supersedes": _release_identity(release),
     }
     previous_state = str(release.state)
@@ -1330,7 +1803,7 @@ def submit_reviewed_master(
         "group_edits": group_changes,
         "omitted": omitted,
         "removed_groups": removed_groups,
-        "added": [],
+        "added": added_records,
         "flags": flags,
         "readiness": readiness,
         "issues": issues,
@@ -1355,7 +1828,9 @@ def submit_reviewed_master(
     job.detail = (
         f"Reviewed {resolved} Master file {safe_name!r} accepted as "
         f"v{new_release.version} ({len(edits)} cell edit(s), "
-        f"{len(omitted)} omitted question(s)); readiness {readiness!r}."
+        f"{len(omitted)} omitted question(s), "
+        f"{len(added_records)} question(s) added by the reviewer); "
+        f"readiness {readiness!r}."
     )
     marker = concept_release.update_concept_review_state(
         db, job,
@@ -1371,7 +1846,7 @@ def submit_reviewed_master(
         "round_recorded": True,
         "changed_fields": edits,
         "omitted_questions": omitted,
-        "added_questions": [],
+        "added_questions": added_records,
         "readiness": readiness,
         "issues": issues,
         "master_review": lane_state,
@@ -1385,8 +1860,9 @@ def submit_reviewed_master(
 
 def _stage_master_questions_workbook(
     db: Session, target: Path, question_ids: list[int],
+    *, refresh_labels: list[str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """Append the rows to a sibling copy of the shared workbook."""
+    """Append (and, for named labels, refresh) rows on a sibling copy."""
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, staged_name = tempfile.mkstemp(
@@ -1403,7 +1879,9 @@ def _stage_master_questions_workbook(
             # ``append_questions`` creates a canonical workbook when the
             # path does not exist.
             staged.unlink()
-        written = writer.append_questions(db, staged, question_ids)
+        written = writer.append_questions(
+            db, staged, question_ids, refresh_labels=refresh_labels,
+        )
         return staged, written
     except Exception:
         staged.unlink(missing_ok=True)
@@ -1412,6 +1890,7 @@ def _stage_master_questions_workbook(
 
 def _append_master_questions_to_cms_workbook(
     db: Session, target: Path, question_ids: list[int],
+    *, refresh_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     """Mirror ``build_concepts._commit_and_publish_concept_workbook``.
 
@@ -1420,13 +1899,21 @@ def _append_master_questions_to_cms_workbook(
     failure after the intent leaves the staged sibling queued for the next
     workbook operation (``recover_pending_publication``) instead of a
     silently divergent export. Repeating the publish act converges: the
-    database write is idempotent and ``append_questions`` skips placements
-    the workbook already carries.
+    database write is idempotent, ``append_questions`` skips placements the
+    workbook already carries, and a refresh re-projects the SAME row from
+    the same committed question, so the second pass finds nothing to
+    change (``refreshed_unchanged``).
+
+    ``refresh_labels`` are the labels this publication UPDATED in the
+    database (Q51 D14, owner-approved): exactly those rows the shared
+    workbook already carries are rewritten in place, so the export stops
+    carrying superseded wording. Nothing else in the file is touched.
     """
     target = Path(target)
     receipt: dict[str, Any] = {
         "path": target.name,
         "question_ids": list(question_ids),
+        "refresh_labels": list(refresh_labels or []),
     }
     with workbook_sync.output_workbook_lock():
         if workbook_sync.recover_pending_publication(target):
@@ -1435,7 +1922,7 @@ def _append_master_questions_to_cms_workbook(
         intent_recorded = False
         try:
             staged, written = _stage_master_questions_workbook(
-                db, target, question_ids,
+                db, target, question_ids, refresh_labels=refresh_labels,
             )
             workbook_sync.record_publication_intent(staged, target)
             intent_recorded = True
@@ -1580,27 +2067,57 @@ def publish_reviewed_master(
         ) from exc
     db.refresh(release)
     question_ids = _published_question_ids(db, release)
+    # Q51 D14 (owner-approved): the labels this write UPDATED are exactly the
+    # ones whose shared-workbook row would otherwise keep the superseded
+    # wording. They — and only they — are named to the append-only CMS
+    # writer as refreshable, so a re-published question's existing row is
+    # re-projected in place instead of being passed over.
+    updated_labels = [str(label) for label in (database.get("labels_updated") or [])]
     cms_workbook = _append_master_questions_to_cms_workbook(
         db, config.BULK_IMPORT_OUTPUT, question_ids,
+        refresh_labels=updated_labels,
     )
-    updated_labels = [str(label) for label in (database.get("labels_updated") or [])]
+    rows_appended = sum(
+        int(cms_workbook.get(kind) or 0)
+        for kind in ("objective", "subjective", "descriptive")
+    )
+    cms_workbook = {
+        **cms_workbook,
+        "rows_appended": rows_appended,
+        "rows_refreshed": int(cms_workbook.get("refreshed") or 0),
+        "rows_skipped": int(cms_workbook.get("skipped") or 0),
+    }
     if updated_labels:
-        # Honest about the CMS half of a SECOND round: the shared workbook is
-        # written by the append-only writer, which skips a (label, placement)
-        # it already carries. The database rows above now carry the reviewer's
-        # edit; the workbook rows those labels already had were not rewritten
-        # by this act, so the receipt says so instead of implying the export
-        # was re-rendered.
-        cms_workbook = {
-            **cms_workbook,
-            "labels_updated_in_database": list(updated_labels),
-            "existing_rows_not_appended": (
-                "the shared workbook already carried these question "
-                "placements, so the append-only CMS writer added no row for "
-                "them and refreshed only the category, cognitive-skill and "
-                "source cells it keeps current on a row it already has"
-            ),
-        }
+        # What actually happened to the CMS half of a SECOND round, not a
+        # statement of a limitation that no longer holds: these labels were
+        # updated in the database and their existing workbook rows were
+        # rewritten from those committed questions, at the same row, in the
+        # same place, leaving every other row alone.
+        cms_workbook["labels_updated_in_database"] = list(updated_labels)
+        cms_workbook["existing_rows_refreshed"] = list(
+            cms_workbook.get("refreshed_labels") or []
+        )
+        unchanged = int(cms_workbook.get("refreshed_unchanged") or 0)
+        touched = set(cms_workbook.get("refreshed_labels") or []) | set(
+            cms_workbook.get("refreshed_unchanged_labels") or []
+        )
+        not_carried = [label for label in updated_labels if label not in touched]
+        cms_workbook["refresh_note"] = (
+            f"{rows_appended} row(s) appended; "
+            f"{int(cms_workbook.get('refreshed') or 0)} existing row(s) "
+            "rewritten in place from the published database question; "
+            f"{unchanged} named row(s) already carried this content "
+            "(a repeat of this act converges here); "
+            f"{int(cms_workbook.get('skipped') or 0)} row(s) skipped "
+            "because the workbook already carries that placement unchanged "
+            "and this publication did not update it"
+            + (
+                "; the shared workbook carried no row yet for "
+                f"{', '.join(not_carried)}, so the current content was "
+                "written as a new row"
+                if not_carried else ""
+            )
+        )
     publication_status = (
         "published" if cms_workbook.get("status") == "published" else "queued"
     )

@@ -383,7 +383,14 @@ def test_a_removed_row_is_recorded_as_omitted_and_leaves_the_new_snapshot(db):
 # (d) additions are refused with the Step 02 path named
 # --------------------------------------------------------------------------- #
 
-def test_an_unknown_label_is_refused_and_points_to_step_two(db):
+def test_an_unknown_label_naming_no_group_is_refused_and_names_both_paths(db):
+    """A row that names no resolvable group is still refused (Q51 D9).
+
+    Accepting reviewer-authored rows did not make ANY stray row a question:
+    the Group band is what gives a new question its concept, its chapter home
+    and its published identity, so a row without one has nowhere to go. The
+    refusal says how to add it here and how to add it in Step 02 instead.
+    """
     job, published = _master_ready_job(db)
     workbook = _workbook(_master_bytes(published))
     sheet = workbook["Objective"]
@@ -392,12 +399,16 @@ def test_an_unknown_label_is_refused_and_points_to_step_two(db):
     copied = [sheet.cell(row=row, column=c).value for c in range(1, sheet.max_column + 1)]
     copied[columns["question_label"] - 1] = "REVIEWER Q99"
     copied[columns["question"] - 1] = "A reviewer-authored question?"
+    copied[columns["group_name"] - 1] = "NO SUCH GROUP"
+    copied[columns["group_display_name"] - 1] = None
     sheet.append(copied)
 
     with pytest.raises(master_review.MasterReviewRefused) as refused:
         _submit(db, job, _bytes(workbook))
     message = str(refused.value)
     assert "'REVIEWER Q99'" in message
+    assert "'NO SUCH GROUP' is not a group of this release" in message
+    assert "existing group_name" in message
     assert "Step 02" in message
     # Nothing was versioned.
     assert release_core.latest_release_for_lane(db, job.id, "post").id == published.id
@@ -406,15 +417,48 @@ def test_an_unknown_label_is_refused_and_points_to_step_two(db):
     ).count() == 1
 
 
-def test_a_blank_label_row_is_refused_the_same_way(db):
+def test_a_row_with_no_group_name_at_all_is_refused_readably(db):
     job, published = _master_ready_job(db)
     workbook = _workbook(_master_bytes(published))
     sheet = workbook["Objective"]
     columns = _columns(sheet)
     row = _question_rows(sheet)[0]
-    sheet.cell(row=row, column=columns["question_label"]).value = None
-    with pytest.raises(master_review.MasterReviewRefused, match="matches no question"):
+    copied = [sheet.cell(row=row, column=c).value for c in range(1, sheet.max_column + 1)]
+    copied[columns["question_label"] - 1] = None
+    copied[columns["group_name"] - 1] = None
+    copied[columns["group_display_name"] - 1] = None
+    sheet.append(copied)
+
+    with pytest.raises(master_review.MasterReviewRefused) as refused:
         _submit(db, job, _bytes(workbook))
+    assert "names no group" in str(refused.value)
+    assert release_core.latest_release_for_lane(db, job.id, "post").id == published.id
+
+
+def test_a_blank_label_on_an_existing_row_becomes_a_reviewer_addition(db):
+    """Blanking a label is indistinguishable from writing a new row.
+
+    The reviewer's file is the authority (Q41/Q51): the row they left without
+    a label carries a group, so it is a question they authored, and the label
+    that is no longer in the file is an omission. Both are recorded; neither
+    is guessed at.
+    """
+    job, published = _master_ready_job(db)
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    dropped = _label(sheet, row)
+    sheet.cell(row=row, column=columns["question_label"]).value = None
+
+    result = _submit(db, job, _bytes(workbook))
+
+    assert result["version"] == 2
+    assert [item["question_label"] for item in result["omitted_questions"]] == [dropped]
+    added = result["added_questions"]
+    assert len(added) == 1
+    assert added[0]["question_label"] != dropped
+    assert added[0]["authored_by"] == master_review.ADDED_AUTHOR
 
 
 def test_a_moved_sheet_and_a_wrong_layout_are_refused(db):
@@ -683,16 +727,19 @@ def test_routes_apply_refuse_and_publish_end_to_end(client, db, tmp_path, monkey
     assert response.status_code == 422
     assert "downloaded Master layout" in response.json()["detail"]
 
-    # Unknown label is a readable 422 naming Step 02.
+    # An unknown label whose Group band resolves to nothing is a readable 422.
     workbook = _workbook(_master_bytes(published))
     sheet = workbook["Objective"]
     columns = _columns(sheet)
     row = _question_rows(sheet)[0]
     copied = [sheet.cell(row=row, column=c).value for c in range(1, sheet.max_column + 1)]
     copied[columns["question_label"] - 1] = "ROUTE Q77"
+    copied[columns["group_name"] - 1] = "ROUTE GROUP"
+    copied[columns["group_display_name"] - 1] = None
     sheet.append(copied)
     response = _post_file(client, f"{base}/submit?lane=post", _bytes(workbook))
     assert response.status_code == 422
+    assert "is not a group of this release" in response.json()["detail"]
     assert "Step 02" in response.json()["detail"]
 
     # A verbatim edit through the route.
@@ -1224,3 +1271,289 @@ def test_a_round_that_omits_a_question_names_the_row_it_leaves_published(
     assert receipt["labels_retained_from_earlier_versions"] == [omitted_label]
     assert db.query(models.Question).filter(
         models.Question.question_label == omitted_label).count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# (l) Q51 D14 — a re-published question's row in the shared CMS workbook
+#
+# The shared Bulk Import workbook was append-only without exception, so a
+# second reviewed round updated the database and left the export carrying the
+# reviewer's OLD wording until somebody re-exported by hand. The owner
+# approved changing that: the labels this publication UPDATED — and only
+# those — are named to the writer as refreshable, and their existing rows are
+# re-projected in place.
+# --------------------------------------------------------------------------- #
+
+def _workbook_rows(path: Path) -> dict[str, dict[int, dict[str, object]]]:
+    """Every data row of the shared workbook, by sheet, row number and field."""
+    workbook = openpyxl.load_workbook(path, read_only=True)
+    try:
+        found: dict[str, dict[int, dict[str, object]]] = {}
+        for sheet in workbook.sheetnames:
+            ws = workbook[sheet]
+            header = [
+                str(c or "") for c in next(
+                    ws.iter_rows(min_row=2, max_row=2, values_only=True), (),
+                )
+            ]
+            if "question_label" not in header:
+                continue
+            rows: dict[int, dict[str, object]] = {}
+            for number, row in enumerate(
+                ws.iter_rows(min_row=3, values_only=True), start=3,
+            ):
+                if not row or not any(cell is not None for cell in row):
+                    continue
+                rows[number] = {
+                    name: (row[index] if index < len(row) else None)
+                    for index, name in enumerate(header) if name
+                }
+            found[sheet] = rows
+        return found
+    finally:
+        workbook.close()
+
+
+def _row_of(rows: dict[str, dict[int, dict[str, object]]], label: str):
+    for sheet, by_number in rows.items():
+        for number, values in by_number.items():
+            if str(values.get("question_label") or "") == label:
+                return sheet, number, values
+    raise AssertionError(f"no workbook row carries {label!r}")
+
+
+def test_a_republished_edit_rewrites_its_row_in_the_shared_cms_workbook(
+    db, tmp_path, monkeypatch,
+):
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, published = _master_ready_job(db)
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    first = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+    assert first["cms_workbook"]["rows_appended"] == 2
+    assert first["cms_workbook"]["rows_refreshed"] == 0
+    before = _workbook_rows(target)
+
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    edited = _label(sheet, row)
+    untouched = next(
+        str(candidate["question_label"])
+        for candidate in published.concept_snapshot["candidates"]
+        if str(candidate["question_label"]) != edited
+    )
+    old_question = str(sheet.cell(row=row, column=columns["question"]).value)
+    old_text = str(sheet.cell(row=row, column=columns["question_text"]).value)
+    new_question = "Which of these objects is a solid?"
+    sheet.cell(row=row, column=columns["question"]).value = new_question
+    sheet.cell(row=row, column=columns["question_text"]).value = old_text.replace(
+        old_question, new_question, 1)
+    sheet.cell(row=row, column=columns["level_of_difficulty"]).value = "Moderate"
+    assert _submit(db, job, _bytes(workbook))["version"] == 2
+
+    second = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+
+    receipt = second["cms_workbook"]
+    assert second["database"]["labels_updated"] == [edited]
+    assert receipt["rows_appended"] == 0
+    assert receipt["rows_refreshed"] == 1
+    assert receipt["existing_rows_refreshed"] == [edited]
+    assert receipt["labels_updated_in_database"] == [edited]
+    assert receipt["refresh_labels"] == [edited]
+    # The limitation the receipt used to state is gone, because it is no
+    # longer true.
+    assert "existing_rows_not_appended" not in receipt
+    assert "rewritten in place" in receipt["refresh_note"]
+
+    after = _workbook_rows(target)
+    # Same file shape: same sheets, same row numbers, nothing added, moved or
+    # duplicated.
+    assert {sheet_name: sorted(rows) for sheet_name, rows in after.items()} == {
+        sheet_name: sorted(rows) for sheet_name, rows in before.items()
+    }
+    edited_sheet, edited_number, edited_values = _row_of(after, edited)
+    assert edited_values["question"] == new_question
+    assert edited_values["level_of_difficulty"] == "Moderate"
+    assert (edited_sheet, edited_number) == _row_of(before, edited)[:2]
+    # Every other band of that row, and every cell of every other row, is
+    # exactly as it was.
+    was = before[edited_sheet][edited_number]
+    for field in ("chapter_title", "topic_title", "concept_title", "group_name"):
+        if field in was:
+            assert edited_values[field] == was[field]
+    assert _row_of(after, untouched) == _row_of(before, untouched)
+
+    # Repeating the publish converges: the recorded receipt comes back and the
+    # exported file is byte-identical.
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    again = master_review.publish_reviewed_master(db, job, lane="post", owner_sub=OWNER)
+    assert again["cms_workbook"] == receipt
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == digest
+    assert _workbook_rows(target) == after
+
+
+def test_publishing_a_first_round_names_no_label_for_refresh(
+    db, tmp_path, monkeypatch,
+):
+    """Nothing was updated, so nothing may be rewritten — the append-only
+    default is what a first publication still gets."""
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, _published = _master_ready_job(db)
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+
+    receipt = master_review.publish_reviewed_master(
+        db, job, lane="post", owner_sub=OWNER)["cms_workbook"]
+
+    assert receipt["refresh_labels"] == []
+    assert receipt["refresh_labels_requested"] == []
+    assert receipt["rows_refreshed"] == 0
+    assert receipt["rows_appended"] == 2
+    assert "labels_updated_in_database" not in receipt
+
+
+# --------------------------------------------------------------------------- #
+# (m) Q51 §7 D9 follow-up — a question the Step 03 reviewer wrote themselves
+# --------------------------------------------------------------------------- #
+
+def _added_row(sheet, columns, row: int, *, question: str) -> list:
+    """A copy of an existing row, re-worded, with no label and no source."""
+    copied = [
+        sheet.cell(row=row, column=c).value
+        for c in range(1, sheet.max_column + 1)
+    ]
+    old_question = str(sheet.cell(row=row, column=columns["question"]).value)
+    old_text = str(sheet.cell(row=row, column=columns["question_text"]).value)
+    copied[columns["question_label"] - 1] = None
+    copied[columns["question"] - 1] = question
+    copied[columns["question_text"] - 1] = old_text.replace(
+        old_question, question, 1)
+    # The reviewer authored this: it has no publication behind it, so the
+    # source cell is left for Aegis to record honestly.
+    copied[columns["question_source"] - 1] = None
+    return copied
+
+
+def test_a_reviewer_added_row_is_minted_marked_authored_and_published(
+    db, tmp_path, monkeypatch,
+):
+    target = tmp_path / "bulk_import_output.xlsx"
+    monkeypatch.setattr(config, "BULK_IMPORT_OUTPUT", target)
+    job, published = _master_ready_job(db)
+    existing = {
+        str(candidate["question_label"])
+        for candidate in published.concept_snapshot["candidates"]
+    }
+    workbook = _workbook(_master_bytes(published))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    group = str(sheet.cell(row=row, column=columns["group_name"]).value)
+    sheet.append(_added_row(
+        sheet, columns, row, question="Which of these objects is a liquid?"))
+
+    result = _submit(db, job, _bytes(workbook))
+
+    # Accepted as a new immutable version of the same release, with the
+    # addition in the receipt the frontend renders.
+    assert result["version"] == 2
+    assert result["changed_fields"] == [] or all(
+        edit["question_label"] not in existing for edit in result["changed_fields"]
+    )
+    assert result["omitted_questions"] == []
+    added = result["added_questions"]
+    assert len(added) == 1
+    minted = added[0]["question_label"]
+    assert minted not in existing
+    assert added[0]["group_key"] == group
+    assert added[0]["authored_by"] == master_review.ADDED_AUTHOR
+    assert added[0]["source_atom_ids"] == []
+    assert added[0]["question_source"] == "UpSchool DB"
+    assert result["readiness"] == svc.READY
+
+    # The immutable release records who wrote it, with no borrowed provenance.
+    new_release = db.get(models.AssessmentRelease, result["release_id"])
+    candidate = _candidate(new_release, minted)
+    assert candidate["authored_by"] == master_review.ADDED_AUTHOR
+    assert candidate["source_atom_ids"] == []
+    assert candidate["source_policy"] == master_review.rel.GENERATED_SOURCE_POLICY
+    assert candidate["question_source"] == "UpSchool DB"
+    assert candidate["question"] == "Which of these objects is a liquid?"
+    assert candidate["restriction_reason"] == master_review.ADDED_RESTRICTION_REASON
+    cells = {
+        str(cell.get("cell_id")): cell
+        for cell in new_release.payload["blueprint_cells"]
+    }
+    assert candidate["blueprint_cell_id"] in cells
+    assert cells[candidate["blueprint_cell_id"]]["authored_by"] == (
+        master_review.ADDED_AUTHOR)
+    record = new_release.payload["master_review"]
+    assert [item["question_label"] for item in record["added"]] == [minted]
+    assert record["added"][0]["authoring_policy_version"] == (
+        master_review.ADDED_PROVENANCE_VERSION)
+    assert new_release.provider_identity["master_review"]["added_count"] == 1
+    assert new_release.provider_identity["master_review"]["added_labels"] == [minted]
+
+    # …and it reaches the database and the shared CMS workbook.
+    publication.upload_release_to_database(db, job.id, owner_sub=OWNER, lane="post")
+    result = master_review.publish_reviewed_master(
+        db, job, lane="post", owner_sub=OWNER)
+    assert result["publication_status"] == "published"
+    assert minted in result["database"]["labels_created"]
+    stored = db.query(models.Question).filter(
+        models.Question.question_label == minted).one()
+    assert stored.question == "Which of these objects is a liquid?"
+    assert stored.question_source == "UpSchool DB"
+    # No source question was reused, and none is claimed.
+    assert stored.source_qid == ""
+    assert stored.route_audit["question_source_provenance"]["source_policy"] == (
+        master_review.rel.GENERATED_SOURCE_POLICY)
+    assert stored.route_audit["release_uid"] == published.release_uid
+    assert minted in {
+        label for rows in _workbook_labels(target).values() for label in rows
+    }
+    db.refresh(job)
+    lane_state = release.concept_review_state(job)["master_review"]["post"]
+    assert [item["question_label"] for item in lane_state["added"]] == [minted]
+
+
+def test_a_minted_label_never_reuses_a_retired_one(db):
+    """Q36: the durable sequence, not a gap-filling scan of what survives."""
+    def number(label: str) -> int:
+        return int(str(label).rpartition(" Q")[2])
+
+    job, published = _master_ready_job(db)
+    labels = sorted(
+        (str(candidate["question_label"])
+         for candidate in published.concept_snapshot["candidates"]),
+        key=number,
+    )
+    highest = number(labels[-1])
+
+    # Round 1 retires the Descriptive question entirely.
+    workbook = _workbook(_master_bytes(published))
+    descriptive = workbook["Descriptive"]
+    retired = _label(descriptive, _question_rows(descriptive)[0])
+    descriptive.delete_rows(_question_rows(descriptive)[0])
+    first = _submit(db, job, _bytes(workbook))
+    assert [item["question_label"] for item in first["omitted_questions"]] == [retired]
+
+    # Round 2 adds a question under a surviving group.
+    live = release_core.latest_release_for_lane(db, job.id, "post")
+    workbook = _workbook(_master_bytes(live))
+    sheet = workbook["Objective"]
+    columns = _columns(sheet)
+    row = _question_rows(sheet)[0]
+    sheet.append(_added_row(
+        sheet, columns, row, question="Which of these objects is a gas?"))
+
+    second = _submit(db, job, _bytes(workbook))
+
+    minted = second["added_questions"][0]["question_label"]
+    assert minted != retired
+    assert minted not in labels
+    # The retired number is a gap the durable counter never fills.
+    assert number(minted) == highest + 1
+    assert number(minted) > number(retired)
