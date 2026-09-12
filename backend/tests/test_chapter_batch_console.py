@@ -741,3 +741,69 @@ def test_the_worker_stays_off_when_the_deployment_disables_it(monkeypatch):
     chapter_queue_worker.shutdown_chapter_queue()
     assert chapter_queue_worker.initialize_chapter_queue(SessionLocal) is None
     assert chapter_queue_worker.worker_alive() is False
+
+
+def test_a_queued_run_is_mirrored_like_every_other_run(session, monkeypatch):
+    """The Drive checkpoint backup every interactive route queues."""
+    _only_this_task(session)
+    chapter = _chapter(session, code="10CBMA_T40")
+    job = _job(session, status="converted")
+    row = _row(session, chapter, job)
+    session.add(models.ChapterBatchTask(
+        batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+    ))
+    session.commit()
+
+    mirrored: list[int] = []
+    from app.services import drive_checkpoints
+
+    monkeypatch.setattr(
+        drive_checkpoints, "schedule_checkpoint_backup",
+        lambda job_id: mirrored.append(int(job_id)),
+    )
+
+    worker = chapter_queue_worker.ChapterQueueWorker(
+        SessionLocal, runner=lambda db, task: {"state": "done"},
+    )
+    worker._dispatch_once()
+    import time as _time
+
+    for _ in range(200):
+        if not worker._in_flight_ids():
+            break
+        _time.sleep(0.01)
+    assert mirrored == [job.id]
+
+
+def test_a_failed_run_is_mirrored_too(session, monkeypatch):
+    """A failed run's checkpoint is the one a resume needs most."""
+    _only_this_task(session)
+    chapter = _chapter(session, code="10CBMA_T41")
+    job = _job(session, status="converted")
+    row = _row(session, chapter, job)
+    session.add(models.ChapterBatchTask(
+        batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        max_attempts=1,
+    ))
+    session.commit()
+
+    mirrored: list[int] = []
+    from app.services import drive_checkpoints
+
+    monkeypatch.setattr(
+        drive_checkpoints, "schedule_checkpoint_backup",
+        lambda job_id: mirrored.append(int(job_id)),
+    )
+
+    def boom(db, task):
+        raise RuntimeError("the provider refused")
+
+    worker = chapter_queue_worker.ChapterQueueWorker(SessionLocal, runner=boom)
+    worker._dispatch_once()
+    import time as _time
+
+    for _ in range(200):
+        if not worker._in_flight_ids():
+            break
+        _time.sleep(0.01)
+    assert mirrored == [job.id]

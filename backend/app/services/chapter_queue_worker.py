@@ -249,6 +249,7 @@ class ChapterQueueWorker:
 
     def _run_one(self, task_id: int) -> None:
         db = self._session_factory()
+        task = None
         try:
             task = db.get(models.ChapterBatchTask, int(task_id))
             if task is None:
@@ -263,6 +264,7 @@ class ChapterQueueWorker:
                 return
             outcome = self._runner(db, task)
             self._settle(db, task_id, outcome)
+            _schedule_checkpoint_backup(db, task)
         except Exception as exc:  # noqa: BLE001 — recorded, never lost
             log.warning("chapter queue: task %s failed", task_id, exc_info=True)
             try:
@@ -271,6 +273,7 @@ class ChapterQueueWorker:
                 # otherwise the row stays leased and looks busy forever.
                 db.rollback()
                 self._settle(db, task_id, classify_exception(exc))
+                _schedule_checkpoint_backup(db, task)
             except Exception:  # noqa: BLE001
                 log.error(
                     "chapter queue: task %s could not be settled", task_id,
@@ -334,6 +337,28 @@ class ChapterQueueWorker:
 # ---------------------------------------------------------------------------
 # Step bodies
 # ---------------------------------------------------------------------------
+
+def _schedule_checkpoint_backup(db, task) -> None:
+    """Mirror the finished run's checkpoint, exactly as the HTTP routes do.
+
+    Every interactive generation act queues this in its ``finally`` — the
+    Google Drive mirror is how a run survives losing the volume. A chapter run
+    from the console must not be the one kind of run that is never backed up.
+    Success and failure both qualify: a failed run's checkpoint is what a
+    resume needs most.
+    """
+    from . import drive_checkpoints
+
+    if task is None:
+        return
+    try:
+        row = db.get(models.ChapterBatchRow, int(task.batch_row_id))
+        if row is not None and row.job_id:
+            drive_checkpoints.schedule_checkpoint_backup(int(row.job_id))
+    except Exception:  # noqa: BLE001 — a mirror is an assist, never a gate
+        log.debug("chapter queue: could not queue a checkpoint backup",
+                  exc_info=True)
+
 
 def classify_exception(exc: BaseException) -> dict[str, Any]:
     """Turn a raised step into an outcome a person can act on.
