@@ -412,9 +412,95 @@ def _chapter_key(row: SyllabusRow) -> tuple[str, str, str, str, str]:
     return (row.board, row.grade, row.subject, row.unit, row.chapter.lower())
 
 
-def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
+def chapter_code_holders(
+    db: Session, rows: list[SyllabusRow],
+) -> dict[str, tuple[str, str]]:
+    """Who already holds each base chapter code.
+
+    The DATABASE decides: a code belongs to whichever chapter stores it,
+    whatever a workbook now says or in what order its rows are read. That is
+    the property which makes the de-collision safe to deploy — no chapter in a
+    live catalogue can be re-keyed, because the catalogue itself is the
+    authority, not a table generated from one day's workbooks.
+
+    Workbook order settles the rest, which only matters on a catalogue that
+    does not have the chapter yet. That is deterministic for a fixed set of
+    workbooks (the files are read in sorted order, sheets and rows in theirs),
+    and once a chapter is created the first rule pins it forever.
+    """
+    wanted: dict[str, list[tuple[str, str]]] = {}
+    for row in rows:
+        base = directory.make_chapter_code(
+            row.board, row.grade, row.subject, row.chapter,
+        )
+        identity = directory.chapter_code_identity(row.unit, row.chapter)
+        candidates = wanted.setdefault(base, [])
+        if identity not in candidates:
+            candidates.append(identity)
+
+    # A code is held by whichever chapter STORES it, whatever that chapter's
+    # own base code would be today. Recomputing the base instead would miss a
+    # chapter whose subject was folded or whose row came from a bulk import:
+    # its code would look unowned, a row would resolve to it, and
+    # ``upsert_chapters`` would skip that row as an existing code — silently
+    # losing the chapter, which is the whole defect being repaired.
+    occupied: dict[str, tuple[str, str]] = {}
+    family: dict[str, list[tuple[str, tuple[str, str]]]] = {}
+    for chapter in db.query(models.Chapter).all():
+        identity = directory.chapter_code_identity(
+            chapter.unit, chapter.chapter_title)
+        occupied.setdefault(chapter.chapter_code or "", identity)
+        family.setdefault(directory.make_chapter_code(
+            chapter.board, chapter.grade, chapter.subject, chapter.chapter_title,
+        ), []).append((chapter.chapter_code or "", identity))
+
+    holders: dict[str, tuple[str, str]] = {}
+    for base, candidates in wanted.items():
+        identity = occupied.get(base)
+        if identity is None:
+            # Nobody holds it: workbook order settles it, which only matters
+            # while the catalogue does not have the chapter. Once it does, the
+            # rule above pins the code forever.
+            holders[base] = candidates[0]
+            continue
+        if identity not in candidates:
+            # No row claims the holder's (unit, title): its unit was renamed or
+            # corrected in the re-issued workbook. It is the same chapter — the
+            # title is what the catalogue and the row agree on — so it keeps the
+            # bare code and the rename reaches it through the realign pass.
+            # Without this a pending unit correction reads as a rival identity,
+            # the bare code goes unclaimed, and the reconcile pass re-keys a
+            # chapter that already exists. Only an unambiguous match counts, and
+            # only an identity no sibling already stores.
+            elsewhere = {
+                other for code, other in family.get(base, ()) if code != base
+            }
+            same_title = [
+                candidate for candidate in candidates
+                if candidate[1] == identity[1] and candidate not in elsewhere
+            ]
+            if len(same_title) == 1:
+                identity = same_title[0]
+        holders[base] = identity
+
+    # Codes held by chapters this row set does not mention are recorded too, so
+    # a caller resolving a row outside ``rows`` still sees them taken.
+    for code, identity in occupied.items():
+        holders.setdefault(code, identity)
+    return holders
+
+
+def upsert_chapters(
+    db: Session, rows: list[SyllabusRow],
+    holders: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, int]:
     """Insert chapter shells; skip duplicates already in the DB."""
     rows = [_correct_supplied_row(row) for row in rows]
+    # ``refresh_syllabus`` resolves codes for its prune map from the same
+    # holders; sharing them is what stops the refresh deleting a chapter this
+    # function just created under a de-collided code.
+    if holders is None:
+        holders = chapter_code_holders(db, rows)
     created = 0
     skipped = 0
     seen: set[tuple[str, str, str, str, str]] = set()
@@ -433,8 +519,9 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
         corrected = _correct_supplied_row(previous)
         if corrected == previous or _chapter_key(corrected) not in supplied:
             continue
-        new_code = directory.make_chapter_code(
-            corrected.board, corrected.grade, corrected.subject, corrected.chapter,
+        new_code = directory.resolve_chapter_code(
+            corrected.board, corrected.grade, corrected.subject,
+            corrected.unit, corrected.chapter, holders,
         )
         if new_code != chapter.chapter_code and new_code in existing_codes:
             continue  # Existing content is retained by the normal refresh path.
@@ -453,8 +540,8 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
             continue
         seen.add(dedupe)
 
-        code = directory.make_chapter_code(
-            row.board, row.grade, row.subject, row.chapter,
+        code = directory.resolve_chapter_code(
+            row.board, row.grade, row.subject, row.unit, row.chapter, holders,
         )
         if code in existing_codes:
             skipped += 1
@@ -620,7 +707,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
             "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
             "missing_files": missing, "migrated": 0, "realigned_units": 0,
             "pruned": 0,
-            "retained_with_content": [],
+            "retained_with_content": [], "contested_codes": [],
         }
 
     all_rows: list[SyllabusRow] = []
@@ -631,14 +718,33 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
         loaded.append(path.name)
 
-    # Codes must be computed exactly as upsert_chapters does, or a
-    # code-shape difference makes every stored chapter look superseded.
+    # The owner's explicit corrections are applied BEFORE codes are resolved:
+    # a code's holder is identified by (unit, title) and upsert applies the
+    # same correction, so resolving against an uncorrected unit would hand a
+    # corrected row a suffix it must not have.
+    all_rows = [_correct_supplied_row(row) for row in all_rows]
+
+    # Codes must be computed exactly as upsert_chapters does, or a code-shape
+    # difference makes every stored chapter look superseded. The holders are
+    # built ONCE here and handed to upsert for that reason: the prune below
+    # deletes any chapter whose code is not in ``desired``, so if the two
+    # disagreed on a single code the refresh would delete the chapter the
+    # upsert had just created.
+    holders = chapter_code_holders(db, all_rows)
     desired: dict[str, SyllabusRow] = {}
+    contested: list[str] = []
     by_identity: dict[tuple[str, str, str], SyllabusRow] = {}
     for row in all_rows:
-        code = directory.make_chapter_code(
-            row.board, row.grade, row.subject, row.chapter,
+        code = directory.resolve_chapter_code(
+            row.board, row.grade, row.subject, row.unit, row.chapter, holders,
         )
+        if code in desired and _chapter_key(desired[code]) != _chapter_key(row):
+            # Two identities, one code, and no recorded owner for it: a
+            # re-issued workbook has created a NEW contested code. Report it
+            # rather than let one row overwrite the other (which is how 109
+            # chapters went missing). Mechanics: nothing is judged, the clash
+            # is named and both rows keep whatever they already have.
+            contested.append(code)
         desired[code] = row
         by_identity.setdefault(
             (row.board, row.grade, row.chapter.strip().lower()), row,
@@ -666,8 +772,9 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
             ))
             if moved is None:
                 continue
-            new_code = directory.make_chapter_code(
-                moved.board, moved.grade, moved.subject, moved.chapter,
+            new_code = directory.resolve_chapter_code(
+                moved.board, moved.grade, moved.subject, moved.unit,
+                moved.chapter, holders,
             )
             if new_code in taken:
                 # Another row already holds the new identity; leave this one
@@ -695,18 +802,19 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
     # workbook that WAS loaded, onto a chapter that workbook lists, so a
     # missing file simply leaves those chapters alone.
     if all_rows:
-        # 41 chapter codes in the supplied workbooks are AMBIGUOUS: the same
-        # code appears under different units (Long Jump under both Practical
-        # and Theory; Grassroots Democracy under three). The code truncates the
-        # title, so those rows collapse onto one chapter and there is no single
-        # right unit for it. Realigning them would move 41 chapters to whichever
-        # row happened to be read last — arbitrary, and nobody asked for it.
-        # They keep the unit they were imported under; only unambiguous renames
-        # are corrected.
+        # A code that several units claim is left alone. ``resolve_chapter_code``
+        # gives each identity its own code, so the supplied workbooks no longer
+        # produce one (this used to be 41 codes: Long Jump under both Practical
+        # and Theory, Grassroots Democracy under three). It stays because a
+        # re-issued workbook can make a new one, and there is no single right
+        # unit for a chapter two rows claim — realigning would move it to
+        # whichever row happened to be read last. Those chapters keep the unit
+        # they were imported under; only unambiguous renames are corrected.
         units_by_code: dict[str, set[str]] = {}
         for row in all_rows:
-            code = directory.make_chapter_code(
-                row.board, row.grade, row.subject, row.chapter,
+            code = directory.resolve_chapter_code(
+                row.board, row.grade, row.subject, row.unit, row.chapter,
+                holders,
             )
             units_by_code.setdefault(code, set()).add((row.unit or "").strip())
         for chapter in db.query(models.Chapter).all():
@@ -723,7 +831,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
             db.commit()
 
 
-    counts = upsert_chapters(db, all_rows) if all_rows else {
+    counts = upsert_chapters(db, all_rows, holders) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
     }
 
@@ -749,6 +857,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         "realigned_units": realigned,
         "pruned": pruned,
         "retained_with_content": retained,
+        "contested_codes": sorted(set(contested)),
     }
 
 

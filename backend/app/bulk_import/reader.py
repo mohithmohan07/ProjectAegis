@@ -1164,16 +1164,49 @@ def import_workbook(
             ch_key = (chapter_code, chap_title_key)
             chapter = chapters.get(ch_key)
             if chapter is None:
-                same_code = db.query(models.Chapter).filter_by(
-                    chapter_code=chapter_code).all()
-                chapter = next(
-                    (
-                        row_chapter for row_chapter in same_code
-                        if normalize_question_text(strip_title_tag(
-                            row_chapter.chapter_title)) == chap_title_key
-                    ),
-                    None,
-                )
+                # A recovered chapter carries ``base + discriminator`` (see
+                # ``directory.resolve_chapter_code``) and the tagged cells
+                # only ever spell the BASE code, so match the whole code
+                # family by prefix. Without this, re-importing a concept
+                # mapping for "Life Processes in Plants" would not find its
+                # catalogue row and would mint a second chapter on the
+                # anchor's code.
+                same_code = [
+                    row_chapter
+                    for row_chapter in db.query(models.Chapter).filter(
+                        models.Chapter.chapter_code.startswith(
+                            chapter_code, autoescape=True)
+                    ).all()
+                    # A longer code that merely STARTS with this one belongs to
+                    # a different chapter ("...Life" vs "...LifeProcesse"); the
+                    # family is the rows whose own base code is this code.
+                    if row_chapter.chapter_code == chapter_code
+                    or directory.make_chapter_code(
+                        row_chapter.board, row_chapter.grade,
+                        row_chapter.subject, row_chapter.chapter_title,
+                    ) == chapter_code
+                ]
+                matches = [
+                    row_chapter for row_chapter in same_code
+                    if normalize_question_text(strip_title_tag(
+                        row_chapter.chapter_title)) == chap_title_key
+                ]
+                chapter = matches[0] if matches else None
+                if len(matches) > 1:
+                    # The tag carries board, grade, subject and title but no
+                    # unit, so it cannot say which of two same-titled chapters
+                    # this sheet belongs to. Bind to the first and say so
+                    # rather than choose silently.
+                    _flag(
+                        f"{(chap_title or chap['chapter_title'])!r} names "
+                        f"{len(matches)} chapters in the catalogue "
+                        + ", ".join(
+                            f"{row_chapter.unit!r} ({row_chapter.chapter_code})"
+                            for row_chapter in matches[:4]
+                        )
+                        + f"; the rows import under {matches[0].chapter_code} "
+                        "(chapter_title_ambiguous)"
+                    )
                 if chapter is None and same_code:
                     _flag(
                         f"chapter code {chapter_code!r} is already used by "
