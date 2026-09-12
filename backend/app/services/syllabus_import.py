@@ -73,6 +73,20 @@ _COL_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+# Owner correction, 12 September 2026: the supplied CBSE Grade 10 workbook
+# writes this one unit two ways — "RESOURCES: MANAGEMENT" on two rows and
+# "RESOURCES : MANAGEMENT" on a third — so the catalogue imported it as two
+# units and split "Minerals and Energy Resources" away from its siblings. The
+# owner named the spelling to keep. Recorded as an explicit correction for this
+# one unit rather than a rule that strips spaces before colons everywhere: a
+# general reformat would silently merge units elsewhere that are genuinely
+# distinct, and nobody asked for that.
+_CBSE_GRADE10_SOCIAL_SCIENCE_UNIT_CORRECTIONS = {
+    "Natural and Human Resources : Management and Sustainability":
+        "Natural and Human Resources: Management and Sustainability",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class SyllabusRow:
     board: str
@@ -89,6 +103,12 @@ def _correct_supplied_row(row: SyllabusRow) -> SyllabusRow:
         ))
         if corrected:
             return SyllabusRow(row.board, row.grade, row.subject, *corrected)
+    if (row.board, row.grade, row.subject) == ("CBSE", "10", "Social Science"):
+        unit = _CBSE_GRADE10_SOCIAL_SCIENCE_UNIT_CORRECTIONS.get(
+            normalize_unit(row.unit))
+        if unit:
+            return SyllabusRow(
+                row.board, row.grade, row.subject, unit, row.chapter)
     return row
 
 
@@ -598,7 +618,8 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
     if not paths:
         return {
             "created": 0, "skipped": 0, "total_rows": 0, "loaded_files": [],
-            "missing_files": missing, "migrated": 0, "pruned": 0,
+            "missing_files": missing, "migrated": 0, "realigned_units": 0,
+            "pruned": 0,
             "retained_with_content": [],
         }
 
@@ -625,6 +646,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
 
     reconcile = bool(prune and all_rows and not missing)
     migrated = 0
+    realigned = 0
     pruned = 0
     retained: list[str] = []
 
@@ -659,7 +681,47 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
             chapter.unit = moved.unit
             chapter.chapter_code = new_code
             migrated += 1
-        db.commit()
+
+
+    # A unit rename never reaches an existing row otherwise. The chapter code
+    # is built from board, grade, subject and title — not the unit — so a
+    # chapter whose unit changed still matches ``desired``, the move loop above
+    # skips it, and ``upsert_chapters`` skips every code it already has. The
+    # stored unit was therefore frozen at first import, which is how one CBSE
+    # unit stayed split in two over a stray space before its colon.
+    #
+    # Deliberately NOT behind the reconcile guard. That guard protects
+    # DELETION from a partial deploy; realigning only copies a unit from a
+    # workbook that WAS loaded, onto a chapter that workbook lists, so a
+    # missing file simply leaves those chapters alone.
+    if all_rows:
+        # 41 chapter codes in the supplied workbooks are AMBIGUOUS: the same
+        # code appears under different units (Long Jump under both Practical
+        # and Theory; Grassroots Democracy under three). The code truncates the
+        # title, so those rows collapse onto one chapter and there is no single
+        # right unit for it. Realigning them would move 41 chapters to whichever
+        # row happened to be read last — arbitrary, and nobody asked for it.
+        # They keep the unit they were imported under; only unambiguous renames
+        # are corrected.
+        units_by_code: dict[str, set[str]] = {}
+        for row in all_rows:
+            code = directory.make_chapter_code(
+                row.board, row.grade, row.subject, row.chapter,
+            )
+            units_by_code.setdefault(code, set()).add((row.unit or "").strip())
+        for chapter in db.query(models.Chapter).all():
+            wanted = desired.get(chapter.chapter_code)
+            if wanted is None or not wanted.unit:
+                continue
+            if len(units_by_code.get(chapter.chapter_code, ())) != 1:
+                continue
+            if (chapter.unit or "").strip() == wanted.unit.strip():
+                continue
+            chapter.unit = wanted.unit
+            realigned += 1
+        if realigned:
+            db.commit()
+
 
     counts = upsert_chapters(db, all_rows) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
@@ -684,6 +746,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         **counts,
         "missing_files": missing,
         "migrated": migrated,
+        "realigned_units": realigned,
         "pruned": pruned,
         "retained_with_content": retained,
     }

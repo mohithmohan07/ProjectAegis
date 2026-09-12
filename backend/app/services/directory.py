@@ -13,6 +13,7 @@ gives no signal we default it to "<Subject> Unit".
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 from sqlalchemy.orm import Session
 
@@ -464,6 +465,163 @@ def tree(db: Session) -> list[dict]:
         }
         for b, grades in sorted(root.items())
     ]
+
+
+def _identity_key(value: object) -> str:
+    """Collapse a saved identity value the way the picker collapses a tree label."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def resolve_saved_chapter(db: Session, identity: Mapping[str, object]) -> dict:
+    """Find the chapter a saved checkpoint targets, or say exactly what is missing.
+
+    A checkpoint records the chapter's RAW subject — ``History`` for a CBSE
+    social-science chapter — because that is the column the chapter carries and
+    because the resume check compares the saved identity against the identity
+    rebuilt from the chapter. The directory, meanwhile, presents the same
+    chapter under ``Social Science`` so the dropdowns line up with the chapter
+    codes. Matching the two as plain strings therefore fails at the subject
+    level, and a reviewer sees five empty dropdowns with no idea which one
+    broke.
+
+    This resolves both sides through ``effective_subject_for_tags``, so
+    ``History``, ``Geography``, ``Civics`` and ``Economics`` all find their
+    chapter under Social Science (and ICSE History finds History and Civics).
+
+    It deliberately does NOT rewrite anything. The stored identity stays
+    exactly as recorded, so every existing checkpoint keeps resuming: changing
+    it would re-key the resume comparison and reject the very runs this is
+    meant to recover.
+
+    An unresolvable identity names the level that failed rather than shrugging,
+    because "not in the current directory" is true of a moved chapter, a
+    renamed unit and a chapter that was never imported — and the remedy differs.
+    """
+    board = _identity_key(identity.get("board"))
+    grade = _identity_key(identity.get("grade"))
+    subject = _identity_key(identity.get("subject"))
+    unit = _identity_key(identity.get("unit"))
+    code = _identity_key(identity.get("chapter_code"))
+    title = _identity_key(identity.get("chapter_title"))
+
+    def refused(reason: str) -> dict:
+        return {"resolved": False, "reason": reason, "chapter": None}
+
+    if not (board or grade or subject or unit or code or title):
+        return refused("the saved checkpoint records no chapter destination")
+
+    rows = db.query(models.Chapter).order_by(models.Chapter.id).all()
+    at_board = [row for row in rows if _identity_key(row.board) == board]
+    if not at_board:
+        return refused(
+            f"no chapter for board {str(identity.get('board') or '').strip()!r} "
+            "is in the directory"
+        )
+    at_grade = [row for row in at_board if _identity_key(row.grade) == grade]
+    if not at_grade:
+        return refused(
+            f"board {str(identity.get('board') or '').strip()} has no class "
+            f"{str(identity.get('grade') or '').strip()} in the directory"
+        )
+
+    # The one line this whole helper exists for: compare the subject each side
+    # actually presents, not the raw strings.
+    wanted_subject = _identity_key(
+        effective_subject_for_tags(str(identity.get("board") or ""),
+                                   str(identity.get("subject") or ""))
+    )
+    at_subject = [
+        row for row in at_grade
+        if _identity_key(effective_subject_for_tags(row.board, row.subject))
+        == wanted_subject
+    ]
+    if not at_subject:
+        available = sorted({
+            effective_subject_for_tags(row.board, row.subject) or "General"
+            for row in at_grade
+        })
+        return refused(
+            f"no {effective_subject_for_tags(str(identity.get('board') or ''), str(identity.get('subject') or '')) or 'matching'} "
+            f"chapter is in this class; it holds "
+            + ", ".join(available)
+        )
+
+    # Rank by EVIDENCE, never by row order. A chapter that merely shares the
+    # saved title must not outrank the chapter whose code matches: picking the
+    # first row by id resolved a stale decoy ahead of the real chapter whenever
+    # a title had been edited since the checkpoint was written.
+    #
+    # The saved unit is a preference, not a filter. Pre-filtering on it made a
+    # chapter that had MOVED unreachable whenever any sibling stayed behind —
+    # and then handed back that sibling. The whole folded subject is searched,
+    # and staying in the saved unit only breaks ties.
+    def rank(row: models.Chapter) -> tuple[int, int, int] | None:
+        row_code = _identity_key(row.chapter_code)
+        row_title = _identity_key(row.chapter_title)
+        code_hit = bool(code and row_code == code)
+        title_hit = bool(title and row_title == title)
+        if code_hit and title_hit:
+            tier = 0
+        elif code_hit:
+            tier = 1
+        elif title_hit:
+            tier = 2
+        else:
+            return None
+        in_unit = 0 if (unit and _identity_key(row.unit) == unit) else 1
+        return (tier, in_unit, int(row.id))
+
+    ranked = sorted(
+        ((rank(row), row) for row in at_subject if rank(row) is not None),
+        key=lambda pair: pair[0],
+    )
+    if not ranked:
+        return refused(
+            f"{str(identity.get('chapter_title') or identity.get('chapter_code') or 'that chapter').strip()} "
+            "is not in the directory under this board, class and subject"
+        )
+
+    best_tier, best_in_unit, _ = ranked[0][0]
+    tied = [
+        row for (tier, in_unit, _), row in ranked
+        if tier == best_tier and in_unit == best_in_unit
+    ]
+    if len(tied) > 1:
+        # Two chapters are equally good evidence for the same identity, with
+        # nothing recorded to separate them. Returning the first would be a
+        # guess a reviewer cannot see; naming the ambiguity is the honest
+        # answer and the remedy (pick it manually) is one click away.
+        names = ", ".join(
+            f"{row.chapter_title} ({row.chapter_code})" for row in tied[:4]
+        )
+        return refused(
+            "more than one chapter matches the saved destination equally well "
+            f"— {names}. Select the intended chapter manually."
+        )
+    found = tied[0]
+
+    return {
+        "resolved": True,
+        "reason": "",
+        "chapter": {
+            "id": found.id,
+            "chapter_code": found.chapter_code,
+            "chapter_title": found.chapter_title,
+            "chapter_display_name": found.chapter_display_name,
+        },
+        # The same defaults ``tree`` keys these with, so every field of this
+        # payload is a label the dropdown actually carries.
+        "board": found.board or "Unknown",
+        "grade": found.grade or "\u2014",
+        # The subject as the DIRECTORY presents it, which is the value the
+        # dropdown holds — not the raw column the checkpoint saved.
+        "subject": effective_subject_for_tags(found.board, found.subject)
+        or "General",
+        "unit": found.unit or "General Unit",
+        "subject_folded": _identity_key(found.subject) != _identity_key(
+            effective_subject_for_tags(found.board, found.subject)
+        ),
+    }
 
 
 def chapter_detail(db: Session, chapter_id: int) -> dict | None:

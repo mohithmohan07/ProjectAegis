@@ -807,3 +807,93 @@ def test_a_failed_run_is_mirrored_too(session, monkeypatch):
             break
         _time.sleep(0.01)
     assert mirrored == [job.id]
+
+
+def test_the_console_shows_social_science_the_way_the_directory_does(session):
+    """One Social Science facet, not a History facet and a Civics facet.
+
+    The two surfaces must name the same chapter the same way: Build Concepts
+    groups CBSE and Karnataka History, Geography, Civics and Economics under
+    Social Science so the dropdowns match the chapter codes, and a person
+    filtering this table for Social Science has to find all of them.
+    """
+    _chapter(session, code="10CBSS_HIST")
+    civics = models.Chapter(
+        chapter_code="10CBSS_CIVICS", board="CBSE", grade="10",
+        subject="Civics", unit="Democracy", chapter_title="Power Sharing",
+        chapter_display_name="Power Sharing",
+    )
+    maths = models.Chapter(
+        chapter_code="10CBMA_POLY", board="CBSE", grade="10",
+        subject="Mathematics", unit="Algebra", chapter_title="Polynomials",
+        chapter_display_name="Polynomials",
+    )
+    session.add_all([civics, maths])
+    session.commit()
+
+    facets = chapter_batches.facets(session)
+    assert "Social Science" in facets["subjects"]
+    assert "Civics" not in facets["subjects"]
+    assert "Mathematics" in facets["subjects"]
+
+    page = chapter_batches.list_page(
+        session, board="CBSE", grade="10", subject="Social Science",
+        page_size=50,
+    )
+    titles = {row["chapter_title"] for row in page["items"]}
+    assert {"Polynomials"}.isdisjoint(titles)
+    assert "Power Sharing" in titles
+    # And the row itself reports the folded subject, not the stored column.
+    assert all(row["subject"] == "Social Science" for row in page["items"])
+
+
+def test_a_subject_outside_the_fold_is_unchanged_in_the_console(session):
+    chapter = _chapter(session, code="09MHMA_LIN")
+    chapter.board = "Maharashtra"
+    chapter.grade = "09"
+    chapter.subject = "Mathematics"
+    session.commit()
+
+    page = chapter_batches.list_page(
+        session, board="Maharashtra", grade="09", subject="Mathematics",
+        page_size=50,
+    )
+    assert page["total"] >= 1
+    assert all(row["subject"] == "Mathematics" for row in page["items"])
+
+
+def test_the_subject_filter_does_not_leak_across_boards(session):
+    """ICSE History is History and Civics, not Social Science.
+
+    Folding the (board, subject) pairs and then filtering on the subjects
+    alone would drag ICSE History into a CBSE Social Science page, and list a
+    chapter whose own displayed subject is not the one filtered for.
+    """
+    cbse = models.Chapter(
+        chapter_code="10CBSS_LEAK", board="CBSE", grade="11",
+        subject="History", unit="U", chapter_title="CBSE History Chapter",
+        chapter_display_name="CBSE History Chapter",
+    )
+    icse = models.Chapter(
+        chapter_code="11ICHC_LEAK", board="ICSE", grade="11",
+        subject="History", unit="U", chapter_title="ICSE History Chapter",
+        chapter_display_name="ICSE History Chapter",
+    )
+    session.add_all([cbse, icse])
+    session.commit()
+
+    social = chapter_batches.list_page(
+        session, grade="11", subject="Social Science", page_size=50)
+    titles = {row["chapter_title"] for row in social["items"]}
+    assert "CBSE History Chapter" in titles
+    assert "ICSE History Chapter" not in titles
+
+    paper = chapter_batches.list_page(
+        session, grade="11", subject="History and Civics", page_size=50)
+    paper_titles = {row["chapter_title"] for row in paper["items"]}
+    assert "ICSE History Chapter" in paper_titles
+    assert "CBSE History Chapter" not in paper_titles
+
+    # Every row reports the subject it was filtered by.
+    assert all(row["subject"] == "Social Science" for row in social["items"])
+    assert all(row["subject"] == "History and Civics" for row in paper["items"])

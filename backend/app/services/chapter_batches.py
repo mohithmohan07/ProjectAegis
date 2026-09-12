@@ -25,11 +25,12 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models
 from . import build_concepts_release as release_svc
+from . import directory
 
 # The closed set of row states. The server owns this vocabulary and ships it
 # with every page so the client never invents a member or hardcodes a label.
@@ -591,7 +592,13 @@ def project_row(
         "chapter_display_name": str(chapter.chapter_display_name or ""),
         "board": str(chapter.board or ""),
         "grade": str(chapter.grade or ""),
-        "subject": str(chapter.subject or ""),
+        # The subject the DIRECTORY shows, so this table and the Build
+        # Concepts dropdowns name the same chapter the same way. CBSE and
+        # Karnataka teach History, Geography, Civics and Economics as one
+        # Social Science subject, and a person filtering for it must find
+        # every one of them.
+        "subject": directory.effective_subject_for_tags(
+            chapter.board, chapter.subject) or "",
         "unit": str(chapter.unit or ""),
         "job_id": int(signals["id"]) if signals else None,
         "source_filename": str(
@@ -716,13 +723,20 @@ def facets(db: Session) -> dict[str, Any]:
             models.Chapter.board, models.Chapter.grade, models.Chapter.subject,
         )
     ).all()
-    triples = [
-        {
-            "board": str(board or ""),
-            "grade": str(grade or ""),
-            "subject": str(subject or ""),
-        }
+    # Fold each row's stored subject to the one the directory presents, then
+    # de-duplicate: History and Civics in the same class are one Social
+    # Science facet, not two.
+    folded = {
+        (
+            str(board or ""),
+            str(grade or ""),
+            directory.effective_subject_for_tags(board, subject) or "",
+        )
         for board, grade, subject in rows
+    }
+    triples = [
+        {"board": board, "grade": grade, "subject": subject}
+        for board, grade, subject in folded
     ]
     triples.sort(key=lambda item: (item["board"], item["grade"], item["subject"]))
     return {
@@ -782,7 +796,31 @@ def list_page(
     if grade:
         query = query.filter(models.Chapter.grade == grade)
     if subject:
-        query = query.filter(models.Chapter.subject == subject)
+        # Match on the folded subject, so picking Social Science returns the
+        # History, Geography, Civics and Economics chapters stored under it.
+        # The fold depends on the BOARD, so the pairs are resolved together;
+        # the result is a plain indexed IN rather than a per-row computation.
+        # The board has to stay attached to the subject. Folding the pairs and
+        # then filtering on the subjects alone leaks across boards in both
+        # directions: ICSE History does NOT fold to Social Science, so a
+        # board-agnostic IN would pull it into a Social Science page, and a
+        # page would list chapters whose own displayed subject is not the one
+        # filtered for.
+        pairs = [
+            (row_board, row_subject)
+            for row_board, row_subject in db.query(
+                models.Chapter.board, models.Chapter.subject,
+            ).distinct().all()
+            if directory.effective_subject_for_tags(row_board, row_subject)
+            == subject
+        ]
+        query = query.filter(
+            or_(*[
+                and_(models.Chapter.board == row_board,
+                     models.Chapter.subject == row_subject)
+                for row_board, row_subject in pairs
+            ]) if pairs else models.Chapter.subject == subject
+        )
     if q:
         needle = f"%{q.strip()}%"
         query = query.filter(

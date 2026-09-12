@@ -298,3 +298,63 @@ test("a push sends one request naming the step and every row", async () => {
     rows: [{ chapter_id: 1 }, { chapter_id: 2 }],
   });
 });
+
+test("resolves a saved checkpoint identity as a lookup, sending it unchanged", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      resolved: true,
+      reason: "",
+      chapter: {
+        id: 129,
+        chapter_code: "10CBSS_PrintCulture",
+        chapter_title: "Print Culture and the Modern World",
+        chapter_display_name: "",
+      },
+      board: "CBSE",
+      grade: "10",
+      subject: "Social Science",
+      unit: "India and the Contemporary World II",
+      subject_folded: true,
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const resolution = await api.resolveSavedChapter({
+    board: "CBSE",
+    grade: "10",
+    subject: "History",
+    unit: "India and the Contemporary World II",
+    chapter_title: "Print Culture and the Modern World",
+    chapter_code: "",
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(String(url)).toContain("/directory/resolve-chapter?");
+  // The raw stored subject travels as recorded: the fold is the server's job,
+  // and rewriting the identity here would re-key the resume comparison.
+  expect(String(url)).toContain("subject=History");
+  expect(String(url)).toContain("board=CBSE");
+  // An empty field is omitted rather than sent blank.
+  expect(String(url)).not.toContain("chapter_code=");
+  expect(init).toEqual(expect.objectContaining({ credentials: "include" }));
+  expect((init as { method?: string }).method).toBeUndefined();
+  expect(resolution.subject).toBe("Social Science");
+  expect(resolution.subject_folded).toBe(true);
+});
+
+test("an unreadable directory lookup raises the readable HTTP error", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 500,
+    statusText: "Internal Server Error",
+    json: async () => ({ detail: "the directory could not be read" }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(api.resolveSavedChapter({ board: "CBSE" })).rejects.toThrow(
+    "the directory could not be read",
+  );
+});

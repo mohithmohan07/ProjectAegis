@@ -36,6 +36,12 @@ export default function DirectoryPicker({
   const [scopeType, setScopeType] = useState<"chapter" | "topic" | "concept">("chapter");
   const [picked, setPicked] = useState<number[]>([]);
   const [initialSelectionMessage, setInitialSelectionMessage] = useState("");
+  // Carried, not re-derived from the message text. The message is now written
+  // by the server and is built from the saved chapter's own title, so a
+  // chapter called "Saved checkpoint ..." would otherwise render its refusal
+  // inside the success box.
+  const [initialSelectionTone, setInitialSelectionTone] =
+    useState<"ok" | "error">("error");
   const appliedInitialIdentityRef = useRef("");
   const idBase = useId();
 
@@ -51,69 +57,97 @@ export default function DirectoryPicker({
       .finally(() => setLoading(false));
   }, [reloadSignal]);
 
+  /*
+     Selecting the saved checkpoint destination is a SERVER lookup, not a
+     string walk over the tree labels. A checkpoint stores the chapter's raw
+     subject — `History` for a CBSE social-science chapter — while the
+     directory deliberately re-groups CBSE History/Geography/Civics/Economics
+     under `Social Science` so the dropdowns line up with the chapter codes.
+     Comparing the two as plain strings failed at the subject level, and
+     because the walk was ordered, unit and chapter were never reached: all
+     five dropdowns came up empty and the reviewer was told only that the
+     destination "is not in the current directory".
+
+     `/directory/resolve-chapter` folds both sides through the same closed
+     subject table the tree uses and names the level that actually failed.
+     Nothing here rewrites what the checkpoint stored: the resume comparison
+     still matches the identity it recorded.
+  */
   useEffect(() => {
     if (loading || !initialChapterIdentity) return;
     const identityKey = JSON.stringify(initialChapterIdentity);
     const applicationKey = `${reloadSignal}:${identityKey}`;
     if (appliedInitialIdentityRef.current === applicationKey) return;
     appliedInitialIdentityRef.current = applicationKey;
+    // A newer identity (or a reloaded tree) moves the ref on; an answer that
+    // arrives after that is stale and must not overwrite the newer selection.
+    const superseded = () => appliedInitialIdentityRef.current !== applicationKey;
 
-    const requested = Object.fromEntries(
-      Object.entries(initialChapterIdentity).map(([key, value]) => [
-        key,
-        normalizeIdentity(value),
-      ]),
-    );
-    const matchedBoard = tree.find(
-      (item) => normalizeIdentity(item.board) === requested.board,
-    );
-    const matchedGrade = matchedBoard?.grades.find(
-      (item) => normalizeIdentity(item.grade) === requested.grade,
-    );
-    const matchedSubject = matchedGrade?.subjects.find(
-      (item) => normalizeIdentity(item.subject) === requested.subject,
-    );
-    const matchedUnit = matchedSubject?.units.find(
-      (item) => normalizeIdentity(item.unit) === requested.unit,
-    );
-    const matchedChapter = matchedUnit?.chapters.find((item) => {
-      const hasCode = Boolean(requested.chapter_code);
-      const hasTitle = Boolean(requested.chapter_title);
-      const codeMatches = hasCode
-        && normalizeIdentity(item.chapter_code) === requested.chapter_code;
-      const titleMatches = hasTitle
-        && normalizeIdentity(item.chapter_title) === requested.chapter_title;
-      if (hasCode && hasTitle) return codeMatches && titleMatches;
-      return codeMatches || titleMatches;
-    });
+    api.resolveSavedChapter(initialChapterIdentity)
+      .then((resolution) => {
+        if (superseded()) return;
+        if (!resolution.resolved || !resolution.chapter) {
+          // The server's sentence names the level that failed — a moved
+          // chapter, a renamed unit and one that was never imported have
+          // different remedies. Show it as written.
+          setInitialSelectionTone("error");
+          setInitialSelectionMessage(
+            resolution.reason
+            || "The saved destination did not resolve to a chapter. Select "
+              + "the matching chapter manually; generation will remain "
+              + "disabled until then.",
+          );
+          return;
+        }
+        // Prefer the tree's own chapter object (and the labels the dropdowns
+        // actually carry) over the resolved payload, so every select holds a
+        // real option. The payload is the fallback for a tree that failed to
+        // load, which keeps the resolved id rather than blanking the picker.
+        const located = locateChapterInTree(tree, resolution.chapter.id);
+        const selected: ChapterRef = located?.chapter ?? {
+          id: resolution.chapter.id,
+          chapter_code: resolution.chapter.chapter_code,
+          chapter_title: resolution.chapter.chapter_title,
+          chapter_display_name: resolution.chapter.chapter_display_name,
+          topic_count: 0,
+          concept_count: 0,
+        };
+        const savedSubject = String(initialChapterIdentity.subject ?? "").trim();
+        const directorySubject = located?.subject ?? resolution.subject ?? "";
+        // One short clause, so a reviewer who saved "History" and is now
+        // reading "Social Science" can see it is the same row.
+        const fold = resolution.subject_folded && directorySubject
+          ? ` (saved under ${savedSubject || "another subject"}, shown here`
+            + ` under ${directorySubject})`
+          : "";
 
-    if (
-      !matchedBoard
-      || !matchedGrade
-      || !matchedSubject
-      || !matchedUnit
-      || !matchedChapter
-    ) {
-      setInitialSelectionMessage(
-        "The saved destination is not in the current directory. Select the "
-        + "matching chapter manually; generation will remain disabled until then.",
-      );
-      return;
-    }
-    setBoard(matchedBoard.board);
-    setGrade(matchedGrade.grade);
-    setSubject(matchedSubject.subject);
-    setUnit(matchedUnit.unit);
-    setChapter(matchedChapter);
-    setScopeType("chapter");
-    setPicked([]);
-    setInitialSelectionMessage(
-      `Saved checkpoint target selected: ${displayLabel(
-        matchedChapter.chapter_display_name,
-        matchedChapter.chapter_title,
-        "saved chapter",
-      )}.`,
-    );
+        setBoard(located?.board ?? resolution.board ?? "");
+        setGrade(located?.grade ?? resolution.grade ?? "");
+        setSubject(directorySubject);
+        setUnit(located?.unit ?? resolution.unit ?? "");
+        setChapter(selected);
+        setScopeType("chapter");
+        setPicked([]);
+        setInitialSelectionTone("ok");
+        setInitialSelectionMessage(
+          `Saved checkpoint target selected: ${displayLabel(
+            selected.chapter_display_name,
+            selected.chapter_title,
+            "saved chapter",
+          )}${fold}.`,
+        );
+      })
+      .catch((lookupError) => {
+        if (superseded()) return;
+        // A dropped network or a 500 must not leave five blank dropdowns and
+        // no explanation; manual selection still works.
+        setInitialSelectionTone("error");
+        setInitialSelectionMessage(
+          `The saved destination could not be looked up (${String(lookupError)}). `
+          + "Select the matching chapter manually; generation will remain "
+          + "disabled until then.",
+        );
+      });
   }, [initialChapterIdentity, loading, reloadSignal, tree]);
 
   useEffect(() => {
@@ -200,7 +234,7 @@ export default function DirectoryPicker({
       {initialSelectionMessage && (
         <div
           className={
-            initialSelectionMessage.startsWith("Saved checkpoint")
+            initialSelectionTone === "ok"
               ? "resume-target-ok mb-8"
               : "error-box mb-8"
           }
@@ -323,6 +357,40 @@ export default function DirectoryPicker({
   );
 }
 
-function normalizeIdentity(value: unknown): string {
-  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+/**
+ * Find the tree node for a chapter the server already identified.
+ *
+ * Bookkeeping only — an id lookup over the loaded tree. It decides nothing
+ * about which chapter is meant; it just returns the object (and the exact
+ * board/class/subject/unit labels) the dropdowns are rendered from.
+ */
+function locateChapterInTree(
+  tree: BoardNode[],
+  chapterId: number,
+): {
+  board: string;
+  grade: string;
+  subject: string;
+  unit: string;
+  chapter: ChapterRef;
+} | null {
+  for (const boardNode of tree) {
+    for (const gradeNode of boardNode.grades) {
+      for (const subjectNode of gradeNode.subjects) {
+        for (const unitNode of subjectNode.units) {
+          const found = unitNode.chapters.find((item) => item.id === chapterId);
+          if (found) {
+            return {
+              board: boardNode.board,
+              grade: gradeNode.grade,
+              subject: subjectNode.subject,
+              unit: unitNode.unit,
+              chapter: found,
+            };
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
