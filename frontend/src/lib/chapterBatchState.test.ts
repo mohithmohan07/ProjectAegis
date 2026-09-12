@@ -400,6 +400,40 @@ test("summarisePush counts every verdict and groups the refusals", () => {
   ]);
 });
 
+test("summarisePush names the act when the envelope carries no step", () => {
+  // `/cancel` and `/retry` reuse the push envelope and answer with an
+  // EMPTY step; without the caller's label the sentence opened with a
+  // bare colon.
+  const cancelled = summarisePush(
+    { step: "", push_group_id: "", results: [outcome(1, "queued")] },
+    "Cancel",
+  );
+  expect(cancelled.sentence).toBe("Cancel: 1 queued.");
+  expect(cancelled.step).toBe("");
+
+  // No label either: still a sentence, never ": 1 queued."
+  expect(
+    summarisePush({ step: "", push_group_id: "", results: [outcome(1, "queued")] })
+      .sentence,
+  ).toBe("Queue: 1 queued.");
+
+  // A real step always wins over the caller's label.
+  expect(
+    summarisePush(
+      { step: "step02", push_group_id: "g", results: [outcome(1, "queued")] },
+      "Cancel",
+    ).sentence,
+  ).toBe("Step 02: 1 queued.");
+});
+
+test("chapterLabel falls back when the server could not project the row", () => {
+  // `/push`, `/cancel` and `/retry` project the row AFTER the act, so an
+  // `unknown_chapter` refusal carries `row: null`. The receipt must still
+  // render its line rather than taking the page down.
+  expect(chapterLabel(null, "Chapter 999")).toBe("Chapter 999");
+  expect(chapterLabel(undefined)).toBe("This chapter");
+});
+
 test("summarisePush is honest about an empty push", () => {
   const summary = summarisePush({
     step: "publish", push_group_id: "grp-2", results: [],

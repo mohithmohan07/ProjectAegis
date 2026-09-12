@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, isNonTransientStatus } from "../api/client";
+import { useAsync } from "../hooks";
 import type {
   ChapterBatchPage,
   ChapterBatchRow,
@@ -11,6 +12,7 @@ import {
   anyBusy,
   cancellableFor,
   chapterLabel,
+  lanesToPublish,
   rowIsRetryable,
   rowNeedsPerson,
   rowProgressValue,
@@ -19,7 +21,9 @@ import {
 } from "../lib/chapterBatchState";
 import ChapterStateBadge from "../components/ChapterStateBadge";
 import ChapterStepPips from "../components/ChapterStepPips";
-import ChapterRowUpload from "../components/ChapterRowUpload";
+import ChapterRowUpload, {
+  BOOK_SOURCES_LIST_ID,
+} from "../components/ChapterRowUpload";
 import ChapterRowDrawer from "../components/ChapterRowDrawer";
 import ChapterPublishDialog from "../components/ChapterPublishDialog";
 import ChapterPushReceipt from "../components/ChapterPushReceipt";
@@ -102,7 +106,12 @@ export function useChapterBatchRows(query: ChapterBatchQuery): ChapterBatchRowsS
         timer = null;
       }
       // A hidden tab polls nothing; the visibility listener restarts it.
-      if (typeof document !== "undefined" && document.hidden) return;
+      // The spinner still has to be cleared, or a page opened in a
+      // background tab reads "Loading chapters…" until it is looked at.
+      if (typeof document !== "undefined" && document.hidden) {
+        if (live) setLoading(false);
+        return;
+      }
       inFlight = true;
       try {
         const next = await api.chapterBatchList({
@@ -148,7 +157,9 @@ export function useChapterBatchRows(query: ChapterBatchQuery): ChapterBatchRowsS
     if (rows.length === 0) return;
     setData((prev) => {
       if (!prev) return prev;
-      const byId = new Map(rows.map((row) => [row.chapter_id, row]));
+      const byId = new Map(
+        rows.filter(Boolean).map((row) => [row.chapter_id, row]),
+      );
       const next = {
         ...prev,
         items: prev.items.map((item) => byId.get(item.chapter_id) ?? item),
@@ -207,6 +218,18 @@ function useChapterBatchFilters() {
 
 type PushKind = ChapterBatchStep | "cancel" | "retry";
 
+/**
+ * What the receipt calls the act. `/cancel` and `/retry` reuse the push
+ * envelope and answer with an EMPTY `step`, so the page names what it sent.
+ */
+const ACTION_LABEL: Record<PushKind, string> = {
+  step01: "Step 01",
+  step02: "Step 02",
+  publish: "Publish",
+  cancel: "Cancel",
+  retry: "Retry",
+};
+
 export default function ChapterBatch() {
   const { query, setFilter } = useChapterBatchFilters();
   const { data, error, loading, stopped, reload, patchRows } =
@@ -214,11 +237,18 @@ export default function ChapterBatch() {
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [receipt, setReceipt] = useState<ChapterBatchPushResult | null>(null);
+  const [receiptLabel, setReceiptLabel] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [pushing, setPushing] = useState<PushKind | null>(null);
   const [publishTarget, setPublishTarget] = useState<ChapterBatchRow[] | null>(null);
   const [openRow, setOpenRow] = useState<number | null>(null);
   const [searchDraft, setSearchDraft] = useState(query.q);
+
+  // The known publications, for the staging form's suggestion list. It is
+  // a suggestion only: the field stays free text, exactly as
+  // `SourceBookInput` is on Build Concepts.
+  const vocab = useAsync(() => api.vocab(), []);
+  const bookSources = vocab.data?.book_sources ?? [];
 
   const rows = useMemo(() => data?.items ?? [], [data]);
   const states = data?.states;
@@ -287,18 +317,40 @@ export default function ChapterBatch() {
   const applyResult = useCallback(
     (result: ChapterBatchPushResult) => {
       setReceipt(result);
-      patchRows(result.results.map((outcome) => outcome.row).filter(Boolean));
+      // `row` is null for a chapter the server could no longer project
+      // (an `unknown_chapter` refusal); there is nothing to patch.
+      const fresh: ChapterBatchRow[] = [];
+      for (const outcome of result.results) {
+        if (outcome.row) fresh.push(outcome.row);
+      }
+      patchRows(fresh);
     },
     [patchRows],
   );
 
   const runPush = useCallback(
     async (kind: PushKind, targets: ChapterBatchRow[]) => {
-      if (targets.length === 0) return;
+      // A publish NAMES its lanes. The server never defaults a publication
+      // target: an unnamed publish is refused outright with `no_lanes`
+      // ("name the lanes to publish"), so sending the chapter id alone
+      // would make every Publish button a no-op. The lanes are exactly the
+      // ones the confirmation dialog counted — this chapter's own
+      // available, not-yet-published lanes, never a pre+post pair.
+      const rows =
+        kind === "publish"
+          ? targets
+            .map((row) => ({
+              row,
+              lanes: lanesToPublish(row).map((lane) => lane.lane),
+            }))
+            .filter((entry) => entry.lanes.length > 0)
+          : targets.map((row) => ({ row, lanes: [] as string[] }));
+      if (rows.length === 0) return;
       setPushing(kind);
       setActionError(null);
+      setReceiptLabel(ACTION_LABEL[kind]);
       try {
-        const ids = targets.map((row) => row.chapter_id);
+        const ids = rows.map((entry) => entry.row.chapter_id);
         const result =
           kind === "cancel"
             ? await api.chapterBatchCancel(ids)
@@ -306,7 +358,10 @@ export default function ChapterBatch() {
               ? await api.chapterBatchRetry(ids)
               : await api.chapterBatchPush(
                 kind,
-                targets.map((row) => ({ chapter_id: row.chapter_id })),
+                rows.map((entry) =>
+                  kind === "publish"
+                    ? { chapter_id: entry.row.chapter_id, lanes: entry.lanes }
+                    : { chapter_id: entry.row.chapter_id }),
               );
         applyResult(result);
       } catch (e) {
@@ -448,7 +503,11 @@ export default function ChapterBatch() {
 
       {receipt && (
         <div className="mt-16">
-          <ChapterPushReceipt result={receipt} onDismiss={() => setReceipt(null)} />
+          <ChapterPushReceipt
+            result={receipt}
+            actionLabel={receiptLabel}
+            onDismiss={() => setReceipt(null)}
+          />
         </div>
       )}
 
@@ -573,6 +632,14 @@ export default function ChapterBatch() {
           </button>
         </div>
       )}
+
+      {/* One page-level list of publications; every staging form points at
+          it, so no row mints a second datalist under the same id. */}
+      <datalist id={BOOK_SOURCES_LIST_ID}>
+        {bookSources.map((source) => (
+          <option key={source} value={source} />
+        ))}
+      </datalist>
 
       {publishTarget && (
         <ChapterPublishDialog
@@ -731,6 +798,7 @@ function PrimaryAction({
         slot="source"
         disabled={busy}
         onUploaded={onRowUpdated}
+        sourceBook={row.source_book}
         label="Upload source PDF"
         compact
       />

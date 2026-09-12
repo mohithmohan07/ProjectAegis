@@ -107,12 +107,16 @@ export default function ChapterRowDrawer({
   // The run journal tail. Its cursor is local to this drawer; the page's
   // list poll never carries log text.
   const cursor = useRef(0);
+  const jobId = row.job_id;
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     cursor.current = 0;
     setEvents([]);
     setLogError(null);
+    // The events route resolves the chapter's bound job and 404s when there
+    // is none. A chapter nobody has staged yet is not an error to report.
+    if (!jobId) return;
 
     const tick = async () => {
       try {
@@ -137,7 +141,7 @@ export default function ChapterRowDrawer({
       live = false;
       if (timer) clearTimeout(timer);
     };
-  }, [chapterId]);
+  }, [chapterId, jobId]);
 
   const job = detail?.job ?? null;
   const files = job?.source_artifacts?.files;
@@ -214,26 +218,38 @@ export default function ChapterRowDrawer({
                     <span className="hint">Master file not available yet</span>
                   )}
                 </div>
-                <div className="row chapter-lane-files">
-                  <ChapterRowUpload
-                    chapterId={chapterId}
-                    slot="concept"
-                    lane={lane.lane}
-                    disabled={!row.can.upload_concept}
-                    onUploaded={onRowUpdated}
-                    label={`Upload reviewed ${laneLabel(lane.lane)} Concept file`}
-                    compact
-                  />
-                  <ChapterRowUpload
-                    chapterId={chapterId}
-                    slot="master"
-                    lane={lane.lane}
-                    disabled={!row.can.upload_master}
-                    onUploaded={onRowUpdated}
-                    label={`Upload reviewed ${laneLabel(lane.lane)} Master file`}
-                    compact
-                  />
-                </div>
+                {lane.available && (
+                  // `scope="drawer"` keeps these ids distinct from the row's
+                  // own single-lane upload: two elements sharing one id make
+                  // `htmlFor` resolve to whichever rendered first, so the
+                  // drawer's label would open the table's input.
+                  //
+                  // A lane this run does not have is never offered an upload:
+                  // the reviewed file would be recorded against a lane with
+                  // no Concept or Master behind it.
+                  <div className="row chapter-lane-files">
+                    <ChapterRowUpload
+                      chapterId={chapterId}
+                      slot="concept"
+                      lane={lane.lane}
+                      scope="drawer"
+                      disabled={!row.can.upload_concept}
+                      onUploaded={onRowUpdated}
+                      label={`Upload reviewed ${laneLabel(lane.lane)} Concept file`}
+                      compact
+                    />
+                    <ChapterRowUpload
+                      chapterId={chapterId}
+                      slot="master"
+                      lane={lane.lane}
+                      scope="drawer"
+                      disabled={!row.can.upload_master}
+                      onUploaded={onRowUpdated}
+                      label={`Upload reviewed ${laneLabel(lane.lane)} Master file`}
+                      compact
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -331,6 +347,37 @@ export default function ChapterRowDrawer({
               </dd>
             </div>
           </dl>
+
+          {row.can.upload_source && (
+            // The server offers this for any row that is not live and not
+            // dead — replacing a bad upload is how a person recovers a
+            // chapter. The table's primary action only ever shows it for a
+            // chapter with no job at all, so without this the capability is
+            // unreachable for every chapter that already has one.
+            <div
+              className="chapter-stage-source"
+              data-testid={`chapter-${chapterId}-stage-source`}
+            >
+              <div className="step-subtitle">
+                {row.job_id ? "Replace the source file" : "Stage the source file"}
+              </div>
+              {row.job_id && (
+                <div className="hint">
+                  A replacement starts this chapter's run again from Step 01.
+                  The run it replaces is kept in the row's history, never
+                  erased.
+                </div>
+              )}
+              <ChapterRowUpload
+                chapterId={chapterId}
+                slot="source"
+                scope="drawer"
+                onUploaded={onRowUpdated}
+                sourceBook={row.source_book}
+                label={row.job_id ? "Choose a replacement file" : "Choose a source file"}
+              />
+            </div>
+          )}
 
           {detailError && <div className="error-box mt-12">{detailError}</div>}
 

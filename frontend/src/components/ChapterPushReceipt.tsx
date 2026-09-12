@@ -25,12 +25,15 @@ const VERDICT_TONE: Record<string, string> = {
  */
 export default function ChapterPushReceipt({
   result,
+  actionLabel = "",
   onDismiss,
 }: {
   result: ChapterBatchPushResult;
+  /** Names the act for the cancel/retry envelope, which carries no step. */
+  actionLabel?: string;
   onDismiss?: () => void;
 }) {
-  const summary = summarisePush(result);
+  const summary = summarisePush(result, actionLabel);
   return (
     <div className="card chapter-receipt" data-testid="chapter-push-receipt">
       <div className="row">
@@ -53,7 +56,9 @@ export default function ChapterPushReceipt({
             <span className={VERDICT_TONE[outcome.verdict] ?? "badge"}>
               {VERDICT_LABEL[outcome.verdict] ?? outcome.verdict}
             </span>{" "}
-            <span>{chapterLabel(outcome.row)}</span>
+            <span>
+              {chapterLabel(outcome.row, `Chapter ${outcome.chapter_id}`)}
+            </span>
             {outcome.position !== null && outcome.position !== undefined && (
               <span className="hint">{` · #${outcome.position} in queue`}</span>
             )}

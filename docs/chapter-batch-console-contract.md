@@ -289,6 +289,22 @@ Router prefix `/chapter-batches`. Page path `/chapters`. `vite.config.ts` gets
 `push`, `cancel` and `retry` **always return 200** with a per-row verdict; one
 ineligible row never fails the batch.
 
+Two shapes the server emits that the type above does not literally describe,
+recorded here because the client absorbs them rather than crashing on them:
+
+* `cancel` and `retry` answer with `step: ""` — they are not a step. The page
+  labels the receipt from the act it sent, so the field is unused rather than
+  rendered as a sentence beginning with a bare colon.
+* a per-row `row` is `null` when the chapter no longer exists (the
+  `unknown_chapter` refusal — reachable from a stale page after a syllabus
+  prune). The receipt then names the chapter by id and prints the server's
+  reason.
+
+A publish push **must** name each row's lanes. Admission never defaults a
+publication target, so a publish that names none is refused `no_lanes` — the
+page sends the same lanes its confirmation dialog counted, and drops rows with
+nothing left to write rather than sending them to earn a refusal.
+
     verdict      queued | already_queued | already_running | refused
     reason_code  no_source | not_ready | already_live | blocked | dead
                  | wrong_state | no_lanes | unknown_chapter | at_capacity

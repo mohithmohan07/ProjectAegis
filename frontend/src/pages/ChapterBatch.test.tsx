@@ -12,6 +12,7 @@ import type {
 import ChapterBatch from "./ChapterBatch";
 
 const apiMock = vi.hoisted(() => ({
+  vocab: vi.fn(),
   chapterBatchList: vi.fn(),
   chapterBatchDetail: vi.fn(),
   chapterBatchStageSource: vi.fn(),
@@ -162,6 +163,8 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  apiMock.vocab.mockReset();
+  apiMock.vocab.mockResolvedValue({ book_sources: ["NCERT"] });
   apiMock.chapterBatchList.mockReset();
   apiMock.chapterBatchPush.mockReset();
   apiMock.chapterBatchCancel.mockReset();
@@ -401,8 +404,12 @@ test("the publish dialog names the chapters and the exact write counts", async (
 
   fireEvent.click(screen.getByTestId("chapter-publish-confirm"));
   await waitFor(() => {
+    // The lanes the dialog just counted ride the push. The server never
+    // defaults a publication target: a publish with no lanes named is
+    // refused outright with `no_lanes`, so an id-only body would make this
+    // button a no-op.
     expect(apiMock.chapterBatchPush).toHaveBeenCalledWith("publish", [
-      { chapter_id: 103 },
+      { chapter_id: 103, lanes: ["post"] },
     ]);
   });
   await waitFor(() => {
@@ -486,4 +493,134 @@ test("the drawer's log poll starts when it opens and stops when it closes", asyn
     await vi.advanceTimersByTimeAsync(30000);
   });
   expect(apiMock.chapterBatchEvents.mock.calls.length).toBe(closed);
+});
+
+test("a two-lane publish names both lanes and skips an already-published one", async () => {
+  const BOTH = row({
+    chapter_id: 104,
+    chapter_display_name: "Both lanes",
+    state: "master_review",
+    workflow_status: "master_ready",
+    job_id: 58,
+    lanes: [
+      lane({ lane: "post", available: true, master: "ready" }),
+      lane({ lane: "pre", available: true, master: "queued" }),
+    ],
+    can: can({ publish: true }),
+  });
+  const DONE = row({
+    chapter_id: 105,
+    chapter_display_name: "Already published",
+    state: "published",
+    workflow_status: "published",
+    job_id: 59,
+    lanes: [
+      lane({ lane: "post", available: true, master: "published" }),
+      lane({ lane: "pre", available: false, master: "none" }),
+    ],
+    // The server still offers the act; every lane is already landed.
+    can: can({ publish: true }),
+  });
+  apiMock.chapterBatchList.mockResolvedValue(page({ items: [BOTH, DONE], total: 2 }));
+  apiMock.chapterBatchPush.mockResolvedValue({
+    step: "publish", push_group_id: "grp-4", results: [],
+  });
+  renderPage();
+  await screen.findByText("Both lanes");
+
+  fireEvent.click(screen.getByLabelText("Select Both lanes"));
+  fireEvent.click(screen.getByLabelText("Select Already published"));
+  fireEvent.click(screen.getByTestId("push-publish"));
+
+  const dialog = await screen.findByTestId("chapter-publish-dialog");
+  expect(within(dialog).getByTestId("publish-plan-lanes").textContent).toBe("2");
+  expect(within(dialog).getByTestId("publish-plan-skipped").textContent)
+    .toContain("every available lane is already published");
+
+  fireEvent.click(screen.getByTestId("chapter-publish-confirm"));
+  await waitFor(() => {
+    // A queued CMS append is still work: it rides the push. The chapter
+    // with nothing left to write is never sent at all.
+    expect(apiMock.chapterBatchPush).toHaveBeenCalledWith("publish", [
+      { chapter_id: 104, lanes: ["post", "pre"] },
+    ]);
+  });
+});
+
+test("a cancel receipt names the act the page sent, not an empty step", async () => {
+  const QUEUED = row({
+    chapter_id: 201,
+    chapter_display_name: "Queued chapter",
+    state: "step01_queued",
+    state_label: "Step 01 queued",
+    job_id: 60,
+    queue: queue({ state: "queued", position: 1, task_id: 9 }),
+    can: can({ cancel: true }),
+  });
+  apiMock.chapterBatchList.mockResolvedValue(page({ items: [QUEUED], total: 1 }));
+  // `/cancel` and `/retry` reuse the push envelope with an EMPTY step.
+  apiMock.chapterBatchCancel.mockResolvedValue({
+    step: "",
+    push_group_id: "",
+    results: [
+      {
+        chapter_id: 201, verdict: "queued", reason_code: "", reason: "",
+        task_id: 9, position: null,
+        row: { ...QUEUED, state: "cancelled" as const, state_label: "Cancelled" },
+      },
+    ],
+  });
+  renderPage();
+  await screen.findByText("Queued chapter");
+
+  fireEvent.click(screen.getByLabelText("Select Queued chapter"));
+  fireEvent.click(screen.getByTestId("push-cancel"));
+
+  expect(await screen.findByTestId("chapter-push-receipt-line"))
+    .toHaveProperty("textContent", "Cancel: 1 queued.");
+});
+
+test("a verdict for a chapter the server can no longer project still renders", async () => {
+  apiMock.chapterBatchPush.mockResolvedValue({
+    step: "step01",
+    push_group_id: "grp-5",
+    results: [
+      {
+        chapter_id: 999, verdict: "refused", reason_code: "unknown_chapter",
+        reason: "this chapter no longer exists",
+        task_id: null, position: null,
+        // The server projects the row after the act; a deleted chapter
+        // projects to null.
+        row: null,
+      },
+    ],
+  });
+  renderPage();
+  await screen.findByText("Shapes Around Us");
+
+  fireEvent.click(screen.getByLabelText("Select Shapes Around Us"));
+  fireEvent.click(screen.getByTestId("push-step01"));
+
+  const verdict = await screen.findByTestId("chapter-999-verdict");
+  expect(verdict.textContent).toContain("Chapter 999");
+  expect(screen.getByText("this chapter no longer exists")).toBeDefined();
+});
+
+test("a row and its open drawer never share an upload id", async () => {
+  const { container } = renderPage();
+  await screen.findByText("Numbers Beyond 20");
+
+  // Row 102 has both lanes available, so its primary action opens the
+  // drawer; row 103 is Post-only and carries its upload inline.
+  fireEvent.click(screen.getByText("Measurement"));
+  await screen.findByTestId("chapter-103-drawer");
+
+  const ids = [...container.querySelectorAll("input[type=file]")]
+    .map((input) => input.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids).toContain("chapter-103-upload-master-post");
+  expect(ids).toContain("chapter-103-drawer-upload-master-post");
+  // A lane this run does not have is never offered a reviewed upload.
+  expect(ids).not.toContain("chapter-103-drawer-upload-master-pre");
+  expect(ids).not.toContain("chapter-103-drawer-upload-concept-pre");
 });

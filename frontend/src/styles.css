@@ -1806,6 +1806,25 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* Staging asks for the publication before it spends the upload, so the
+   chosen-file form only exists while a file is waiting to be staged. */
+.chapter-stage-form {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  min-width: 0;
+}
+.chapter-stage-form .field { margin-bottom: 0; }
+.chapter-stage-form input { max-width: 100%; }
+.chapter-stage-source {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
 
 /* ---- drawer ---- */
 .chapter-drawer-row td { background: var(--panel-2); }

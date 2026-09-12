@@ -51,7 +51,6 @@ export default function ChapterRowUpload({
   onUploaded,
   sourceBook = "",
   chapterDurationMinutes = 0,
-  bookSources = [],
   label,
   compact = false,
 }: {
@@ -65,8 +64,6 @@ export default function ChapterRowUpload({
   /** Source slot only: recorded on the batch row with the staged file. */
   sourceBook?: string;
   chapterDurationMinutes?: number;
-  /** Source slot only: the known publications, for the suggestion list. */
-  bookSources?: string[];
   label?: string;
   compact?: boolean;
 }) {
@@ -190,9 +187,13 @@ export default function ChapterRowUpload({
               inputMode="numeric"
               value={minutes}
               disabled={disabled || busy}
-              placeholder="optional"
+              placeholder="e.g. 200"
               onChange={(e) => setMinutes(e.target.value)}
             />
+            <div className="hint mt-4">
+              Needed only when the accepted duration registry has no row for
+              this chapter; the registry value wins when it has one.
+            </div>
           </div>
           <div className="hint">
             The publication becomes this run's Concept Source and the

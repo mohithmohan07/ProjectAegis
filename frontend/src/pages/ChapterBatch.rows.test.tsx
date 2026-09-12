@@ -26,6 +26,7 @@ import ChapterBatch from "./ChapterBatch";
  */
 
 const apiMock = vi.hoisted(() => ({
+  vocab: vi.fn(),
   chapterBatchList: vi.fn(),
   chapterBatchDetail: vi.fn(),
   chapterBatchStageSource: vi.fn(),
@@ -121,8 +122,18 @@ let storage: ReturnType<typeof spyOnBrowserStorage>;
 beforeEach(() => {
   apiMock.chapterBatchList.mockReset();
   apiMock.chapterBatchStageSource.mockReset();
+  apiMock.vocab.mockReset();
   runConsoleMock.useRunConsole.mockReset();
+  apiMock.vocab.mockResolvedValue({ book_sources: ["NCERT", "Seed to Plant"] });
   apiMock.chapterBatchList.mockResolvedValue(PAGE);
+  apiMock.chapterBatchStageSource.mockResolvedValue({
+    ...row(2, "Numbers"),
+    job_id: 71,
+    source_filename: "numbers.pdf",
+    source_book: "Seed to Plant",
+    state: "source_staged",
+    state_label: "Source staged",
+  });
   storage = spyOnBrowserStorage();
 });
 
@@ -157,6 +168,35 @@ test("three rows mount three independent uploads with three distinct DOM ids", a
   expect(new Set(ids).size).toBe(3);
 });
 
+test("staging names the publication before it spends the upload", async () => {
+  const { container } = renderPage();
+  await screen.findByText("Numbers");
+
+  const second = container.querySelector<HTMLInputElement>("#chapter-2-upload-source");
+  expect(second).not.toBeNull();
+  const file = new File(["%PDF-1.4"], "numbers.pdf", { type: "application/pdf" });
+  fireEvent.change(second as HTMLInputElement, { target: { files: [file] } });
+
+  // Picking the file arms the form; nothing is staged yet, because
+  // source_book is the run's Concept Source and its extracted
+  // Post-Learning Question Source (Q42/Q45) and a blank one blocks the
+  // database upload later.
+  expect(apiMock.chapterBatchStageSource).not.toHaveBeenCalled();
+  const book = await screen.findByLabelText("Source (publication)");
+  expect(book.getAttribute("list")).toBe("chapter-book-sources");
+  fireEvent.change(book, { target: { value: "Seed to Plant" } });
+  fireEvent.change(screen.getByLabelText("Chapter duration (minutes)"), {
+    target: { value: "200" },
+  });
+  fireEvent.click(screen.getByText("Stage source"));
+
+  await waitFor(() => {
+    expect(apiMock.chapterBatchStageSource).toHaveBeenCalledTimes(1);
+  });
+  expect(apiMock.chapterBatchStageSource)
+    .toHaveBeenCalledWith(2, file, "Seed to Plant", 200);
+});
+
 test("one row's failure stays in that row", async () => {
   apiMock.chapterBatchStageSource.mockRejectedValueOnce(
     new Error("the source could not be staged"),
@@ -168,6 +208,7 @@ test("one row's failure stays in that row", async () => {
   expect(second).not.toBeNull();
   const file = new File(["%PDF-1.4"], "numbers.pdf", { type: "application/pdf" });
   fireEvent.change(second as HTMLInputElement, { target: { files: [file] } });
+  fireEvent.click(await screen.findByText("Stage source"));
 
   await waitFor(() => {
     expect(apiMock.chapterBatchStageSource).toHaveBeenCalledTimes(1);
