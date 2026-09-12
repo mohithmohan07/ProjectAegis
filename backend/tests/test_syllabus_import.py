@@ -622,7 +622,9 @@ def test_a_database_that_already_holds_the_split_is_realigned(
         "Natural and Human Resources: Management and Sustainability"
     )
     # Realigning a unit moves the row; it never recreates it, so the work
-    # attached to the chapter survives.
-    assert stray.id == topic.chapter_id
-    assert db.query(models.Topic).filter(
-        models.Topic.chapter_id == stray.id).count() == 1
+    # attached to the chapter survives. Asserted on THIS topic rather than on a
+    # count for the chapter id: SQLite does not enforce the foreign key, so a
+    # count picks up any other test that happened to use the same id.
+    db.refresh(topic)
+    assert topic.chapter_id == stray.id
+    assert db.get(models.Topic, topic.id) is not None
