@@ -3205,3 +3205,53 @@ stage or release gate is touched; the queue decides only when an existing
 service call runs and records that it did. Rule 1 is satisfied by construction:
 admission order, leases, attempt counters and per-row state are mechanics, and
 the only semantic reads are two durable markers the engine itself wrote.
+
+
+## Q54 — decided — one CBSE unit, not two, and units that follow the workbooks
+
+The owner, looking at CBSE Class 10 Social Science:
+
+> "Keep this alone. Natural and Human Resources: Management and Sustainability"
+> … "remove one of them"
+
+The supplied CBSE workbook writes one unit two ways — `NATURAL AND HUMAN
+RESOURCES: MANAGEMENT AND SUSTAINABILITY (10_CBSE)` on two rows and
+`… RESOURCES : MANAGEMENT …` on a third — so the catalogue imported it as two
+units and split *Minerals and Energy Resources* away from *Resources and
+Development* and *Forest and Wildlife Resources*. The owner named the spelling
+to keep.
+
+Recorded as an explicit correction for this one unit, in the shape Q43 used,
+rather than a rule that strips spaces before colons everywhere: a general
+reformat would silently merge units elsewhere that are genuinely distinct, and
+nobody asked for that.
+
+**A unit rename never reached an existing row.** The chapter code is built from
+board, grade, subject and title — not the unit — so a chapter whose unit changed
+still matched `desired`, the reconcile move loop skipped it, and
+`upsert_chapters` skips every code it already holds. The stored unit was frozen
+at first import, which is how the split survived every redeploy. `refresh_syllabus`
+now realigns a stored unit to the workbook that lists it, and reports the count.
+
+That realignment is deliberately **not** behind the reconcile guard, which
+exists to protect deletion from a partial deploy: realigning only copies a unit
+from a workbook that was actually loaded, onto a chapter that workbook lists, so
+a missing file leaves those chapters alone.
+
+It also **skips ambiguous codes**. 41 chapter codes in the supplied workbooks
+appear under more than one unit (`06KSAT_LongJump` under Practical and Theory;
+`06CBSS_GrassrootsDe` under Government, Rural Administration and Urban
+Administration) because the code truncates the title and those rows collapse
+onto one chapter. There is no single right unit for them, so realigning would
+move 41 chapters to whichever row was read last. They keep what they were
+imported under; only unambiguous renames are corrected.
+
+Measured against the real workbook: a database holding the split realigns
+exactly one chapter on the next boot and zero on the one after, leaving a single
+unit with all three chapters, the chapter row id unchanged and its attached work
+intact.
+
+**Still open, reported not fixed:** those 41 colliding codes mean two genuinely
+different chapters can share one catalogue row. That is a pre-existing property
+of the truncated code scheme, not something this change introduced, and
+repairing it is a separate decision for the owner.

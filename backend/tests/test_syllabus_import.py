@@ -528,3 +528,101 @@ def test_bootstrap_adds_ncf_once_and_exposes_clean_chapter_deposit_labels(
     assert again["pruned"] == 0
     assert {chapter.id for chapter in isolated_db.query(models.Chapter).filter_by(board="NCF")} == ids
     assert "NCF" not in svc.ALL_SYLLABUS_BOARDS
+
+
+# --------------------------------------------------------------------------- #
+# Owner correction, 12 September 2026: one CBSE unit, not two
+# --------------------------------------------------------------------------- #
+
+def _social_science_rows(tmp_path, tag=""):
+    """The supplied workbook's own inconsistency: one unit spelled two ways.
+
+    ``tag`` PREFIXES each title to keep two tests' chapter codes apart. It has
+    to be a prefix: ``make_chapter_code`` truncates the title, so a suffix is
+    cut off and both tests would collide on one code — the second import would
+    silently skip and inherit the first test's already-corrected rows.
+    """
+    path = tmp_path / f"cbse_social{tag}.xlsx"
+    _write_xlsx(path, [
+        ["Grade", "Subject", "Unit", "Chapter"],
+        ["10", "Social Science",
+         "NATURAL AND HUMAN RESOURCES: MANAGEMENT AND SUSTAINABILITY (10_CBSE)",
+         f"{tag}Resources and Development"],
+        ["10", "Social Science",
+         "NATURAL AND HUMAN RESOURCES: MANAGEMENT AND SUSTAINABILITY (10_CBSE)",
+         f"{tag}Forest and Wildlife Resources"],
+        ["10", "Social Science",
+         "NATURAL AND HUMAN RESOURCES : MANAGEMENT AND SUSTAINABILITY (10_CBSE)",
+         f"{tag}Minerals and Energy Resources"],
+    ], sheet_name="Grade 10")
+    return path
+
+
+def test_the_split_cbse_unit_imports_as_one(db, tmp_path):
+    """A stray space before the colon must not make two units of one."""
+    svc.import_syllabus_paths(db, [_social_science_rows(tmp_path, "Alpha ")])
+
+    units = {
+        chapter.unit
+        for chapter in db.query(models.Chapter).filter(
+            models.Chapter.grade == "10",
+            models.Chapter.chapter_title.in_((
+                "Alpha Resources and Development",
+                "Alpha Forest and Wildlife Resources",
+                "Alpha Minerals and Energy Resources",
+            )),
+        )
+    }
+    assert units == {
+        "Natural and Human Resources: Management and Sustainability",
+    }
+
+
+def test_a_database_that_already_holds_the_split_is_realigned(
+    db, tmp_path, monkeypatch,
+):
+    """The deployed case: the split is already stored and must be repaired.
+
+    A unit rename never reached an existing row before — the chapter code is
+    built from board, grade, subject and title, so a renamed unit still
+    matched and every pass skipped it. The stored unit was frozen at first
+    import, which is how the split survived.
+    """
+    monkeypatch.setattr(
+        svc, "_CBSE_GRADE10_SOCIAL_SCIENCE_UNIT_CORRECTIONS", {},
+    )
+    rows = _social_science_rows(tmp_path, "Beta ")
+    svc.import_syllabus_paths(db, [rows])
+    before = {
+        chapter.chapter_title: chapter.unit
+        for chapter in db.query(models.Chapter).filter(
+            models.Chapter.chapter_title == "Beta Minerals and Energy Resources")
+    }
+    assert before["Beta Minerals and Energy Resources"] == (
+        "Natural and Human Resources : Management and Sustainability"
+    )
+
+    # The correction is in place on the next boot.
+    monkeypatch.undo()
+    stray = db.query(models.Chapter).filter(
+        models.Chapter.chapter_title == "Beta Minerals and Energy Resources").one()
+    topic = models.Topic(chapter_id=stray.id, topic_title="Attached work")
+    db.add(topic)
+    db.commit()
+
+    # refresh_syllabus re-reads the BUNDLED workbooks, which the suite points
+    # at an empty directory; hand it this test's workbook instead.
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [rows])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    result = svc.refresh_syllabus(db, prune=False)
+    assert result["realigned_units"] >= 1
+
+    db.refresh(stray)
+    assert stray.unit == (
+        "Natural and Human Resources: Management and Sustainability"
+    )
+    # Realigning a unit moves the row; it never recreates it, so the work
+    # attached to the chapter survives.
+    assert stray.id == topic.chapter_id
+    assert db.query(models.Topic).filter(
+        models.Topic.chapter_id == stray.id).count() == 1
