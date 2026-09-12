@@ -345,7 +345,11 @@ export function publishPlan(
  * The row's readable identity for a dialog, a receipt line or the table
  * (Q42: a person reads the label, the machine identity stays on the row).
  */
-export function chapterLabel(row: ChapterBatchRow): string {
+export function chapterLabel(
+  row: ChapterBatchRow | null | undefined,
+  fallback = "This chapter",
+): string {
+  if (!row) return fallback;
   return displayLabel(
     row.chapter_display_name,
     row.chapter_title,
@@ -354,7 +358,8 @@ export function chapterLabel(row: ChapterBatchRow): string {
 }
 
 export interface ChapterPushSummary {
-  step: ChapterBatchStep;
+  /** `""` on a cancel/retry envelope, which carries no step. */
+  step: ChapterBatchStep | "";
   total: number;
   queued: number;
   already_queued: number;
@@ -372,9 +377,16 @@ const STEP_WORD: Record<ChapterBatchStep, string> = {
   publish: "Publish",
 };
 
-/** Counts by verdict, for the receipt line after a push. */
+/**
+ * Counts by verdict, for the receipt line after a push.
+ *
+ * `/cancel` and `/retry` reuse the push envelope with an EMPTY `step`, so
+ * the caller names the act it sent; without that the sentence would open
+ * with a bare colon and call a cancelled row "queued" with no context.
+ */
 export function summarisePush(
   result: ChapterBatchPushResult,
+  actionLabel = "",
 ): ChapterPushSummary {
   const results = result.results ?? [];
   const counts = {
@@ -406,7 +418,10 @@ export function summarisePush(
   if (counts.already_queued) parts.push(`${counts.already_queued} already queued`);
   if (counts.already_running) parts.push(`${counts.already_running} already running`);
   if (counts.refused) parts.push(`${counts.refused} refused`);
-  const step = STEP_WORD[result.step] ?? result.step;
+  const step = STEP_WORD[result.step as ChapterBatchStep]
+    || actionLabel.trim()
+    || result.step
+    || "Queue";
   return {
     step: result.step,
     total: results.length,

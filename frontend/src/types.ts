@@ -1082,11 +1082,23 @@ export interface ChapterBatchPushOutcome {
   reason: string;                     // human sentence, "" when queued
   task_id: number | null;
   position: number | null;
-  row: ChapterBatchRow;               // freshly projected, for an optimistic patch
+  /**
+   * Freshly projected, for an optimistic patch. The server projects it
+   * after the act, so a chapter that no longer exists (an `unknown_chapter`
+   * refusal, a row left over from a pruned syllabus) carries `null` here.
+   */
+  row: ChapterBatchRow | null;
 }
 
 export interface ChapterBatchPushResult {
-  step: ChapterBatchStep;
+  /**
+   * Appendix A declares a `ChapterBatchStep` here, and `/push` sends one.
+   * `/cancel` and `/retry` share this envelope and answer with an EMPTY
+   * step (`api/chapter_batches.py::_bulk`), so the declared type is widened
+   * rather than lying to the receipt, which otherwise prints a sentence
+   * beginning with a bare colon.
+   */
+  step: ChapterBatchStep | "";
   push_group_id: string;
   results: ChapterBatchPushOutcome[];
 }

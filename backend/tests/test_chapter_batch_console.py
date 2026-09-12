@@ -247,7 +247,7 @@ def test_push_refuses_a_chapter_with_no_source(session):
 def test_a_second_push_cannot_start_a_second_run(session):
     chapter = _chapter(session, code="10CBMA_T10")
     job = _job(session, status="converted")
-    _row(session, chapter, job)
+    row = _row(session, chapter, job)
     session.flush()
 
     first = chapter_queue.enqueue_one(
@@ -259,7 +259,10 @@ def test_a_second_push_cannot_start_a_second_run(session):
         session, chapter.id, step="step01", push_group_id="g2",
     )
     assert second["verdict"] == "already_queued"
+    # Scoped to THIS chapter: the queue is global, and another test's row
+    # being live says nothing about this one.
     live = session.query(models.ChapterBatchTask).filter(
+        models.ChapterBatchTask.batch_row_id == row.id,
         models.ChapterBatchTask.state.in_(models.CHAPTER_BATCH_LIVE_TASK_STATES)
     ).count()
     assert live == 1
@@ -311,7 +314,8 @@ def test_a_blocked_chapter_is_refused_until_a_person_returns_it(session):
 
     returned = chapter_queue.retry_one(session, chapter.id)
     assert returned["verdict"] == "queued"
-    task = session.query(models.ChapterBatchTask).one()
+    task = session.query(models.ChapterBatchTask).filter(
+        models.ChapterBatchTask.batch_row_id == row.id).one()
     assert task.state == "queued"
     assert task.blocked_kind == ""
 
