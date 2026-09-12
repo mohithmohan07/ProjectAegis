@@ -628,3 +628,314 @@ def test_a_database_that_already_holds_the_split_is_realigned(
     db.refresh(topic)
     assert topic.chapter_id == stray.id
     assert db.get(models.Topic, topic.id) is not None
+
+
+# --------------------------------------------------------------------------- #
+# Chapter-code de-collision
+# --------------------------------------------------------------------------- #
+# The base code truncates the title at 12 characters and carries no unit, so
+# distinct chapters can want the same code. ``upsert_chapters`` skips a code it
+# already has, which silently dropped the later chapter: the supplied workbooks
+# contested 82 codes and 77 chapters never reached the catalogue. Every one of
+# these tests is about a chapter NOT being lost, and about the recovery costing
+# no existing chapter its identity.
+
+
+def _decollision_rows(tmp_path, prefix):
+    """Two chapters that both want one base code, plus one that is alone."""
+    path = tmp_path / f"cbse-{prefix.strip().lower()}-collide.xlsx"
+    _write_xlsx(path, [
+        ["Grade", "Subject", "Unit", "Chapter"],
+        ["7", "Science", "Nutrition", f"{prefix}Life Processes"],
+        ["7", "Science", "Transport", f"{prefix}Life Processes"],
+        ["7", "Science", "Nutrition", f"{prefix}Photosynthesis"],
+    ])
+    return path
+
+
+def test_a_stored_chapter_code_is_never_recomputed_by_the_de_collision():
+    """``make_chapter_code`` is identity and must stay byte-for-byte stable.
+
+    ``chapter_code`` is in ``CHECKPOINT_TARGET_IDENTITY_FIELDS`` and inside the
+    content-addressed decision ids, so moving one refuses a paid run mid-flight
+    and re-asks an owner pause that was already answered.
+    """
+    from app.services import directory
+
+    assert directory.make_chapter_code(
+        "CBSE", "10", "Science", "Life Processes") == "10CBSC_LifeProcesse"
+    assert directory.make_chapter_code(
+        "CBSE", "10", "Geography", "Agriculture") == "10CBSS_Agriculture"
+    assert directory.make_chapter_code(
+        "CBSE", "09", "English", "Julius Caesar Act V Scene 5",
+    ) == "09CBEL_JuliusCaesar"
+
+
+def test_the_code_holder_keeps_the_bare_code_and_only_the_rival_is_suffixed():
+    from app.services import directory
+
+    holders = {"10CBSC_LifeProcesse": ("Nutrition", "life processes")}
+    held = directory.resolve_chapter_code(
+        "CBSE", "10", "Science", "Nutrition", "Life Processes", holders)
+    rival = directory.resolve_chapter_code(
+        "CBSE", "10", "Science", "Transport", "Life Processes", holders)
+
+    assert held == "10CBSC_LifeProcesse"
+    assert rival.startswith("10CBSC_LifeProcesse")
+    assert rival != held
+    # No holder at all is the ordinary case: the base code, unchanged.
+    assert directory.resolve_chapter_code(
+        "CBSE", "10", "Science", "Transport", "Life Processes", None,
+    ) == "10CBSC_LifeProcesse"
+
+
+def test_a_suffixed_code_is_still_a_whole_chapter_code_to_every_reader():
+    """The tail carries no separator on purpose.
+
+    ``_CHAPTER_CODE`` matches ``..._[A-Za-z0-9]+``. A dash or underscore in the
+    tail would end the match early and every tag reader would silently resolve
+    a suffixed chapter as the anchor chapter.
+    """
+    from app.services import directory
+
+    holders = {"09CBEL_JuliusCaesar": ("Drama", "julius caesar act v scene 5")}
+    code = directory.resolve_chapter_code(
+        "CBSE", "09", "English", "Poetry", "Julius Caesar Act III Scene 2",
+        holders)
+
+    match = directory._CHAPTER_CODE.search(code)
+    assert match is not None and match.group(0) == code
+    assert code.isalnum() is False  # the single "_" of the base is still there
+    assert code.replace("_", "").isalnum()
+    assert len(code) <= 64  # Chapter.chapter_code is String(64)
+
+
+def test_the_readable_tail_differentiates_rather_than_repeating_the_slug():
+    """The tail exists to be read; the digest is what guarantees uniqueness."""
+    from app.services import directory
+
+    # Title differs after the truncation point -> the title's trailing words.
+    holders = {"09CBEL_JuliusCaesar": ("Drama", "julius caesar act v scene 5")}
+    assert "Scene2" in directory.resolve_chapter_code(
+        "CBSE", "09", "English", "Poetry", "Julius Caesar Act III Scene 2",
+        holders)
+
+    # Same title, two units -> the unit's leading words, not the title again.
+    holders = {"10CBSC_LifeProcesse": ("Nutrition", "life processes")}
+    rival = directory.resolve_chapter_code(
+        "CBSE", "10", "Science", "Control and Coordination", "Life Processes",
+        holders)
+    assert "ControlAnd" in rival
+    assert "LifeProcesseLifeProcesses" not in rival
+
+
+def test_two_rivals_for_one_code_never_collide_with_each_other():
+    from app.services import directory
+
+    holders = {"10CBSS_Agriculture": ("Agriculture", "agriculture")}
+    codes = {
+        directory.resolve_chapter_code(
+            "CBSE", "10", subject, unit, "Agriculture", holders)
+        for subject, unit in (
+            ("Geography", "Agriculture"),
+            ("Economics", "Sectors of the Indian Economy"),
+            ("Economics", "Development"),
+        )
+    }
+    assert len(codes) == 3
+
+
+def test_the_de_collision_recovers_every_chapter_the_workbook_lists(
+    db, tmp_path,
+):
+    svc.import_syllabus_paths(db, [_decollision_rows(tmp_path, "Dc1 ")])
+
+    chapters = db.query(models.Chapter).filter(
+        models.Chapter.chapter_title.like("Dc1 %")).all()
+    assert {(c.unit, c.chapter_title) for c in chapters} == {
+        ("Nutrition", "Dc1 Life Processes"),
+        ("Transport", "Dc1 Life Processes"),
+        ("Nutrition", "Dc1 Photosynthesis"),
+    }
+    assert len({c.chapter_code for c in chapters}) == 3
+
+
+def test_reimporting_the_same_workbook_creates_nothing_and_moves_nothing(
+    db, tmp_path,
+):
+    """Order settles who holds a contested code only while nobody holds it.
+
+    Once a chapter carries the bare code the database says so, so a second
+    import — even one that reads the rows the other way round — cannot re-key
+    it. That is the property the whole de-collision rests on.
+    """
+    path = _decollision_rows(tmp_path, "Dc2 ")
+    svc.import_syllabus_paths(db, [path])
+    before = {
+        c.chapter_code: (c.unit, c.chapter_title)
+        for c in db.query(models.Chapter).filter(
+            models.Chapter.chapter_title.like("Dc2 %"))
+    }
+
+    rows = svc.parse_workbook(path, default_board="CBSE")
+    counts = svc.upsert_chapters(db, list(reversed(rows)))
+
+    assert counts["created"] == 0
+    after = {
+        c.chapter_code: (c.unit, c.chapter_title)
+        for c in db.query(models.Chapter).filter(
+            models.Chapter.chapter_title.like("Dc2 %"))
+    }
+    assert after == before
+
+
+def test_a_catalogue_built_before_the_de_collision_keeps_every_code(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """The upgrade case, which is the one that can hurt a live catalogue.
+
+    A chapter imported under the old rule holds the bare base code and may be
+    mid-run. The refresh must add the chapter that was dropped beside it and
+    leave the stored code exactly where it is.
+    """
+    path = _decollision_rows(tmp_path, "Dc3 ")
+    rows = svc.parse_workbook(path, default_board="CBSE")
+
+    # Reproduce the old behaviour: the base code for everything, first row wins.
+    from app.services import directory
+    taken: set[str] = set()
+    for row in rows:
+        code = directory.make_chapter_code(
+            row.board, row.grade, row.subject, row.chapter)
+        if code in taken:
+            continue  # the chapter the old upsert dropped
+        taken.add(code)
+        isolated_db.add(models.Chapter(
+            chapter_code=code, board=row.board, grade=row.grade,
+            subject=row.subject, unit=row.unit, chapter_title=row.chapter,
+            chapter_display_name=row.chapter,
+        ))
+    isolated_db.commit()
+    assert isolated_db.query(models.Chapter).count() == 2  # one was lost
+    before = {
+        c.id: c.chapter_code for c in isolated_db.query(models.Chapter).all()
+    }
+
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [path])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    result = svc.refresh_syllabus(isolated_db)
+
+    assert result["created"] == 1
+    assert result["pruned"] == 0
+    after = {
+        c.id: c.chapter_code for c in isolated_db.query(models.Chapter).all()
+    }
+    assert {cid: after[cid] for cid in before} == before
+    assert isolated_db.query(models.Chapter).count() == 3
+
+
+def test_the_refresh_never_prunes_the_chapter_it_just_de_collided(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """The prune deletes any chapter whose code is not in ``desired``.
+
+    ``refresh_syllabus`` and ``upsert_chapters`` therefore have to resolve
+    codes from the SAME holders map; if they disagreed on one code the refresh
+    would delete the chapter the upsert had created moments earlier.
+    """
+    path = _decollision_rows(tmp_path, "Dc4 ")
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [path])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+
+    first = svc.refresh_syllabus(isolated_db)
+    assert first["created"] == 3 and first["pruned"] == 0
+
+    second = svc.refresh_syllabus(isolated_db)
+    assert second["created"] == 0
+    assert second["pruned"] == 0
+    assert second["contested_codes"] == []
+    assert isolated_db.query(models.Chapter).count() == 3
+
+
+def test_a_renamed_unit_does_not_re_key_the_chapter_it_renames(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """A unit correction must reach the stored chapter, not fork it.
+
+    The holder of a base code is recorded as (unit, title), so a re-issued
+    workbook that renames a unit reads as a RIVAL identity unless the stored
+    chapter is reconciled to it. Left unreconciled the row mints a suffixed
+    code, a second chapter appears beside the first, and the original — now
+    claimed by nothing — becomes a prune candidate.
+    """
+    path = tmp_path / "cbse-rename-collide.xlsx"
+    _write_xlsx(path, [
+        ["Grade", "Subject", "Unit", "Chapter"],
+        ["7", "Science", "Nutrition in Plants", "Dc5 Life Processes"],
+        ["7", "Science", "Transport", "Dc5 Life Processes"],
+    ])
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [path])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    svc.refresh_syllabus(isolated_db)
+    held = isolated_db.query(models.Chapter).filter_by(
+        unit="Nutrition in Plants").one()
+    before = (held.id, held.chapter_code)
+
+    _write_xlsx(path, [
+        ["Grade", "Subject", "Unit", "Chapter"],
+        ["7", "Science", "Nutrition", "Dc5 Life Processes"],   # unit renamed
+        ["7", "Science", "Transport", "Dc5 Life Processes"],
+    ])
+    result = svc.refresh_syllabus(isolated_db)
+
+    assert result["created"] == 0
+    assert result["pruned"] == 0
+    assert result["realigned_units"] == 1
+    isolated_db.refresh(held)
+    assert (held.id, held.chapter_code) == before
+    assert held.unit == "Nutrition"  # the rename reached it
+    assert isolated_db.query(models.Chapter).count() == 2
+    # The rival is matched by its own unchanged identity, so its suffixed code
+    # is unchanged too — a rename next door never moves the chapter beside it.
+    assert isolated_db.query(models.Chapter).filter_by(
+        unit="Transport").one().chapter_code.startswith("07CBSC_Dc5LifeProce")
+
+
+def test_a_legacy_chapter_occupying_a_code_no_longer_hides_the_workbook_row(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """A code is held by whichever chapter stores it, not by a recomputation.
+
+    A chapter whose subject was folded, or whose row arrived through a bulk
+    import, stores a code its own fields no longer rebuild. Deciding ownership
+    by recomputing the base would read that code as unowned, the workbook row
+    would resolve straight to it, and ``upsert_chapters`` would skip the row as
+    an existing code — losing the chapter exactly the way this change repairs.
+    """
+    path = tmp_path / "cbse-legacy-collide.xlsx"
+    _write_xlsx(path, [
+        ["Grade", "Subject", "Unit", "Chapter"],
+        ["7", "Science", "Nutrition", "Dc6 Life Processes"],
+    ])
+    from app.services import directory
+    taken = directory.make_chapter_code(
+        "CBSE", "07", "Science", "Dc6 Life Processes")
+    isolated_db.add(models.Chapter(
+        chapter_code=taken, board="CBSE", grade="07", subject="History",
+        unit="Legacy unit", chapter_title="Dc6 Something Else",
+        chapter_display_name="Dc6 Something Else",
+    ))
+    isolated_db.commit()
+    assert directory.make_chapter_code(
+        "CBSE", "07", "History", "Dc6 Something Else") != taken
+
+    monkeypatch.setattr(svc, "_discover_workbooks", lambda: [path])
+    monkeypatch.setattr(svc, "_missing_expected_files", lambda: [])
+    result = svc.refresh_syllabus(isolated_db, prune=False)
+
+    assert result["created"] == 1
+    listed = isolated_db.query(models.Chapter).filter_by(
+        chapter_title="Dc6 Life Processes").one()
+    assert listed.chapter_code.startswith(taken) and listed.chapter_code != taken
+    assert isolated_db.query(models.Chapter).filter_by(
+        chapter_title="Dc6 Something Else").one().chapter_code == taken

@@ -3251,7 +3251,125 @@ exactly one chapter on the next boot and zero on the one after, leaving a single
 unit with all three chapters, the chapter row id unchanged and its attached work
 intact.
 
-**Still open, reported not fixed:** those 41 colliding codes mean two genuinely
-different chapters can share one catalogue row. That is a pre-existing property
-of the truncated code scheme, not something this change introduced, and
-repairing it is a separate decision for the owner.
+**Reported not fixed here, fixed in [Q55](#q55--decided--109-chapters-recovered-from-74-colliding-chapter-codes):**
+those colliding codes mean two genuinely different chapters share one catalogue
+row. That is a pre-existing property of the truncated code scheme, not something
+this change introduced. The owner then asked for it, and Q55 measured the real
+extent — 74 contested codes hiding 109 chapters — and recovered them.
+
+## Q55 — decided — 109 chapters recovered from 74 colliding chapter codes
+
+The owner, on the last line of Q54:
+
+> "fix the 41 colliding chapter codes"
+
+**What was measured.** `make_chapter_code` truncates the title at 12 characters
+and carries no unit, so distinct chapters can want the same code, and
+`upsert_chapters` skips any code the catalogue already holds — silently, with
+no record. Against the supplied workbooks:
+
+| | count |
+| --- | --- |
+| base codes claimed by more than one identity | 74 |
+| chapters those codes hid | **109** |
+| …because two different titles truncate the same (`Julius Caesar Act V Scene 5` / `… Act III Scene 2`) | 42 |
+| …because one title appears under two units (`Long Jump` under Practical and Theory) | 32 |
+
+The "41" in Q54 was the count of codes the *unit realign* pass had to skip, not
+the count of chapters lost. The real figures are above.
+
+The 32 same-title cases are separate chapters, not duplicates: the workbooks
+list them on separate rows, under separate units, and each is taught
+separately. They become separate catalogue rows.
+
+**The fix: a discriminating tail, and only for the chapter that would otherwise
+have no row at all.** `directory.resolve_chapter_code` is now the one place a
+code is minted from a syllabus row. It returns the bare base code unless
+another identity already holds it, in which case it appends
+`chapter_code_suffix` — readable words plus a 6-character digest of the
+identity (`10CBSC_LifeProcesseControlAndx1756dc`). The tail is **alphanumeric
+with no separator**: `_CHAPTER_CODE` matches `..._[A-Za-z0-9]+`, so a dash or
+underscore would end the match early and every tag reader would silently
+resolve a suffixed chapter as the anchor chapter. The longest possible code is
+42 characters, inside `Chapter.chapter_code`'s `String(64)`.
+
+The readable half is the title's trailing words, which is where these titles
+actually differ. When those words say nothing the 12-character slug does not
+already say — the title was not truncated, or its tail is the slug over again —
+the unit's leading words are used instead. Uniqueness never depends on it; the
+digest does that.
+
+`make_chapter_code` itself is **unchanged, byte for byte**. Every code in the
+catalogue today was built with it, and `chapter_code` is identity: it is one of
+`models.CHECKPOINT_TARGET_IDENTITY_FIELDS` and it is inside the
+content-addressed decision ids. Moving one would refuse a paid run mid-flight
+and re-ask an owner pause that had already been answered.
+
+**Who holds a contested code is decided by the database, not by a table.** An
+earlier draft of this change carried a frozen 74-entry list of which chapter
+owns each contested code, generated from one day's workbooks. That list asserts
+a fact about production it has never checked, and a single wrong entry re-keys a
+live chapter. `syllabus_import.chapter_code_holders` reads the answer from the
+catalogue instead: a code is held by whichever chapter **stores** it, whatever a
+re-issued workbook now says and in whatever order its rows are read. Workbook
+order settles only codes that no chapter holds yet, and once a chapter exists
+the first rule pins it forever.
+
+Ownership is deliberately decided by the stored code rather than by recomputing
+each chapter's base. A chapter whose subject was folded, or whose row arrived
+through a bulk import, stores a code its own fields no longer rebuild; a
+recomputation reads that code as unowned, the workbook row resolves straight to
+it, and `upsert_chapters` skips the row as an existing code — losing the chapter
+in exactly the way this change repairs.
+
+One reconciliation on top of that: if no row claims the stored chapter's
+`(unit, title)` its unit was renamed — the Q54 correction is exactly this case —
+and the row that carries its title, if only one does and that identity is not
+already stored elsewhere, is treated as the same chapter. Without it a pending
+unit correction reads as a rival, the bare code goes unclaimed, and the
+reconcile pass re-keys a chapter that already exists.
+
+`refresh_syllabus` builds the holders **once** and hands the same map to
+`upsert_chapters`. The prune deletes any chapter whose code is not in `desired`,
+so if the two passes disagreed on a single code the refresh would delete the
+chapter the upsert had created moments earlier.
+
+**Measured on the real workbooks**, importing with the old code and then
+refreshing with the new one:
+
+```
+OLD import : created 2639, skipped 153, total_rows 2792
+UPGRADE    : created 109, skipped 2683, pruned 0, migrated 0, realigned_units 0
+             contested_codes []          retained_with_content []
+
+existing chapters whose CODE MOVED : 0
+existing chapters DELETED          : 0
+catalogue size                     : 2639 -> 2748
+every code distinct                : True      longest code: 42
+```
+
+A fresh import of the same workbooks produces 2748 chapters whose
+`(code, board, grade, subject, unit, title)` set is **identical** to the
+upgraded catalogue — the result does not depend on whether the collision was
+ever present.
+
+**Two readers were widened to match.** `bulk_import.reader` resolved a tagged
+chapter by exact code; a recovered chapter's tag still spells the base code, so
+it now matches the code *family* — rows whose own base code is that code, not
+merely rows whose code starts with it (`…Life` must not capture
+`…LifeProcesse`). And where a tag names a title that two catalogue chapters now
+carry, the tag cannot say which — it has board, grade, subject and title, but no
+unit — so the import binds to the first and **records the ambiguity** rather
+than choosing silently.
+
+**One prune case does change, and is protected.** A stored chapter whose
+`(unit, title)` no longer appears in any workbook used to keep its code in
+`desired` whenever some *unrelated* title truncated to the same slug — so an
+empty, genuinely superseded chapter could survive on a collision. Now the
+collision no longer claims its code, and it retires the way any superseded
+empty chapter does. A chapter with authored work, or with batch-console work,
+is retained and reported as before. On the supplied workbooks this arises
+zero times: `pruned 0`, `retained_with_content []`.
+
+**Not changed:** what a run produces, any model route, any review stage, and
+every code already stored.

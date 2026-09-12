@@ -1,6 +1,26 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q53 (chapter batch console, 12 September 2026).**
+**Latest owner amendment: Q55 (chapter-code de-collision, 12 September 2026).**
+The owner asked to fix the colliding chapter codes. Measured: 74 base codes were
+claimed by more than one identity and hid 109 chapters — 42 because two titles
+truncate to the same 12-character slug, 32 because one title appears under two
+units, which the workbooks list as separate chapters. `directory.resolve_chapter_code`
+is now the only place a code is minted from a syllabus row: the bare base code
+unless another identity holds it, else base + a readable, alphanumeric,
+separator-free tail carrying a digest of the identity (42 characters at most).
+`make_chapter_code` is unchanged byte for byte — `chapter_code` is checkpoint
+identity and is inside the content-addressed decision ids, so moving one would
+refuse a paid run mid-flight and re-ask an answered owner pause. Who holds a
+contested code is read from the DATABASE (`syllabus_import.chapter_code_holders`),
+never from a frozen table: the code belongs to whichever chapter stores it — not
+to a recomputation, which would miss a folded or bulk-imported row — and a
+renamed unit is reconciled to its stored chapter rather than reading as a rival.
+`refresh_syllabus` and `upsert_chapters` share one holders map, or the prune
+would delete what the upsert just created. Proven on the real workbooks: 109
+recovered, 0 codes moved, 0 deleted, and the upgraded catalogue identical to a
+fresh import. Nothing changes what a run produces. Q55 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q53 (chapter batch console, 12 September 2026).**
 The owner asked for one page listing every chapter with board/subject/grade
 filters, a per-row PDF upload, a push that takes many rows at once, unattended
 execution, a visible Step 01 completion, a per-row reviewed-file upload, then

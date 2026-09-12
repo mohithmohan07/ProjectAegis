@@ -2017,3 +2017,135 @@ def test_a_blank_lane_cell_stores_a_lane_rather_than_an_empty_string(db, tmp_pat
     # title, so query the stored form rather than the authored one.
     topic = db.query(models.Topic).filter_by(topic_title="Blank Lane").one()
     assert topic.pre_post_learning == "Post"
+
+
+# --------------------------------------------------------------------------- #
+# Reading a catalogue that has been de-collided (register Q55)
+# --------------------------------------------------------------------------- #
+# A chapter recovered from a colliding code carries ``base + discriminator``,
+# but a tagged title cell only ever spells the BASE code. The reader has to
+# find the whole code family, and no more than the family.
+
+
+def _nationalism_rows(region):
+    return [{
+        ("chapter", "chapter_title"):
+            f"The Rise of Nationalism in {region} (10_History_CBSE_NCERT)",
+        ("topic", "topic_title"): f"Topic 01: Nationalism in {region}",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): f"Nationalism in {region}",
+        ("concept", "concept_display_name"): f"Nationalism in {region}",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): f"10CBSS_Nat{region}_PL_T01_C01 Q01",
+        ("question", "question"): f"Why did nationalism rise in {region}?",
+        ("question", "marks"): "1",
+    }]
+
+
+def _catalogue_chapter(db, *, code, title, unit, subject="Social Science"):
+    chapter = models.Chapter(
+        chapter_code=code, board="CBSE", grade="10", subject=subject,
+        unit=unit, chapter_title=title, chapter_display_name=title,
+    )
+    db.add(chapter)
+    db.commit()
+    return chapter
+
+
+def test_a_de_collided_chapter_is_found_by_the_base_code_in_its_tag(db, tmp_path):
+    """The tag cannot spell the discriminator, so the reader matches the family.
+
+    Without this the concept mapping for a recovered chapter would not find its
+    catalogue row and would mint a second chapter on the anchor's bare code.
+    """
+    from app.services import directory
+
+    base = directory.make_chapter_code(
+        "CBSE", "10", "History", "The Rise of Nationalism in Asia")
+    existing = _catalogue_chapter(
+        db, code=base + directory.chapter_code_suffix(
+            base, "Nationalism", "The Rise of Nationalism in Asia"),
+        title="The Rise of Nationalism in Asia", unit="Nationalism")
+    assert existing.chapter_code != base
+
+    layout = layouts.layout("canonical-current")
+    path = _save(
+        _new_workbook_for(layout, {"objective": _nationalism_rows("Asia")}),
+        tmp_path, "family.xlsx")
+    counts = reader.import_workbook(db, path)
+
+    assert counts["chapters"] == 0  # bound to the catalogue row, not recreated
+    assert db.query(models.Chapter).filter_by(
+        chapter_title="The Rise of Nationalism in Asia").count() == 1
+    db.refresh(existing)
+    assert [topic.topic_title for topic in existing.topics]
+
+
+def test_a_longer_code_that_merely_starts_with_this_one_is_not_the_family(
+    db, tmp_path,
+):
+    """``…TheRiseOfNat`` must not capture ``…TheRiseOfNationalism``-style rows.
+
+    The family is the rows whose OWN base code is this code. A bare prefix
+    match would pull in an unrelated chapter and report a code collision that
+    does not exist.
+    """
+    from app.services import directory
+
+    short = directory.make_chapter_code("CBSE", "10", "History", "The Rise")
+    long_code = directory.make_chapter_code(
+        "CBSE", "10", "History", "The Rise of Nationalism in Asia")
+    assert long_code.startswith(short) and long_code != short
+    _catalogue_chapter(
+        db, code=long_code, title="The Rise of Nationalism in Asia",
+        unit="Nationalism")
+
+    rows = _nationalism_rows("Asia")
+    rows[0][("chapter", "chapter_title")] = "The Rise (10_History_CBSE_NCERT)"
+    layout = layouts.layout("canonical-current")
+    path = _save(
+        _new_workbook_for(layout, {"objective": rows}), tmp_path, "prefix.xlsx")
+    counts = reader.import_workbook(db, path)
+
+    assert not [
+        issue for issue in counts["issues"]
+        if "chapter_code_collision" in issue
+    ], counts["issues"]
+    assert db.query(models.Chapter).filter_by(
+        chapter_title="The Rise").one().chapter_code == short
+
+
+def test_a_title_two_catalogue_chapters_carry_records_the_ambiguity(
+    db, tmp_path,
+):
+    """The tag has board, grade, subject and title — but no unit.
+
+    Recovering the same-title-different-unit chapters means a tag can now name
+    two catalogue rows. The import binds to the first and says so; it does not
+    choose silently.
+    """
+    from app.services import directory
+
+    base = directory.make_chapter_code(
+        "CBSE", "10", "History", "The Rise of Nationalism in Asia")
+    first = _catalogue_chapter(
+        db, code=base, title="The Rise of Nationalism in Asia",
+        unit="Nationalism")
+    _catalogue_chapter(
+        db, code=base + directory.chapter_code_suffix(
+            base, "Imperialism", "The Rise of Nationalism in Asia"),
+        title="The Rise of Nationalism in Asia", unit="Imperialism")
+
+    layout = layouts.layout("canonical-current")
+    path = _save(
+        _new_workbook_for(layout, {"objective": _nationalism_rows("Asia")}),
+        tmp_path, "ambiguous.xlsx")
+    counts = reader.import_workbook(db, path)
+
+    assert any(
+        "chapter_title_ambiguous" in issue for issue in counts["issues"]
+    ), counts["issues"]
+    assert counts["chapters"] == 0
+    db.refresh(first)
+    assert [topic.topic_title for topic in first.topics]

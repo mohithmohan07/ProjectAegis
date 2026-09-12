@@ -12,6 +12,7 @@ gives no signal we default it to "<Subject> Unit".
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping
 
@@ -297,12 +298,105 @@ def derive_chapter_meta(chapter_title: str, chapter_display_name: str, *probes: 
 
 
 def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) -> str:
-    """Construct an ID prefix-style chapter code for newly created chapters."""
+    """The BASE chapter code, e.g. ``07CBSC_LifeProcesse``.
+
+    Unchanged on purpose: every chapter in the catalogue today carries the code
+    this function returns, and ``chapter_code`` is identity — it is one of
+    ``models.CHECKPOINT_TARGET_IDENTITY_FIELDS`` and it reaches published
+    question and concept labels. The base code is NOT unique (it truncates the
+    title at 12 characters and carries no unit); ``resolve_chapter_code`` is
+    what a caller minting a chapter from a syllabus row should use.
+    """
     subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
     s = subject_code(board, subject)
-    slug = re.sub(r"[^A-Za-z0-9]", "", (chapter_title or "CH").title())[:12] or "CH"
+    slug = re.sub(r"[^A-Za-z0-9]", "", (chapter_title or "CH").title())[:_CHAPTER_SLUG_LENGTH] or "CH"
     return f"{(grade or '00')}{b}{s}_{slug}"
+
+
+def chapter_code_suffix(base_code: str, unit: str, chapter_title: str) -> str:
+    """Discriminating tail for a chapter that cannot have the bare base code.
+
+    A pure function of this chapter's OWN identity: the same chapter gets the
+    same tail whatever else is in the workbook, in whatever order the rows are
+    read, in whatever batch it is imported. Nothing here judges meaning — it
+    slices recorded columns and hashes them (mechanics, CLAUDE.md Rule 1).
+
+    The tail is alphanumeric with NO separator so that every existing reader of
+    a code keeps working: ``_CHAPTER_CODE`` matches ``..._[A-Za-z0-9]+`` and
+    would otherwise stop at the separator and silently read a suffixed chapter
+    as the anchor chapter.
+
+    Readable part: the trailing words of the title, which is where these titles
+    actually differ ("... Act V Scene 5", "-III Cash Crops (i)"). When those
+    words say nothing the slug does not already say — the title was not
+    truncated, or the tail it was truncated to is the slug over again, so the
+    clash is really the same title under two units — the leading words of the
+    unit are used instead. Digest: the identity, so uniqueness never depends on
+    the readable part being distinctive.
+    """
+    slug = base_code.rpartition("_")[2]
+    unit_token = _code_token(
+        re.findall(r"[A-Za-z0-9]+", (unit or "").title()), from_end=False)
+    token = _code_token(
+        re.findall(r"[A-Za-z0-9]+", (chapter_title or "CH").title()),
+        from_end=True)
+    if unit_token and (token.startswith(slug) or slug.startswith(token)):
+        token = unit_token
+    identity = f"{base_code}|{(unit or '').strip()}|{(chapter_title or '').strip().lower()}"
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:_CHAPTER_CODE_DIGEST]
+    return f"{token}{_CHAPTER_CODE_DIGEST_MARK}{digest}"
+
+
+def _code_token(words: list[str], *, from_end: bool) -> str:
+    """Whole words from one end of ``words``, within the token budget."""
+    picked: list[str] = []
+    length = 0
+    for word in (reversed(words) if from_end else words):
+        if picked and length + len(word) > _CHAPTER_CODE_TOKEN_LENGTH:
+            break
+        picked.append(word)
+        length += len(word)
+    if from_end:
+        picked.reverse()
+    return "".join(picked)[:_CHAPTER_CODE_TOKEN_LENGTH]
+
+
+def chapter_code_identity(unit: str, chapter_title: str) -> tuple[str, str]:
+    """What distinguishes two rows that share a base code."""
+    return ((unit or "").strip(), (chapter_title or "").strip().lower())
+
+
+def resolve_chapter_code(
+    board: str, grade: str, subject: str, unit: str, chapter_title: str,
+    holders: Mapping[str, tuple[str, str]] | None = None,
+) -> str:
+    """The code for one syllabus row: the base code, or base + discriminator.
+
+    THE one place a chapter code is minted from a syllabus row —
+    ``upsert_chapters`` and ``refresh_syllabus``'s ``desired`` map must both
+    call this, or the refresh prunes exactly the chapters the upsert just
+    created.
+
+    ``holders`` maps a base code to the identity that already holds it —
+    built from the DATABASE by ``syllabus_import.chapter_code_holders``, not
+    from a snapshot of what the workbooks said on some particular day. That
+    distinction is the whole safety property: a chapter that exists keeps its
+    code because the catalogue itself says it holds it, so no table can be
+    stale and no chapter can be re-keyed by one going out of date. A re-key is
+    not cosmetic — ``chapter_code`` is inside the checkpoint identity, so it
+    would refuse a paid run mid-flight, and inside the content-addressed
+    decision ids, so an owner pause that was already answered would be asked
+    again.
+
+    Only a chapter that has never had a catalogue row — because an earlier row
+    took its code and ``upsert_chapters`` skipped it — gets a suffix.
+    """
+    base = make_chapter_code(board, grade, subject, chapter_title)
+    holder = (holders or {}).get(base)
+    if holder is None or holder == chapter_code_identity(unit, chapter_title):
+        return base
+    return f"{base}{chapter_code_suffix(base, unit, chapter_title)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -315,6 +409,18 @@ def make_chapter_code(board: str, grade: str, subject: str, chapter_title: str) 
 #   concept_title  -> "What is Social Science (09CBSS_Understanding_Social_Science_PL_Meaning_of_Social_Science)"
 # Internal model fields stay CLEAN (no tags); the writer composes these on
 # export and the reader strips them on import, so dedupe/round-trip is stable.
+
+# Chapter-code shape. The slug length is HISTORICAL: every stored code was
+# built with it and none may move. The token/digest bounds apply only to the
+# discriminating tail, and are sized so the longest possible code
+# (6 prefix + 1 + 12 slug + 16 token + 1 mark + 6 digest = 42) fits Chapter.chapter_code
+# (String(64)) with room for the grade fallback token.
+_CHAPTER_SLUG_LENGTH = 12
+_CHAPTER_CODE_TOKEN_LENGTH = 16
+_CHAPTER_CODE_DIGEST = 6
+# Alphanumeric so the whole code still matches ``_CHAPTER_CODE``; it only keeps
+# the digest from running into a token that ends in a digit ("...Scene5x63bc52").
+_CHAPTER_CODE_DIGEST_MARK = "x"
 
 _PL = "PL"  # post/pre-learning marker used in the team's label convention
 
