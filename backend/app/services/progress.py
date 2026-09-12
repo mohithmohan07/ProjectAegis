@@ -313,6 +313,115 @@ def capture_history() -> Iterator[list[dict]]:
         _history.reset(token)
 
 
+class JournalCapture:
+    """Handle for a journal-backed run: carries the value to publish at the end."""
+
+    __slots__ = ("job_id", "_result", "_have_result")
+
+    def __init__(self, job_id: int) -> None:
+        self.job_id = int(job_id)
+        self._result: Any = None
+        self._have_result = False
+
+    def set_result(self, value: Any) -> None:
+        """Name the payload the terminal ``result`` event should carry."""
+        self._result = value
+        self._have_result = True
+
+    @property
+    def result(self) -> Any:
+        return self._result if self._have_result else None
+
+
+@contextlib.contextmanager
+def capture_to_journal(
+    job_id: int,
+    *,
+    continue_existing: bool = True,
+    title: str = "",
+    initial_progress: float | None = None,
+    initial_progress_label: str = "",
+) -> Iterator[JournalCapture]:
+    """Give a run with no HTTP client the same durable event trail as ``stream``.
+
+    ``capture_history`` sets only the history contextvar; the run journal is
+    built inside ``stream``, which a queue-executed step never calls. Without
+    this, a chapter the batch console ran would answer ``run-events`` with an
+    empty log and the console's log column would stay blank forever — the run
+    would have happened with no record a person could read.
+
+    ``continue_existing`` defaults to True and is load-bearing: ``RunJournal``
+    opens ``mode="w"`` otherwise, so a Step 02 journal would truncate the Step
+    01 history the same run already wrote (Q41 keeps one run's logs across
+    review, reupload and resume).
+
+    Wrap this INSIDE ``openai_usage.track()``, not outside it: the terminal
+    event carries ``visible_summary()``, which must still be live when this
+    context exits.
+
+    The journal is an assist, never a gate — a directory that cannot be opened
+    degrades to events that simply are not persisted, exactly as ``stream``
+    treats the same failure.
+    """
+    from . import run_journal
+
+    journal = None
+    try:
+        journal = run_journal.RunJournal(
+            int(job_id), continue_existing=continue_existing,
+        )
+    except OSError:
+        journal = None
+
+    def publish(event: dict) -> None:
+        if journal is not None:
+            journal.publish(event, lambda _event: None)
+
+    capture = JournalCapture(job_id)
+    sink_token = _sink.set(publish)
+    history_token = _history.set([])
+    track_token = _track.set([])
+    floor_token = _progress_floor.set(
+        max(0.0, min(1.0, float(initial_progress or 0.0)))
+    )
+    from . import openai_usage
+
+    try:
+        if initial_progress:
+            seed_progress(initial_progress, label=initial_progress_label)
+        if title:
+            log(title)
+        yield capture
+    except Exception as exc:  # noqa: BLE001 — recorded, then re-raised
+        publish({
+            "type": "error",
+            "message": str(exc) or exc.__class__.__name__,
+            "trace": traceback.format_exc(limit=4),
+            "openai_usage": openai_usage.visible_summary(),
+            "ts": time.time(),
+        })
+        raise
+    else:
+        result = capture.result
+        summary = openai_usage.visible_summary()
+        if (
+            summary["request_count"] > 0
+            and isinstance(result, dict)
+            and "openai_usage" not in result
+        ):
+            result = {**result, "openai_usage": summary}
+        publish({"type": "result", "data": result, "ts": time.time()})
+    finally:
+        _track.reset(track_token)
+        _progress_floor.reset(floor_token)
+        _history.reset(history_token)
+        _sink.reset(sink_token)
+        if journal is not None:
+            # A long-lived worker runs many chapters through this context, so
+            # the handle is closed here rather than left to the interpreter.
+            journal.close()
+
+
 def stream(
     fn: Callable[[], Any],
     *,

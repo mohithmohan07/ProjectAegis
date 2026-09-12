@@ -46,6 +46,40 @@ One run, three explicit steps (register Q51, 11 September 2026):
 See `docs/three-step-workflow-review-2026-09-11.md` for the stage-by-stage
 disposition and the decisions still open for the owner.
 
+### 3 · Chapters — the batch console
+
+`/chapters` lists the whole catalogue as rows with board / grade / subject
+filters and a search box (register Q53). A row takes a PDF; selected rows are
+pushed together for Step 01, and from then on the queue runs them unattended:
+it converts, generates the Concept files, and stops where the workflow says a
+person is needed. The same row then takes the reviewed Concept file, is pushed
+for Step 02, takes the reviewed Master file, and publishes per lane.
+
+What the row tells you is derived from the run's own markers, never from a
+stored status, so it cannot drift: a queued row shows no progress bar, a
+crashed run reads *Interrupted — recovering* rather than *Running*, a queued CMS
+append is *Partly published* rather than green, and a run that stopped on a
+decision only a person can make is *Blocked* with the reason and no further
+attempts spent. Staging a PDF costs nothing; the push is the only act that
+spends money.
+
+Admission is sized against the provider gate rather than against optimism —
+`runs x overlapping lanes x workers <= AEGIS_OPENAI_MAX_CONCURRENCY`, with a
+reserve held back for interactive use. On the current machine that clears
+roughly a dozen Step 01s or six Step 02s in a twelve-hour night, so tens of
+chapters through all three steps is a multi-night cycle. The knobs are
+`AEGIS_QUEUE_MAX_CONCURRENT_RUNS` (2), `AEGIS_QUEUE_MAX_CONCURRENT_MASTERS` (1),
+`AEGIS_QUEUE_PROVIDER_RESERVE` (16) and `AEGIS_QUEUE_WORKER` (`0` disables the
+worker for a deployment). Raising the first two past the inequality does not
+make the night shorter — it makes runs fail on a slot-wait timeout after real
+spend.
+
+The worker runs on **one** machine. Its database lease closes the restart and
+multi-thread holes within a process and volume; it cannot make two Fly machines
+coherent, because a second machine has its own volume and its own SQLite file.
+
+`docs/chapter-batch-console-contract.md` is the frozen contract.
+
 ### Post-generation pipeline
 
 After every generation: **assessment tagging** (cluster questions, build group

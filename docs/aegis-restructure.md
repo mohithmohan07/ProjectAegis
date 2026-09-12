@@ -3087,3 +3087,121 @@ Nothing else changes: the Q31 critic stack, the per-row Concept Refiner, the
 mechanical display rendering of file-supplied Pre questions and the orphaned
 frontend surfaces stand as recorded. Historical runs replay unchanged. Verify
 offline and continue the authorized PR, CI, merge and Fly deployment workflow.
+
+## Q53 — decided — the chapter batch console: a durable queue for unattended runs
+
+The owner asked for one page that turns the three-step workflow into something
+a team can work down over days rather than one chapter at a time:
+
+> "There should be a page with all chapters names (in rows) loaded (with
+> filters of board, subject, grade, etc), where i will be able to upload pdfs
+> and then push for batch api. Where it will happen by itself, and show when
+> step 01 is completed (generating concept files) and then the team picks up
+> later on these, and reuploads the reviewed ones, (in the same row there
+> should be an upload option) and then at last, the master files are generated
+> and finalised ones downloaded and reviewed. Then upload back to Data base."
+
+Scale: "Tens at a time, overnight is fine." Push model: "select rows and push
+them together."
+
+**The Batch-API question, answered with numbers.** Asked whether OpenAI's Batch
+API could drive this stage-wise, the measurement says yes in shape and no as a
+switch. A chapter runs 36 distinct recorded decision kinds, each at minimum an
+author wave plus the independent critic wave that reads what the author wrote,
+plus a correction wave for whatever fails the checker — roughly 70 to 100
+sequential batch waits per chapter, a count that does NOT grow with how many
+chapters are pushed. OpenAI guarantees only "within 24 hours", so an overnight
+finish would rest on unguaranteed per-wave latency, and under wave barriers one
+slow wave stalls every chapter in it. On the one recorded receipt (a Post-only
+run, $4.9718, 12.53M input / 1.54M output on Luna, whose 12.51M cache writes
+bought 15,149 reads) batch would have cost about $2.17. The stronger argument
+is capacity, not the discount: batch moves the queue to the provider's side
+instead of holding it on a 2-vCPU machine. Building it means teaching
+`phase3.kernel.decide` to return "submitted, waiting" across 37 call sites,
+giving both provider adapters a serialisable request, checkpointing wave state,
+and reconstructing stage attribution for a result that arrives hours later.
+**The owner chose the console and a durable queue first, on the existing
+synchronous engine, with the Batch lane as a separate later piece.** The page
+does not change when the engine does.
+
+The frozen contract is `docs/chapter-batch-console-contract.md`.
+
+**What is queued.** One machine step of one chapter's run — `step01`, `step02`,
+`publish` — never a chapter and never a job, because the three steps are
+separated by unbounded human review waits and need independent attempt budgets.
+Conversion is inside `step01`: staging a PDF spends nothing, and the push is the
+only act that spends money. A partial UNIQUE index over the live states holds
+at most one live task per chapter, so a double push cannot start two runs that
+would both append the same chapter to the CMS workbook.
+
+**Two new tables, zero `ALTER TABLE`.** `chapter_batch_rows` carries the durable
+chapter → job link the pipeline never had (`target_chapter_id` is a per-request
+field that only becomes durable inside the review marker, after Step 01 has
+already run) plus who staged and who acted. `chapter_batch_tasks` carries the
+queue and its lease. Neither stores workflow state: row state is derived at
+query time from the engine's own markers, so the queue can never become a
+second answer that drifts into claiming a chapter is published. The markers are
+read with `json_extract` by key, so a page of rows never loads the megabyte
+release payloads sitting in the same column.
+
+**The lease.** `uploads.is_job_running` is a process-local `threading.Lock`
+dict, so after a restart it reads False for a chapter still mid-run — the
+console never asks it. A lease owner carries a boot nonce, so a restarted
+process is a different owner even when machine and pid repeat; expiry says the
+holder stopped renewing. Reclaiming needs both, because two processes can share
+one volume and a sweep that took foreign leases on sight would hand a
+colleague's live two-hour run to a second thread and charge it twice. The
+attempt is charged at claim, so a worker killed mid-run has still spent one and
+a crash loop cannot spin through the owner's money. A startup sweep runs before
+any worker thread; neither sweep nor dispatch may touch a task this process is
+actually running, because a heartbeat merely late behind 48 provider threads
+must not cost a second two-hour run.
+
+**Reconcile before spend, on every claim.** The job is re-read first: an
+explicit do-not-resume verdict settles the task terminal and is never retried,
+and a step whose output already exists settles `done` without calling the
+engine. That is "never record false success" in both directions — never a false
+failure, and never a second charge for work that exists.
+
+**Honest outcomes.** The Step 01 review pause is a success: it is what Step 01
+is for. A pending human decision and the pre-spend integrity pauses become a
+visible `blocked` row that burns no further attempts, is refused by every push,
+and returns to the queue only by an explicit human act — the queue never
+answers a pause, never skips one and never clears one itself. A publish is read
+off the receipt, not off the absence of an exception: a queued CMS append is
+`partly_published` with its reason, never green. A crashed run reads
+`recovering`, never `running`. A `step01` that finished with no review marker
+renders as the inconsistency it is.
+
+**Admission.** `runs x overlapping lanes x workers <= AEGIS_OPENAI_MAX_CONCURRENCY`
+is the deployment's own inequality; exceeding it does not slow a run down, it
+FAILS it after real spend. The queue holds a reserve back for interactive use,
+runs at most two generation steps and one Master at a time, and publishes one
+at a time behind the single output-workbook lock. The honest throughput follows
+and is written down rather than softened: about a dozen Step 01s or six Step
+02s in a twelve-hour night, so thirty chapters through all three steps is a
+multi-night cycle on this machine. The levers are a bigger machine or the Batch
+lane; raising the concurrency knobs is the failure, not the lever.
+
+**Team access.** The console is a shared board, so one new helper —
+`uploads.get_shared_job` — widens by exactly one predicate: the job must be
+bound to a `chapter_batch_rows` row. `uploads.get_job` keeps its signature,
+filter and message, a miss raises the byte-identical not-found so membership
+cannot be probed, and `UploadJob.owner_sub` is never rewritten — it stays the
+creator of record. Every service call still carries the job's own owner,
+because they all resolve through the owner filter and a teammate's sub would
+raise before a single provider call. Who acted is recorded on the console row.
+
+**Two safety items shipped with it.** `progress.capture_to_journal` gives a run
+with no HTTP client the same durable event trail `stream` gives an NDJSON one —
+without it a queue-executed chapter would answer `run-events` with an empty log
+forever. And `syllabus_import._chapter_has_content` now counts a console row as
+authored work: `refresh_syllabus(prune=True)` runs on every boot and would
+otherwise delete a chapter whose PDF is staged and whose task is queued, since
+it has no topics yet.
+
+Nothing here changes what a run produces. No output column, model route, review
+stage or release gate is touched; the queue decides only when an existing
+service call runs and records that it did. Rule 1 is satisfied by construction:
+admission order, leases, attempt counters and per-row state are mechanics, and
+the only semantic reads are two durable markers the engine itself wrote.

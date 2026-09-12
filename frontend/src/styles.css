@@ -1715,3 +1715,167 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 @media (max-width: 700px) {
   .workflow-steps { grid-template-columns: 1fr; }
 }
+
+/* ======================== Chapter batch console ========================
+   The /chapters worklist. Everything here composes the existing tokens
+   and primitives (.card, .badge, .table-scroll, .progress-track, .chip,
+   .hint, .empty, .error-box); nothing re-declares a colour. */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.chapter-queue .badge { font-size: 11.5px; }
+.chapter-filters .field { margin-bottom: 0; }
+.chapter-search { margin-top: 14px; }
+.chapter-search input { width: 100%; }
+
+/* One narrow leading checkbox column; phones are a real target, so the
+   table earns no trailing wall of action columns. */
+.chapter-col-select { width: 34px; }
+.chapter-col-select input { width: auto; }
+
+.chapter-row.needs-person td:first-child {
+  box-shadow: inset 3px 0 0 var(--yellow);
+}
+
+.chapter-title-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.chapter-title-button:hover {
+  background: none;
+  color: var(--accent-fg);
+  text-decoration: underline;
+}
+.chapter-title-button[aria-expanded="true"] { color: var(--accent-fg); }
+
+.chapter-state { display: grid; gap: 4px; justify-items: start; }
+.chapter-state-note { display: block; }
+
+/* The three-step pips: the same vocabulary as the Build Concepts strip,
+   read through the exported stateFor so the two cannot disagree. */
+.chapter-pips { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.chapter-pip {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.chapter-pip.is-complete {
+  border-color: transparent;
+  background: var(--green-tint);
+  color: var(--green);
+}
+.chapter-pip.is-current {
+  border-color: var(--accent-fg);
+  background: var(--accent-tint);
+  color: var(--accent-fg);
+}
+.chapter-pip.is-upcoming { opacity: 0.7; }
+.chapter-pip.is-historical { opacity: 0.55; }
+
+.chapter-upload { display: grid; gap: 4px; min-width: 0; }
+.chapter-upload.is-compact .upload-label {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.chapter-upload .upload-label.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- drawer ---- */
+.chapter-drawer-row td { background: var(--panel-2); }
+.chapter-drawer { display: grid; gap: 12px; padding: 4px 0 8px; }
+.chapter-drawer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+.chapter-drawer-col { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.chapter-lane {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-fg);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+.chapter-lane.is-unavailable { border-left-color: var(--border-strong); opacity: 0.8; }
+.chapter-lane-files { gap: 8px; }
+.chapter-decision,
+.chapter-blocked {
+  padding: 10px 12px;
+  border: 1px solid var(--yellow);
+  border-radius: var(--r-md);
+  background: var(--yellow-tint);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.chapter-decision p { margin: 0; }
+.chapter-log {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--console-border);
+  border-radius: var(--r-md);
+  background: var(--console-bg);
+  color: var(--console-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* ---- receipt + sticky action bar ---- */
+.chapter-receipt { border-left: 3px solid var(--accent-fg); }
+.chapter-receipt-row { line-height: 1.6; }
+.chapter-receipt-reason { margin-top: 2px; }
+.chapter-publish-list { margin: 0; padding: 0; list-style: none; }
+
+.chapter-actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+
+@media (max-width: 700px) {
+  .chapter-filters .grid.cols-4 { grid-template-columns: 1fr; }
+  .chapter-actionbar { gap: 8px; }
+  .chapter-actionbar button { flex: 1 1 auto; }
+}

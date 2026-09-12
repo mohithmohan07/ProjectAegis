@@ -1,6 +1,11 @@
 import type {
   BlueprintBatch,
   BoardNode,
+  ChapterBatchDetail,
+  ChapterBatchPage,
+  ChapterBatchPushResult,
+  ChapterBatchRow,
+  ChapterBatchStep,
   ChapterDetail,
   AuthConfig,
   AuthSession,
@@ -622,6 +627,134 @@ export const api = {
     http<AssessmentReleaseUploadResult>(
       `/build-assessments/releases/${id}/upload-to-database`,
       { method: "POST" },
+    ),
+
+  /* ================= Chapter batch console (Q53) =====================
+     Router prefix `/chapter-batches`, frozen in
+     docs/chapter-batch-console-contract.md §9. Push, cancel and retry
+     always answer 200 with a per-row verdict — one ineligible row never
+     fails the batch — so these resolve normally and the caller renders
+     the receipt; only a transport/auth failure throws ApiError.
+     =================================================================== */
+
+  /** One page of chapter rows with the server's facets, state vocabulary
+   * and queue summary. Empty filters are omitted rather than sent blank. */
+  chapterBatchList: (
+    params: {
+      board?: string;
+      grade?: string;
+      subject?: string;
+      q?: string;
+      state?: string;
+      page?: number;
+      page_size?: number;
+    } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    const query = qs.toString();
+    return http<ChapterBatchPage>(
+      `/chapter-batches${query ? `?${query}` : ""}`,
+    );
+  },
+  /** The row plus the full job, for the drawer only: the list row never
+   * carries release payloads or the question inventory. */
+  chapterBatchDetail: (chapterId: number) =>
+    http<ChapterBatchDetail>(`/chapter-batches/${chapterId}`),
+  /**
+   * Stage a source PDF against one chapter. Staging spends nothing; the
+   * push is the only act that spends money (contract §1).
+   *
+   * `source_book` and `chapter_duration_minutes` are sent BOTH in the
+   * multipart body (the contract's §9 wording) and on the query string:
+   * the landed router declares them as bare scalars beside an
+   * `UploadFile`, which FastAPI reads as query parameters, and both have
+   * defaults — so a body-only call would not fail, it would silently
+   * stage the publication as "" and lose the Concept Source / extracted
+   * Question Source provenance (Q42/Q45). Whichever location the server
+   * declares, it receives the value; the other is ignored.
+   */
+  chapterBatchStageSource: (
+    chapterId: number,
+    file: File,
+    sourceBook: string,
+    chapterDurationMinutes: number,
+  ) => {
+    const minutes = String(
+      Number.isFinite(chapterDurationMinutes) && chapterDurationMinutes > 0
+        ? Math.round(chapterDurationMinutes)
+        : 0,
+    );
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("source_book", sourceBook);
+    fd.append("chapter_duration_minutes", minutes);
+    const qs = new URLSearchParams({
+      source_book: sourceBook,
+      chapter_duration_minutes: minutes,
+    });
+    return http<ChapterBatchRow>(
+      `/chapter-batches/${chapterId}/source?${qs}`,
+      { method: "POST", body: fd },
+    );
+  },
+  /** Enqueue one machine step for many chapters in ONE request. `lanes`
+   * is omitted unless the caller is narrowing a publish to some lanes. */
+  chapterBatchPush: (
+    step: ChapterBatchStep,
+    rows: Array<{ chapter_id: number; lanes?: string[] }>,
+  ) =>
+    http<ChapterBatchPushResult>("/chapter-batches/push", {
+      method: "POST",
+      body: JSON.stringify({ step, rows }),
+    }),
+  chapterBatchCancel: (chapterIds: number[]) =>
+    http<ChapterBatchPushResult>("/chapter-batches/cancel", {
+      method: "POST",
+      body: JSON.stringify({ chapter_ids: chapterIds }),
+    }),
+  chapterBatchRetry: (chapterIds: number[]) =>
+    http<ChapterBatchPushResult>("/chapter-batches/retry", {
+      method: "POST",
+      body: JSON.stringify({ chapter_ids: chapterIds }),
+    }),
+  /** Step 02 input: the team's reviewed Concept workbook for one lane.
+   * `lane` is mandatory for the same reason it is on uploadConceptRelease
+   * — a defaulted lane records the correction against the OTHER lane. */
+  chapterBatchUploadConceptReview: (
+    chapterId: number,
+    lane: string,
+    file: File,
+  ) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<ChapterBatchRow>(
+      `/chapter-batches/${chapterId}/concept-review?lane=${encodeURIComponent(lane)}`,
+      { method: "POST", body: fd },
+    );
+  },
+  /** Step 03 input: the team's reviewed Master workbook for one lane.
+   * Records the review round; publication stays the separate push. */
+  chapterBatchUploadMasterReview: (
+    chapterId: number,
+    lane: string,
+    file: File,
+  ) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<ChapterBatchRow>(
+      `/chapter-batches/${chapterId}/master-review?lane=${encodeURIComponent(lane)}`,
+      { method: "POST", body: fd },
+    );
+  },
+  /** The run journal tail for one chapter's current job, in exactly the
+   * shape `getRunEvents` returns, so the same cursor logic reads both. */
+  chapterBatchEvents: (chapterId: number, after: number) =>
+    http<{ events: StreamEvent[]; next: number; running: boolean }>(
+      `/chapter-batches/${chapterId}/events?after=${after}`,
     ),
 };
 

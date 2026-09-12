@@ -15,7 +15,7 @@ Round-tripping back to the canonical sheets is handled by ``bulk_import.writer``
 import hashlib
 from datetime import datetime
 
-from sqlalchemy import String, Integer, BigInteger, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint, event, inspect
+from sqlalchemy import String, Integer, BigInteger, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint, Index, event, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -726,6 +726,180 @@ class ConceptReleaseVersion(Base):
             "origin",
             name="uq_concept_release_version_uid",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chapter batch console (Q53)
+#
+# Two tables, no ``ALTER TABLE``: ``Base.metadata.create_all`` in ``init_db``
+# mints them on existing databases the same way ``concept_release_versions``
+# arrived. Between them they hold the durable chapter -> job link the pipeline
+# never had, and the queue that lets a chapter run unattended.
+#
+# What they deliberately do NOT hold is workflow state. Whether a chapter is
+# awaiting review, has Masters, or is published is read at query time from the
+# job's own durable markers. A stored copy would be a second answer to the same
+# question, free to drift; the console must never say "published" because a
+# cached column said so.
+# ---------------------------------------------------------------------------
+
+#: Machine step of one chapter's three-step run. ``step01`` converts the staged
+#: PDF when the job still holds none, then generates the Concept files and
+#: pauses for review: conversion is part of generating them, not a fourth kind.
+CHAPTER_BATCH_STEPS = ("step01", "step02", "publish")
+
+#: A task's own lifecycle. ``blocked`` is a first-class outcome, not a failure:
+#: the pre-spend integrity pauses and a pending human decision are allowed to
+#: stop a run (CLAUDE.md Rule 1), and a stopped row must be visible and must
+#: wait for a person rather than burn attempts.
+CHAPTER_BATCH_TASK_STATES = (
+    "queued", "leased", "blocked", "done", "failed", "cancelled")
+
+#: The states that occupy a chapter. The partial UNIQUE index below uses
+#: exactly this tuple, so a second push cannot start a second run that would
+#: append the same chapter to the shared CMS workbook twice.
+CHAPTER_BATCH_LIVE_TASK_STATES = ("queued", "leased", "blocked")
+
+_LIVE_TASK_PREDICATE = "state IN ('queued', 'leased', 'blocked')"
+
+
+class ChapterBatchRow(Base):
+    """One catalogue chapter as the batch console sees it.
+
+    This exists for one reason the rest of the pipeline cannot supply: a
+    durable chapter -> job link that is true BEFORE the run. ``target_chapter_id``
+    is a per-request field that only becomes durable afterwards inside the
+    Concept-review marker, and ``deposit_scope_ids`` is written only once a run
+    reaches ``generated`` — but the worker has to know which chapter it is
+    generating for at the moment it makes the first call.
+
+    The link is kept here rather than on ``UploadJob`` so no historical row and
+    no other module changes shape, and so a re-staged PDF can rebind the chapter
+    to a new job while ``previous_job_ids`` keeps the earlier runs readable.
+    """
+
+    __tablename__ = "chapter_batch_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # UNIQUE: the console addresses a row BY chapter, and one chapter has one
+    # live binding. No relationship is declared back from ``Chapter`` — deleting
+    # a chapter must never cascade into generation history.
+    chapter_id: Mapped[int] = mapped_column(
+        ForeignKey("chapters.id"), nullable=False, unique=True, index=True)
+    # Nullable: a chapter row exists as soon as someone stages a PDF against it,
+    # and legitimately holds no job until then.
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("upload_jobs.id"), nullable=True, index=True)
+    # Superseded bindings, newest last. A replaced PDF must not erase the run
+    # that came before it.
+    previous_job_ids: Mapped[list] = mapped_column(JSON, default=list)
+    source_filename: Mapped[str] = mapped_column(String(255), default="")
+    # The publication this upload came from. It becomes Concept Source and the
+    # extracted Post-learning Question Source (Q42/Q45), so it is an explicit
+    # field on the staging act and is NEVER synthesised from the chapter code.
+    source_book: Mapped[str] = mapped_column(String(128), default="")
+    chapter_duration_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    source_staged_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    # Authorship, never authorization. ``UploadJob.owner_sub`` stays the job's
+    # owner and is never rewritten; these record who used the console.
+    created_by_sub: Mapped[str] = mapped_column(String(255), default="")
+    created_by_email: Mapped[str] = mapped_column(String(320), default="")
+    last_actor_sub: Mapped[str] = mapped_column(String(255), default="")
+    last_actor_email: Mapped[str] = mapped_column(String(320), default="")
+    last_actor_act: Mapped[str] = mapped_column(String(64), default="")
+    last_actor_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow)
+
+    tasks = relationship(
+        "ChapterBatchTask", back_populates="batch_row",
+        cascade="all, delete-orphan")
+
+
+class ChapterBatchTask(Base):
+    """One queued machine step, with the lease that makes it restart-safe.
+
+    ``uploads.is_job_running`` is a module-level dict of ``threading.Lock``, so
+    after a restart it reads False for a chapter that was mid-run — which is
+    why the console never asks it. A live run here is a row whose
+    ``lease_owner`` equals THIS process's boot token; a crashed run is one whose
+    lease_owner is anything else. The boot nonce inside the token is what makes
+    a restarted process a different owner even when machine and pid repeat.
+
+    ``attempt`` increments at CLAIM, not at success. A worker that dies mid-run
+    has still spent an attempt, which is what stops a crash-loop from spinning
+    through the owner's money.
+    """
+
+    __tablename__ = "chapter_batch_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_row_id: Mapped[int] = mapped_column(
+        ForeignKey("chapter_batch_rows.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False,
+                                      default="step01")
+    # Which lanes a publish task covers. Read from the run's OWN available
+    # lanes at push time, never a hardcoded pre+post pair: a Post-only run must
+    # be able to reach published.
+    lanes: Mapped[list] = mapped_column(JSON, default=list)
+    state: Mapped[str] = mapped_column(String(16), nullable=False,
+                                       default="queued")
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Two: the initial try and one more. At roughly two hours and real provider
+    # spend per attempt, a third unattended charge on a structurally broken
+    # chapter is not defensible. Per row, so an operator can grant one more
+    # without a deploy.
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False,
+                                              default=2)
+    lease_owner: Mapped[str] = mapped_column(String(160), nullable=False,
+                                             default="")
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    # Why a person is needed: human_decision | source_review |
+    # source_topic_recovery | type_granularity | storage_capacity |
+    # publication_order | cms_workbook_queued
+    blocked_kind: Mapped[str] = mapped_column(String(64), default="")
+    failure_code: Mapped[str] = mapped_column(String(64), default="")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_error_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    # One id per push request. A push group has no lifecycle of its own and
+    # nothing ever acts on one, so it is a stamped id and not a table; every
+    # aggregate the console wants is a GROUP BY.
+    push_group_id: Mapped[str] = mapped_column(String(32), default="",
+                                               index=True)
+    enqueued_by_sub: Mapped[str] = mapped_column(String(255), default="")
+    enqueued_by_email: Mapped[str] = mapped_column(String(320), default="")
+    enqueued_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
+
+    batch_row = relationship("ChapterBatchRow", back_populates="tasks")
+
+    __table_args__ = (
+        Index("ix_chapter_batch_tasks_dispatch",
+              "state", "enqueued_at", "id"),
+        Index("ix_chapter_batch_tasks_lease_sweep",
+              "state", "lease_expires_at"),
+        # At most one LIVE task per chapter. Both dialect predicates carry the
+        # identical expression on purpose: ``sqlite_where`` alone would emit a
+        # FULL unique index on any other engine, permanently forbidding a
+        # chapter's second task — a wrong answer that would only appear after a
+        # migration nobody was reviewing for this.
+        Index("ux_chapter_batch_tasks_live_row", "batch_row_id", unique=True,
+              sqlite_where=text(_LIVE_TASK_PREDICATE),
+              postgresql_where=text(_LIVE_TASK_PREDICATE)),
     )
 
 

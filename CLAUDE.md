@@ -1,6 +1,30 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q52 (11 September 2026).**
+**Latest owner amendment: Q53 (chapter batch console, 12 September 2026).**
+The owner asked for one page listing every chapter with board/subject/grade
+filters, a per-row PDF upload, a push that takes many rows at once, unattended
+execution, a visible Step 01 completion, a per-row reviewed-file upload, then
+Master download, review and publication to the database. Asked whether OpenAI's
+Batch API could drive this stage-wise, the measurement says a chapter runs 36
+recorded decision kinds and therefore 70-100 sequential batch waits whatever the
+push size, against a 24-hour-only guarantee; the owner chose the console and a
+durable queue first on the existing synchronous engine, with the Batch lane as a
+separate later piece. `docs/chapter-batch-console-contract.md` is the frozen
+contract and Q53 in `docs/aegis-restructure.md` the register entry. Two new
+tables hold the durable chapter-to-job link and the queue; neither stores
+workflow state, which stays derived from the engine's own markers. The lease
+carries a boot nonce and charges its attempt at claim; every claim reconciles
+against the job before spending, so a do-not-resume verdict is never retried and
+a completed step is never charged twice. The Step 01 review pause is a success;
+a pending decision and the pre-spend pauses are visible blocked rows a person
+must clear; a queued CMS append is partly published, never green; a crashed run
+reads recovering, never running. Admission holds a provider reserve back and the
+honest throughput is recorded rather than softened. `uploads.get_shared_job`
+widens access by one predicate — the job is on the console board — and never
+rewrites an owner. Nothing changes what a run produces. Verify offline, then
+continue the authorized PR, CI, merge and Fly deployment workflow.
+
+**Previous owner amendment: Q52 (11 September 2026).**
 The owner decided everything Q51 left open. A reviewed Post set is
 authoritative: the Q18 pre-learning claim and the P3 duplicate verdict are not
 asked for on it, and the governing-instruction pattern no longer judges

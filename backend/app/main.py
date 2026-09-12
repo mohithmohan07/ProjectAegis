@@ -13,7 +13,7 @@ from . import config
 from .db import SessionLocal, init_db
 from .services import syllabus_import as syllabus_svc
 from .services import auth as auth_svc
-from .services import drive_checkpoints
+from .services import chapter_queue_worker, drive_checkpoints
 from .services import build_concepts_release_api_contract
 from .services import build_concepts_release_contract
 from .services import build_concepts_release_manifest
@@ -29,6 +29,7 @@ from .api import (
     directory as directory_api,
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
+    chapter_batches as chapter_batches_api,
     data as data_api,
     native_auth as native_auth_api,
     source_artifacts as source_artifacts_api,
@@ -121,9 +122,14 @@ def bootstrap() -> None:
 async def lifespan(app: FastAPI):
     bootstrap()
     drive_checkpoints.initialize_checkpoint_backup(SessionLocal)
+    # The batch console's worker. Its startup sweep runs BEFORE any thread it
+    # owns, so a lease held by a process that no longer exists is recovered
+    # rather than leaving a chapter looking busy forever.
+    chapter_queue_worker.initialize_chapter_queue(SessionLocal)
     try:
         yield
     finally:
+        chapter_queue_worker.shutdown_chapter_queue()
         drive_checkpoints.shutdown_checkpoint_backup()
 
 
@@ -173,6 +179,7 @@ _authenticated = [Depends(auth_svc.require_user)]
 app.include_router(directory_api.router, dependencies=_authenticated)
 app.include_router(build_assessments_api.router, dependencies=_authenticated)
 app.include_router(build_concepts_api.router, dependencies=_authenticated)
+app.include_router(chapter_batches_api.router, dependencies=_authenticated)
 app.include_router(source_artifacts_api.router, dependencies=_authenticated)
 app.include_router(data_api.router, dependencies=_authenticated)
 app.include_router(tagging_api.router, dependencies=_authenticated)

@@ -43,6 +43,10 @@ export default defineConfig({
         "/auth",
         "/build-assessments",
         "/build-concepts",
+        // The chapter batch console's API. The page itself is /chapters,
+        // which no proxied prefix matches ("/chapters" does not start with
+        // "/chapter-batches"), so it needs nothing in SPA_PATHS.
+        "/chapter-batches",
         "/directory",
         "/health",
         "/tagging",

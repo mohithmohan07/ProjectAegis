@@ -213,7 +213,10 @@ def get_upload(
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
-        return uploads.get_job(
+        # Batch-console rows are a team board: any signed-in teammate may
+        # read a job bound to a console row. Every other job still resolves
+        # only for its owner, with the identical not-found.
+        return uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
@@ -237,7 +240,10 @@ def get_run_events(
     from ..services import run_journal
 
     try:
-        job = uploads.get_job(
+        # Batch-console rows are a team board: any signed-in teammate may
+        # read a job bound to a console row. Every other job still resolves
+        # only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
@@ -477,7 +483,10 @@ def download_release_bulk_import(
 ):
     """The released rows in the canonical Bulk Import workbook format."""
     try:
-        job = uploads.get_job(
+        # A batch-console row is a team board: any signed-in teammate may
+        # download the artefacts of a job bound to one. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
         content = release_files.build_release_bulk_import_workbook(
             db, job, lane=_lane(lane)
@@ -507,7 +516,10 @@ def download_released_workbook(
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
-        job = uploads.get_job(
+        # A batch-console row is a team board: any signed-in teammate may
+        # download the artefacts of a job bound to one. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
         content = release_files.build_release_workbook(job, lane=_lane(lane))
     except uploads.UploadJobNotFound as e:
@@ -537,7 +549,10 @@ def download_release_diagnostics(
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
-        job = uploads.get_job(
+        # A batch-console row is a team board: any signed-in teammate may
+        # download the artefacts of a job bound to one. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
         resolved_lane = _lane(lane)
         # A diagnostic archive spans the database row and the job's canonical
@@ -578,7 +593,10 @@ def download_release_payload(
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
-        job = uploads.get_job(
+        # A batch-console row is a team board: any signed-in teammate may
+        # download the artefacts of a job bound to one. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts")
         content = release_files.release_payload_bytes(job, lane=_lane(lane))
     except uploads.UploadJobNotFound as e:
@@ -767,9 +785,16 @@ async def submit_reviewed_master_file(
 
     resolved = _publish_lane(lane)
     try:
-        job = uploads.get_job(
+        # Batch-console rows are a team board: any signed-in teammate may
+        # read a job bound to a console row. Every other job still resolves
+        # only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts",
         )
+        # Downstream service calls resolve the job through the owner filter,
+        # so they carry the job's own owner. Who acted is recorded on the
+        # console row; ``UploadJob.owner_sub`` is never rewritten.
+        acting_owner = str(job.owner_sub or "")
         raw_bytes = await read_limited_upload(
             file, description="reviewed Master workbook",
         )
@@ -782,7 +807,7 @@ async def submit_reviewed_master_file(
             worker_db = SessionLocal()
             try:
                 worker_job = uploads.get_job(
-                    worker_db, job_id, owner_sub=user.sub,
+                    worker_db, job_id, owner_sub=acting_owner,
                     module="build_concepts",
                 )
                 return master_review.submit_reviewed_master(
@@ -833,11 +858,14 @@ def publish_reviewed_master_file(
 
     resolved = _publish_lane(lane)
     try:
-        job = uploads.get_job(
+        # Batch-console rows are a team board: any signed-in teammate may
+        # read a job bound to a console row. Every other job still resolves
+        # only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts",
         )
         return master_review.publish_reviewed_master(
-            db, job, lane=resolved, owner_sub=user.sub,
+            db, job, lane=resolved, owner_sub=str(job.owner_sub or ""),
         )
     except HTTPException:
         raise
