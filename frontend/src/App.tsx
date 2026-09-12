@@ -5,6 +5,7 @@ import BuildConcepts from "./pages/BuildConcepts";
 import Tagging from "./pages/Tagging";
 import Workbooks from "./pages/Workbooks";
 import Database from "./pages/Database";
+import ChapterBatch from "./pages/ChapterBatch";
 import Admin from "./pages/Admin";
 import { RunConsoleProvider } from "./RunConsole";
 import RunConsolePanel from "./components/RunConsolePanel";
@@ -16,6 +17,7 @@ const NAV = [
   { to: "/home", label: "Home" },
   { to: "/build-assessments", label: "Build Assessments" },
   { to: "/build-concepts", label: "Build Concepts" },
+  { to: "/chapters", label: "Chapters" },
   { to: "/tagging", label: "Tagging" },
   { to: "/workbooks", label: "Create Workbooks" },
   { to: "/database", label: "Database" },
@@ -71,6 +73,7 @@ export default function App() {
                 <Route path="/home" element={<Home />} />
                 <Route path="/build-assessments" element={<BuildAssessments />} />
                 <Route path="/build-concepts" element={<BuildConcepts />} />
+                <Route path="/chapters" element={<ChapterBatch />} />
                 <Route path="/tagging" element={<Tagging />} />
                 <Route path="/workbooks" element={<Workbooks />} />
                 <Route path="/database" element={<Database />} />

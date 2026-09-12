@@ -48,3 +48,19 @@ test("renders brand and the integrated-tool navigation", async () => {
   expect(screen.getByText("Build Concepts")).toBeDefined();
   expect(screen.getByText("Database")).toBeDefined();
 });
+
+test("the Chapters console has BOTH a nav entry and a route that renders it", async () => {
+  render(
+    <MemoryRouter initialEntries={["/chapters"]}>
+      <App />
+    </MemoryRouter>,
+  );
+  // Half of this is invisible on its own: pages/ReleaseReview.tsx is a
+  // complete page with no route, and a route with no nav entry is a page
+  // nobody can find. Assert both halves.
+  const link = await screen.findByRole("link", { name: "Chapters" });
+  expect(link.getAttribute("href")).toBe("/chapters");
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Chapters" }),
+  ).toBeDefined();
+});

@@ -25,7 +25,13 @@ const STEPS: Array<{ step: 1 | 2 | 3; number: string; title: string; detail: str
   },
 ];
 
-function stateFor(step: 1 | 2 | 3, current: WorkflowStep): "complete" | "current" | "upcoming" | "historical" {
+/**
+ * One step's state against the run's current step. Exported so the chapter
+ * batch table's pips reuse this exact rule rather than a second copy: the
+ * table and the single-chapter header cannot then disagree about which
+ * step a run is on (contract §11).
+ */
+export function stateFor(step: 1 | 2 | 3, current: WorkflowStep): "complete" | "current" | "upcoming" | "historical" {
   if (current === "legacy") return "historical";
   if (current === "done") return "complete";
   if (step < current) return "complete";

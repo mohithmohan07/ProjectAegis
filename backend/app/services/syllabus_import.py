@@ -545,9 +545,36 @@ def load_all_syllabus_files(db: Session) -> dict:
     return result
 
 
-def _chapter_has_content(chapter: models.Chapter) -> bool:
-    """Whether a chapter carries authored work (topics/concepts/questions)."""
-    return bool(chapter.topics)
+def _chapter_has_batch_work(db: Session, chapter_id: int) -> bool:
+    """Whether the batch console holds a staged source or a run for a chapter.
+
+    A chapter someone has pushed through the console has no topics yet — the
+    topics are what the run is about to create — so ``bool(chapter.topics)``
+    alone would let a redeploy carrying re-issued workbooks delete it at
+    bootstrap and orphan its staged PDF, its queued task and its job binding
+    mid-run. Whether a row exists is mechanics, not a judgment about content.
+    """
+
+    return db.query(
+        db.query(models.ChapterBatchRow.id)
+        .filter(models.ChapterBatchRow.chapter_id == chapter_id)
+        .exists()
+    ).scalar() is True
+
+
+def _chapter_has_content(chapter: models.Chapter, db: Session | None = None) -> bool:
+    """Whether a chapter carries authored work (topics/concepts/questions).
+
+    ``db`` is optional so the historical single-argument call still reads the
+    same; when it is supplied, in-flight batch-console work counts as authored
+    work for exactly the reason the docstring of ``refresh_syllabus`` gives — a
+    chapter carrying work is never deleted.
+    """
+    if chapter.topics:
+        return True
+    if db is not None and chapter.id is not None:
+        return _chapter_has_batch_work(db, chapter.id)
+    return False
 
 
 def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
@@ -642,7 +669,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         for chapter in db.query(models.Chapter).all():
             if chapter.chapter_code in desired:
                 continue
-            if _chapter_has_content(chapter):
+            if _chapter_has_content(chapter, db):
                 retained.append(
                     f"{chapter.board} {chapter.grade} {chapter.subject}: "
                     f"{chapter.chapter_title}"

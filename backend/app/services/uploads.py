@@ -150,6 +150,74 @@ def get_job(
     return job
 
 
+def get_shared_job(
+    db: Session,
+    job_id: int,
+    *,
+    module: str = "",
+    learning_kind: str = "",
+) -> models.UploadJob:
+    """Resolve a job the batch console owns, for any signed-in teammate.
+
+    The owner described a team workflow: one person stages the PDF, another
+    uploads the reviewed file days later, a third publishes. Under
+    ``get_job``'s owner filter the second person gets a 404, so the console
+    could not do what it is for.
+
+    This widens by exactly one predicate and no further: the job must be bound
+    to a ``chapter_batch_rows`` row — a chapter somebody deliberately put on the
+    shared board. A job that was never pushed through the console stays private
+    to its owner. Sign-in is already restricted to a single Google domain, so
+    "signed in" already means "on the team"; no new permission model is
+    invented, and ``UploadJob.owner_sub`` is never rewritten — it stays the
+    creator of record and is shown as such.
+
+    A miss raises the byte-identical message ``get_job`` raises, so this can
+    never be used to probe which jobs exist.
+    """
+    query = (
+        db.query(models.UploadJob)
+        .join(
+            models.ChapterBatchRow,
+            models.ChapterBatchRow.job_id == models.UploadJob.id,
+        )
+        .filter(models.UploadJob.id == job_id)
+    )
+    if module:
+        query = query.filter(models.UploadJob.module == module)
+    if learning_kind:
+        query = query.filter(
+            models.UploadJob.learning_kind == learning_kind.strip().lower())
+    job = query.first()
+    if not job:
+        raise UploadJobNotFound("upload job not found")
+    return job
+
+
+def get_job_for_reader(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+    module: str = "",
+    learning_kind: str = "",
+) -> models.UploadJob:
+    """The owner's job, or a batch-console job any teammate may read.
+
+    Used by the read-only and download routes the console links to. The owner
+    check is tried first so nothing about an individual's own jobs changes.
+    """
+    try:
+        return get_job(
+            db, job_id, owner_sub=owner_sub, module=module,
+            learning_kind=learning_kind,
+        )
+    except UploadJobNotFound:
+        return get_shared_job(
+            db, job_id, module=module, learning_kind=learning_kind,
+        )
+
+
 def upload_file_path(job: models.UploadJob) -> Path:
     if job.upload_storage_key:
         return _storage_path(job.upload_storage_key)

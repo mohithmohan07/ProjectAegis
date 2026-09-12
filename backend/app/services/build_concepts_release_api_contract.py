@@ -171,9 +171,17 @@ async def _concept_review_upload_endpoint(
     """Receive an independent reviewed file; extraction belongs to Step 2."""
     try:
         resolved = release_svc.normalize_lane(lane)
-        job = uploads.get_job(
+        # The batch console is a team board: whoever staged the PDF is often
+        # not whoever uploads the reviewed file days later. A job bound to a
+        # console row is readable by any signed-in teammate; every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(
             db, job_id, owner_sub=user.sub, module="build_concepts"
         )
+        # Every service call below resolves the job through ``get_job``'s owner
+        # filter, so they must carry the job's own owner. Who ACTED is recorded
+        # separately; ``UploadJob.owner_sub`` is never rewritten.
+        owner_sub = str(job.owner_sub or "")
         state = release_svc.concept_review_state(job)
         if not state:
             raise HTTPException(
@@ -229,7 +237,7 @@ async def _concept_review_upload_endpoint(
                             job_id,
                             "Receiving reviewed Concept file",
                             progress_value=0.70,
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                         )
                         progress.step(
                             "Receiving reviewed Concept file",
@@ -238,7 +246,7 @@ async def _concept_review_upload_endpoint(
                         worker_job = uploads.get_job(
                             worker_db,
                             job_id,
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                             module="build_concepts",
                         )
                         from . import reviewed_file_input
@@ -248,12 +256,12 @@ async def _concept_review_upload_endpoint(
                             lane=resolved,
                             path=temp_path,
                             filename=file.filename or "reviewed.xlsx",
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                         )
                         worker_job = uploads.get_job(
                             worker_db,
                             job_id,
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                             module="build_concepts",
                         )
                         workflow_state = release_svc.update_concept_review_state(
@@ -272,7 +280,7 @@ async def _concept_review_upload_endpoint(
                             job_id,
                             progress_value=0.70,
                             stage="Concept review complete; awaiting Master authoring",
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                         )
                         progress.step(
                             "Concept review complete; awaiting Master authoring",
@@ -290,7 +298,7 @@ async def _concept_review_upload_endpoint(
                             worker_db,
                             job_id,
                             apply_and_pause,
-                            owner_sub=user.sub,
+                            owner_sub=owner_sub,
                         )
                     except uploads.JobAlreadyRunningError:
                         raise
@@ -305,7 +313,7 @@ async def _concept_review_upload_endpoint(
                             failed_job = uploads.get_job(
                                 worker_db,
                                 job_id,
-                                owner_sub=user.sub,
+                                owner_sub=owner_sub,
                                 module="build_concepts",
                             )
                             workflow_state = release_svc.concept_review_state(
@@ -320,12 +328,12 @@ async def _concept_review_upload_endpoint(
                                     job_id,
                                     progress_value=0.70,
                                     stage="Concept review upload failed; awaiting retry",
-                                    owner_sub=user.sub,
+                                    owner_sub=owner_sub,
                                 )
                                 uploads.persist_current_openai_usage(
                                     worker_db,
                                     job_id,
-                                    owner_sub=user.sub,
+                                    owner_sub=owner_sub,
                                 )
                         except Exception:  # pragma: no cover - preserve original
                             worker_db.rollback()

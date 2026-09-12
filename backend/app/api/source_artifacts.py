@@ -19,7 +19,10 @@ def source_artifact_manifest(
 ):
     """Return canonical-source status and links without exposing another user."""
     try:
-        job = uploads.get_job(db, job_id, owner_sub=user.sub)
+        # A job bound to a batch-console row is a team board entry: any
+        # signed-in teammate may download its artefacts. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(db, job_id, owner_sub=user.sub)
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     return uploads.source_artifact_manifest(job)
@@ -34,7 +37,10 @@ def download_source_artifact(
 ):
     """Download one raw, canonical, derived, or validation artifact."""
     try:
-        job = uploads.get_job(db, job_id, owner_sub=user.sub)
+        # A job bound to a batch-console row is a team board entry: any
+        # signed-in teammate may download its artefacts. Every other job
+        # still resolves only for its owner, with the identical not-found.
+        job = uploads.get_job_for_reader(db, job_id, owner_sub=user.sub)
         manifest = uploads.source_artifact_manifest(job)
         path, spec = uploads.source_artifact_download(job, artifact_kind)
     except uploads.UploadJobNotFound as exc:

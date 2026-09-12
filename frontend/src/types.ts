@@ -966,3 +966,144 @@ export interface ReleaseInstructionBody {
   staged_release_uid: string;
   instruction: string;
 }
+
+/* ======================================================================
+   Chapter batch console (Q53)
+   ----------------------------------------------------------------------
+   The frozen contract's Appendix A, declared verbatim. The backend emits
+   exactly these keys; a rename on either side turns every console call
+   into a 404 or a blank cell, which is why both sides code against the
+   same block. See docs/chapter-batch-console-contract.md.
+   ====================================================================== */
+
+export type ChapterBatchState =
+  | "no_source" | "source_staged" | "step01_queued" | "step01_running"
+  | "recovering" | "concept_review" | "reviewed" | "step02_queued"
+  | "step02_running" | "master_failed" | "master_review" | "publish_queued"
+  | "publish_running" | "partly_published" | "published" | "blocked"
+  | "failed" | "dead" | "cancelled" | "legacy";
+
+export type ChapterBatchStep = "step01" | "step02" | "publish";
+
+export interface ChapterBatchLane {
+  lane: string;                       // "post" | "pre"
+  available: boolean;
+  concept_reviewed: boolean;
+  concept_reviewed_filename: string;
+  concept: "published" | "available" | "unavailable";
+  concept_reason: string;
+  master: "published" | "queued" | "ready" | "none";
+  master_reason: string;
+  master_version: number;
+}
+
+export interface ChapterBatchQueue {
+  task_id: number | null;
+  kind: ChapterBatchStep | null;
+  state: "queued" | "leased" | "blocked" | "done" | "failed" | "cancelled" | null;
+  position: number | null;            // 1-based place in the queue, null unless queued
+  attempt: number;
+  max_attempts: number;
+  blocked_kind: string;
+  failure_code: string;
+  last_error: string;
+  enqueued_by_email: string;
+  enqueued_at: string | null;
+  started_at: string | null;
+  lease_expired: boolean;             // leased but the lease ran out -> "recovering"
+}
+
+export interface ChapterBatchPendingDecision {
+  decision_id: string;
+  kind: string;
+  question: string;
+  companions: number;
+}
+
+export interface ChapterBatchCan {
+  step01: boolean; step02: boolean; publish: boolean;
+  cancel: boolean; retry: boolean;
+  upload_source: boolean; upload_concept: boolean; upload_master: boolean;
+}
+
+export interface ChapterBatchRow {
+  chapter_id: number;
+  chapter_code: string;
+  chapter_title: string;
+  chapter_display_name: string;
+  board: string; grade: string; subject: string; unit: string;
+  job_id: number | null;
+  source_filename: string;
+  source_book: string;
+  staged_by_email: string;
+  source_staged_at: string | null;
+  state: ChapterBatchState;
+  state_label: string;                // server-supplied; the client never invents one
+  stage: string;                      // live stage name, "" when idle
+  progress: number;                   // 0..1
+  workflow_status: string;            // the Concept-review marker status, or ""
+  lanes: ChapterBatchLane[];
+  blocked_kind: string;
+  blocked_reason: string;
+  error_message: string;
+  pending_decision: ChapterBatchPendingDecision | null;
+  can: ChapterBatchCan;               // the server is the authority
+  queue: ChapterBatchQueue;
+  last_actor_email: string;
+  last_actor_act: string;
+  last_actor_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChapterBatchFacets {
+  boards: string[]; grades: string[]; subjects: string[];
+  triples: Array<{ board: string; grade: string; subject: string }>;
+}
+
+export interface ChapterBatchQueueSummary {
+  running: number; queued: number; blocked: number;
+  capacity: number;                   // max concurrent generation runs
+  worker_alive: boolean;
+}
+
+export interface ChapterBatchPage {
+  items: ChapterBatchRow[];
+  page: number; page_size: number; total: number; total_pages: number;
+  facets: ChapterBatchFacets;
+  states: Array<{ value: ChapterBatchState; label: string; tone: string }>;
+  queue: ChapterBatchQueueSummary;
+  server_time: string;
+}
+
+export interface ChapterBatchPushOutcome {
+  chapter_id: number;
+  verdict: "queued" | "already_queued" | "already_running" | "refused";
+  reason_code: string;                // "" when queued
+  reason: string;                     // human sentence, "" when queued
+  task_id: number | null;
+  position: number | null;
+  /**
+   * Freshly projected, for an optimistic patch. The server projects it
+   * after the act, so a chapter that no longer exists (an `unknown_chapter`
+   * refusal, a row left over from a pruned syllabus) carries `null` here.
+   */
+  row: ChapterBatchRow | null;
+}
+
+export interface ChapterBatchPushResult {
+  /**
+   * Appendix A declares a `ChapterBatchStep` here, and `/push` sends one.
+   * `/cancel` and `/retry` share this envelope and answer with an EMPTY
+   * step (`api/chapter_batches.py::_bulk`), so the declared type is widened
+   * rather than lying to the receipt, which otherwise prints a sentence
+   * beginning with a bare colon.
+   */
+  step: ChapterBatchStep | "";
+  push_group_id: string;
+  results: ChapterBatchPushOutcome[];
+}
+
+export interface ChapterBatchDetail {
+  row: ChapterBatchRow;
+  job: UploadJob | null;              // the full job, drawer only
+}

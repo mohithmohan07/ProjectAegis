@@ -240,3 +240,61 @@ test("a refused Master publication surfaces the server's readable detail", async
     status: 409,
   });
 });
+
+test("chapter batch list omits blank filters and keeps the /chapter-batches prefix", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ items: [] }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.chapterBatchList({ board: "NCF", grade: "", subject: "", page: 2 });
+
+  const url = String(fetchMock.mock.calls[0][0]);
+  expect(url.startsWith("/chapter-batches?")).toBe(true);
+  expect(url).toContain("board=NCF");
+  expect(url).toContain("page=2");
+  expect(url).not.toContain("grade=");
+  expect(url).not.toContain("subject=");
+});
+
+test("staging a source carries the publication in both accepted locations", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ chapter_id: 7 }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const file = new File(["%PDF-1.4"], "shapes.pdf", { type: "application/pdf" });
+  await api.chapterBatchStageSource(7, file, "Seed to Plant", 42.4);
+
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(String(url)).toContain("/chapter-batches/7/source?");
+  expect(String(url)).toContain("source_book=Seed+to+Plant");
+  expect(String(url)).toContain("chapter_duration_minutes=42");
+  const body = (init as { body: FormData }).body;
+  expect(body.get("source_book")).toBe("Seed to Plant");
+  expect(body.get("chapter_duration_minutes")).toBe("42");
+  expect(body.get("file")).toBe(file);
+});
+
+test("a push sends one request naming the step and every row", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ step: "step01", push_group_id: "g", results: [] }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.chapterBatchPush("step01", [{ chapter_id: 1 }, { chapter_id: 2 }]);
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(String(url)).toContain("/chapter-batches/push");
+  expect(JSON.parse((init as { body: string }).body)).toEqual({
+    step: "step01",
+    rows: [{ chapter_id: 1 }, { chapter_id: 2 }],
+  });
+});

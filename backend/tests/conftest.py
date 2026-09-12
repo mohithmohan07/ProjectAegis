@@ -6,6 +6,11 @@ import re
 # in the environment (live is default-on when keys exist).
 os.environ["AEGIS_ALLOW_DRY"] = "1"
 os.environ["AEGIS_USE_LIVE"] = "0"
+# The batch console's queue worker is a background thread the application
+# lifespan starts. A few tests enter that lifespan, and a live worker would
+# claim whatever another test left queued and try to generate it for real.
+# Tests that exercise the worker drive it directly instead.
+os.environ["AEGIS_QUEUE_WORKER"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
