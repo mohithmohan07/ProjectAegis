@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -800,17 +800,27 @@ def list_page(
         # History, Geography, Civics and Economics chapters stored under it.
         # The fold depends on the BOARD, so the pairs are resolved together;
         # the result is a plain indexed IN rather than a per-row computation.
-        pairs = db.query(
-            models.Chapter.board, models.Chapter.subject,
-        ).distinct().all()
-        raw_subjects = sorted({
-            str(row_subject or "")
-            for row_board, row_subject in pairs
+        # The board has to stay attached to the subject. Folding the pairs and
+        # then filtering on the subjects alone leaks across boards in both
+        # directions: ICSE History does NOT fold to Social Science, so a
+        # board-agnostic IN would pull it into a Social Science page, and a
+        # page would list chapters whose own displayed subject is not the one
+        # filtered for.
+        pairs = [
+            (row_board, row_subject)
+            for row_board, row_subject in db.query(
+                models.Chapter.board, models.Chapter.subject,
+            ).distinct().all()
             if directory.effective_subject_for_tags(row_board, row_subject)
             == subject
-        })
+        ]
         query = query.filter(
-            models.Chapter.subject.in_(raw_subjects or [subject]))
+            or_(*[
+                and_(models.Chapter.board == row_board,
+                     models.Chapter.subject == row_subject)
+                for row_board, row_subject in pairs
+            ]) if pairs else models.Chapter.subject == subject
+        )
     if q:
         needle = f"%{q.strip()}%"
         query = query.filter(

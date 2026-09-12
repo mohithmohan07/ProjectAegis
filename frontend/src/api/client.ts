@@ -23,6 +23,7 @@ import type {
   ReleaseManualEditBody,
   ReleaseReviewLane,
   ReleaseReviewView,
+  ResolvedSavedChapter,
   ResumableCheckpoints,
   SemanticDecisionSubmission,
   SemanticDecisionSubmissionResult,
@@ -259,6 +260,30 @@ export const api = {
   // Directory / database
   tree: () => http<BoardNode[]>("/directory/tree"),
   chapter: (id: number) => http<ChapterDetail>(`/directory/chapters/${id}`),
+  /**
+   * Resolve a saved checkpoint's chapter identity against the directory.
+   *
+   * The identity is read, never rewritten: the checkpoint keeps the raw
+   * subject it recorded (changing it would re-key the resume comparison and
+   * reject the very runs this recovers), and the server folds both sides —
+   * CBSE History/Geography/Civics/Economics under Social Science — to find
+   * the row. Empty identity fields are omitted rather than sent blank.
+   *
+   * Always answers 200, including when nothing resolves, so a caller reads
+   * `resolved` and shows `reason`; only a transport/auth failure throws
+   * ApiError.
+   */
+  resolveSavedChapter: (identity: Record<string, string>) => {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(identity)) {
+      if (value === undefined || value === null || value === "") continue;
+      qs.set(key, String(value));
+    }
+    const query = qs.toString();
+    return http<ResolvedSavedChapter>(
+      `/directory/resolve-chapter${query ? `?${query}` : ""}`,
+    );
+  },
   vocab: () => http<Vocab>("/directory/vocab"),
   stats: () => http<Stats>("/directory/stats"),
   questions: (params: Record<string, string> = {}) =>

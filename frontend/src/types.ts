@@ -51,6 +51,39 @@ export interface ChapterDetail {
   topics: TopicNode[];
 }
 
+/**
+ * `GET /directory/resolve-chapter`: the chapter a saved checkpoint targets.
+ *
+ * A checkpoint stores the chapter's RAW subject (`History` for a CBSE
+ * social-science chapter) while the directory presents that chapter under
+ * `Social Science`, so the two sides cannot be compared as plain strings.
+ * The server does the lookup across that fold and answers with the values
+ * the dropdowns hold.
+ *
+ * The call always answers HTTP 200 — an identity that does not resolve
+ * carries `reason` (a full sentence naming the level that failed) and a null
+ * chapter, and a refusal omits the placement fields entirely, which is why
+ * they are optional here.
+ */
+export interface ResolvedSavedChapter {
+  resolved: boolean;
+  /** "" when resolved; otherwise the sentence to show the reviewer verbatim. */
+  reason: string;
+  chapter: {
+    id: number;
+    chapter_code: string;
+    chapter_title: string;
+    chapter_display_name: string;
+  } | null;
+  board?: string;
+  grade?: string;
+  /** The subject the DIRECTORY shows, e.g. "Social Science". */
+  subject?: string;
+  unit?: string;
+  /** True when the stored subject differs from the directory's. */
+  subject_folded?: boolean;
+}
+
 export interface Vocab {
   boards: string[];
   grades: string[];

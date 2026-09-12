@@ -546,33 +546,59 @@ def resolve_saved_chapter(db: Session, identity: Mapping[str, object]) -> dict:
             + ", ".join(available)
         )
 
-    at_unit = [row for row in at_subject if _identity_key(row.unit) == unit]
-    # A renamed or re-grouped unit must not hide a chapter that plainly exists,
-    # so the chapter match falls back to the whole subject.
-    candidates = at_unit or at_subject
-
-    def matches(row: models.Chapter) -> bool:
+    # Rank by EVIDENCE, never by row order. A chapter that merely shares the
+    # saved title must not outrank the chapter whose code matches: picking the
+    # first row by id resolved a stale decoy ahead of the real chapter whenever
+    # a title had been edited since the checkpoint was written.
+    #
+    # The saved unit is a preference, not a filter. Pre-filtering on it made a
+    # chapter that had MOVED unreachable whenever any sibling stayed behind —
+    # and then handed back that sibling. The whole folded subject is searched,
+    # and staying in the saved unit only breaks ties.
+    def rank(row: models.Chapter) -> tuple[int, int, int] | None:
         row_code = _identity_key(row.chapter_code)
         row_title = _identity_key(row.chapter_title)
-        if code and title:
-            return row_code == code and row_title == title
-        return bool((code and row_code == code) or (title and row_title == title))
+        code_hit = bool(code and row_code == code)
+        title_hit = bool(title and row_title == title)
+        if code_hit and title_hit:
+            tier = 0
+        elif code_hit:
+            tier = 1
+        elif title_hit:
+            tier = 2
+        else:
+            return None
+        in_unit = 0 if (unit and _identity_key(row.unit) == unit) else 1
+        return (tier, in_unit, int(row.id))
 
-    found = next((row for row in candidates if matches(row)), None)
-    if found is None and code and title:
-        # An exact pair did not match; accept either half on its own rather
-        # than stranding a run because a title was tidied up after the fact.
-        found = next(
-            (row for row in candidates
-             if _identity_key(row.chapter_code) == code
-             or _identity_key(row.chapter_title) == title),
-            None,
-        )
-    if found is None:
+    ranked = sorted(
+        ((rank(row), row) for row in at_subject if rank(row) is not None),
+        key=lambda pair: pair[0],
+    )
+    if not ranked:
         return refused(
             f"{str(identity.get('chapter_title') or identity.get('chapter_code') or 'that chapter').strip()} "
             "is not in the directory under this board, class and subject"
         )
+
+    best_tier, best_in_unit, _ = ranked[0][0]
+    tied = [
+        row for (tier, in_unit, _), row in ranked
+        if tier == best_tier and in_unit == best_in_unit
+    ]
+    if len(tied) > 1:
+        # Two chapters are equally good evidence for the same identity, with
+        # nothing recorded to separate them. Returning the first would be a
+        # guess a reviewer cannot see; naming the ambiguity is the honest
+        # answer and the remedy (pick it manually) is one click away.
+        names = ", ".join(
+            f"{row.chapter_title} ({row.chapter_code})" for row in tied[:4]
+        )
+        return refused(
+            "more than one chapter matches the saved destination equally well "
+            f"— {names}. Select the intended chapter manually."
+        )
+    found = tied[0]
 
     return {
         "resolved": True,
@@ -583,8 +609,10 @@ def resolve_saved_chapter(db: Session, identity: Mapping[str, object]) -> dict:
             "chapter_title": found.chapter_title,
             "chapter_display_name": found.chapter_display_name,
         },
-        "board": found.board,
-        "grade": found.grade,
+        # The same defaults ``tree`` keys these with, so every field of this
+        # payload is a label the dropdown actually carries.
+        "board": found.board or "Unknown",
+        "grade": found.grade or "\u2014",
         # The subject as the DIRECTORY presents it, which is the value the
         # dropdown holds — not the raw column the checkpoint saved.
         "subject": effective_subject_for_tags(found.board, found.subject)

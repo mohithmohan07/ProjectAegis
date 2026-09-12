@@ -200,3 +200,114 @@ def test_the_route_always_answers_200_with_its_reason(client, monkeypatch):
     body = response.json()
     assert body["resolved"] is False
     assert body["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# Evidence beats row order. A resolver that returns the first row that looks
+# plausible is worse than one that refuses: a reviewer cannot see the guess.
+# --------------------------------------------------------------------------- #
+
+def test_a_code_match_outranks_a_chapter_that_merely_shares_the_title(session):
+    """The title was edited after the checkpoint; the code still identifies it."""
+    decoy = _chapter(
+        session, board="ZZRANK", grade="09", subject="History", unit="U",
+        code="09ZZSS_DECOY", title="The Rise",
+    )
+    real = _chapter(
+        session, board="ZZRANK", grade="09", subject="History", unit="U",
+        code="09ZZSS_RISE", title="The Rise of Nationalism",
+    )
+    assert decoy.id < real.id  # the decoy would win on row order
+
+    resolved = directory.resolve_saved_chapter(session, {
+        "board": "ZZRANK", "grade": "09", "subject": "History", "unit": "U",
+        "chapter_title": "The Rise", "chapter_code": "09ZZSS_RISE",
+    })
+    assert resolved["resolved"] is True
+    assert resolved["chapter"]["id"] == real.id
+
+
+def test_a_moved_chapter_is_found_even_though_a_sibling_stayed_behind(session):
+    """The saved unit is a preference, never a filter.
+
+    Pre-filtering on the unit made a chapter that had MOVED unreachable
+    whenever any sibling remained in its old unit — and then handed back that
+    sibling.
+    """
+    sibling = _chapter(
+        session, board="ZZMOVE", grade="09", subject="History",
+        unit="Old Unit", code="09ZZSS_SIB", title="Nationalism",
+    )
+    moved = _chapter(
+        session, board="ZZMOVE", grade="09", subject="History",
+        unit="New Unit", code="09ZZSS_MOVED", title="Nationalism",
+    )
+    assert sibling.id < moved.id
+
+    resolved = directory.resolve_saved_chapter(session, {
+        "board": "ZZMOVE", "grade": "09", "subject": "History",
+        "unit": "Old Unit",
+        "chapter_title": "Nationalism", "chapter_code": "09ZZSS_MOVED",
+    })
+    assert resolved["resolved"] is True
+    assert resolved["chapter"]["id"] == moved.id
+    assert resolved["unit"] == "New Unit"
+
+
+def test_a_genuinely_ambiguous_identity_is_refused_not_guessed(session):
+    """Two equally good matches and nothing recorded to separate them."""
+    # Karnataka folds History and Civics into one Social Science subject, so
+    # these two genuinely collide. On a board outside the fold they would sit
+    # in different subjects and never compete.
+    first = _chapter(
+        session, board="Karnataka", grade="15", subject="History", unit="U",
+        code="15KASS_ONE", title="Shared Title",
+    )
+    _chapter(
+        session, board="Karnataka", grade="15", subject="Civics", unit="U",
+        code="15KASS_TWO", title="Shared Title",
+    )
+
+    refused = directory.resolve_saved_chapter(session, {
+        "board": "Karnataka", "grade": "15", "subject": "History", "unit": "U",
+        "chapter_title": "Shared Title",
+    })
+    assert refused["resolved"] is False
+    assert refused["chapter"] is None
+    assert "more than one chapter" in refused["reason"]
+    assert "15KASS_ONE" in refused["reason"]
+    # And it did not quietly hand back the lower id.
+    assert str(first.id) not in str(refused.get("chapter") or "")
+
+
+def test_a_unique_title_still_resolves_without_a_code(session):
+    chapter = _chapter(
+        session, board="ZZTITLE", grade="09", subject="History", unit="U",
+        code="09ZZSS_UNIQUE", title="A Unique Title",
+    )
+    resolved = directory.resolve_saved_chapter(session, {
+        "board": "ZZTITLE", "grade": "09", "subject": "History", "unit": "U",
+        "chapter_title": "A Unique Title",
+    })
+    assert resolved["resolved"] is True
+    assert resolved["chapter"]["id"] == chapter.id
+
+
+def test_the_saved_unit_breaks_a_tie_between_equal_titles(session):
+    """Same title twice, but one is where the checkpoint said it was."""
+    away = _chapter(
+        session, board="ZZTIE", grade="09", subject="History",
+        unit="Elsewhere", code="09ZZSS_AWAY", title="Tied Title",
+    )
+    here = _chapter(
+        session, board="ZZTIE", grade="09", subject="History",
+        unit="Saved Unit", code="09ZZSS_HERE", title="Tied Title",
+    )
+    assert away.id < here.id
+
+    resolved = directory.resolve_saved_chapter(session, {
+        "board": "ZZTIE", "grade": "09", "subject": "History",
+        "unit": "Saved Unit", "chapter_title": "Tied Title",
+    })
+    assert resolved["resolved"] is True
+    assert resolved["chapter"]["id"] == here.id

@@ -860,3 +860,40 @@ def test_a_subject_outside_the_fold_is_unchanged_in_the_console(session):
     )
     assert page["total"] >= 1
     assert all(row["subject"] == "Mathematics" for row in page["items"])
+
+
+def test_the_subject_filter_does_not_leak_across_boards(session):
+    """ICSE History is History and Civics, not Social Science.
+
+    Folding the (board, subject) pairs and then filtering on the subjects
+    alone would drag ICSE History into a CBSE Social Science page, and list a
+    chapter whose own displayed subject is not the one filtered for.
+    """
+    cbse = models.Chapter(
+        chapter_code="10CBSS_LEAK", board="CBSE", grade="11",
+        subject="History", unit="U", chapter_title="CBSE History Chapter",
+        chapter_display_name="CBSE History Chapter",
+    )
+    icse = models.Chapter(
+        chapter_code="11ICHC_LEAK", board="ICSE", grade="11",
+        subject="History", unit="U", chapter_title="ICSE History Chapter",
+        chapter_display_name="ICSE History Chapter",
+    )
+    session.add_all([cbse, icse])
+    session.commit()
+
+    social = chapter_batches.list_page(
+        session, grade="11", subject="Social Science", page_size=50)
+    titles = {row["chapter_title"] for row in social["items"]}
+    assert "CBSE History Chapter" in titles
+    assert "ICSE History Chapter" not in titles
+
+    paper = chapter_batches.list_page(
+        session, grade="11", subject="History and Civics", page_size=50)
+    paper_titles = {row["chapter_title"] for row in paper["items"]}
+    assert "ICSE History Chapter" in paper_titles
+    assert "CBSE History Chapter" not in paper_titles
+
+    # Every row reports the subject it was filtered by.
+    assert all(row["subject"] == "Social Science" for row in social["items"])
+    assert all(row["subject"] == "History and Civics" for row in paper["items"])
