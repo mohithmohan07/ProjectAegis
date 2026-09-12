@@ -807,3 +807,56 @@ def test_a_failed_run_is_mirrored_too(session, monkeypatch):
             break
         _time.sleep(0.01)
     assert mirrored == [job.id]
+
+
+def test_the_console_shows_social_science_the_way_the_directory_does(session):
+    """One Social Science facet, not a History facet and a Civics facet.
+
+    The two surfaces must name the same chapter the same way: Build Concepts
+    groups CBSE and Karnataka History, Geography, Civics and Economics under
+    Social Science so the dropdowns match the chapter codes, and a person
+    filtering this table for Social Science has to find all of them.
+    """
+    _chapter(session, code="10CBSS_HIST")
+    civics = models.Chapter(
+        chapter_code="10CBSS_CIVICS", board="CBSE", grade="10",
+        subject="Civics", unit="Democracy", chapter_title="Power Sharing",
+        chapter_display_name="Power Sharing",
+    )
+    maths = models.Chapter(
+        chapter_code="10CBMA_POLY", board="CBSE", grade="10",
+        subject="Mathematics", unit="Algebra", chapter_title="Polynomials",
+        chapter_display_name="Polynomials",
+    )
+    session.add_all([civics, maths])
+    session.commit()
+
+    facets = chapter_batches.facets(session)
+    assert "Social Science" in facets["subjects"]
+    assert "Civics" not in facets["subjects"]
+    assert "Mathematics" in facets["subjects"]
+
+    page = chapter_batches.list_page(
+        session, board="CBSE", grade="10", subject="Social Science",
+        page_size=50,
+    )
+    titles = {row["chapter_title"] for row in page["items"]}
+    assert {"Polynomials"}.isdisjoint(titles)
+    assert "Power Sharing" in titles
+    # And the row itself reports the folded subject, not the stored column.
+    assert all(row["subject"] == "Social Science" for row in page["items"])
+
+
+def test_a_subject_outside_the_fold_is_unchanged_in_the_console(session):
+    chapter = _chapter(session, code="09MHMA_LIN")
+    chapter.board = "Maharashtra"
+    chapter.grade = "09"
+    chapter.subject = "Mathematics"
+    session.commit()
+
+    page = chapter_batches.list_page(
+        session, board="Maharashtra", grade="09", subject="Mathematics",
+        page_size=50,
+    )
+    assert page["total"] >= 1
+    assert all(row["subject"] == "Mathematics" for row in page["items"])

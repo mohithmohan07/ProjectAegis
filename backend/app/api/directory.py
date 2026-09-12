@@ -19,6 +19,32 @@ def get_tree(db: Session = Depends(get_db)):
     return directory.tree(db)
 
 
+@router.get("/resolve-chapter")
+def resolve_chapter(
+    board: str = "",
+    grade: str = "",
+    subject: str = "",
+    unit: str = "",
+    chapter_title: str = "",
+    chapter_code: str = "",
+    db: Session = Depends(get_db),
+):
+    """Find the chapter a saved checkpoint targets, across the subject fold.
+
+    Always 200: an identity that does not resolve answers ``resolved: false``
+    with the reason, because the caller renders that sentence to a person and a
+    404 would only tell them something was wrong, not what.
+    """
+    return directory.resolve_saved_chapter(db, {
+        "board": board,
+        "grade": grade,
+        "subject": subject,
+        "unit": unit,
+        "chapter_title": chapter_title,
+        "chapter_code": chapter_code,
+    })
+
+
 @router.get("/chapters/{chapter_id}")
 def get_chapter(chapter_id: int, db: Session = Depends(get_db)):
     detail = directory.chapter_detail(db, chapter_id)
