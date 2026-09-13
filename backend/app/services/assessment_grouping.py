@@ -30,7 +30,7 @@ from .phase3 import kernel
 
 TIER_CODES = identity.GROUP_TIER_CODES
 
-LEVEL_POLICY_VERSION = "assessment-level-1-column-spec"
+LEVEL_POLICY_VERSION = "assessment-level-2-teaching-order-2026-09-13"
 VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1-column-spec"
 GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1-column-spec"
 
@@ -51,7 +51,14 @@ LEVEL_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-level author. Decide whether this one "
     "question belongs in Basic, Intermediate, or Advanced by reading the "
     "complete question, expected answer and rubric, source and routing "
-    "evidence, assets, and the home concept's teaching description. The "
+    "evidence, assets, and the home concept's teaching description. "
+    "When the request carries chapter_teaching_order and this_concept_ordinal, "
+    "read them as evidence: the release's accepted concept sequence and "
+    "where the home concept sits in it. A question that needs a result, "
+    "method or term the chapter teaches only in a LATER concept demands "
+    "transfer beyond the home concept's own teaching; weigh that in the "
+    "tier and name the later concept in the rationale, so a reviewer can "
+    "see whether the question is hosted too early. The "
     "blueprint difficulty label is deliberately absent and has no authority "
     "over this verdict. Judge the capability and construction actually "
     "required by the question. There is no quota for the three tiers; never "
@@ -66,7 +73,12 @@ LEVEL_CRITIC_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one assessment-level "
     "verdict. Audit the proposed tier against the complete question, answer "
     "and rubric, source and route evidence, assets, and home-concept "
-    "description. Do not substitute a blueprint difficulty label, balance "
+    "description. When the request carries chapter_teaching_order and "
+    "this_concept_ordinal, check that a question needing a result, method "
+    "or term the chapter teaches only in a later concept was tiered with "
+    "that transfer in view and that the rationale names the later concept; "
+    "flag a verdict that ignored it. "
+    "Do not substitute a blueprint difficulty label, balance "
     "tiers, or revise the verdict. There is no quota. Your dissent is "
     "advisory: the proposed verdict stands and your concerns ship for "
     "review. State your honest confidence.\n" + LEVEL_CALIBRATION +
@@ -471,10 +483,47 @@ def decide_levels(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    chapter_teaching_order: list[Mapping] | None = None,
 ) -> list[dict[str, Any]]:
-    """Author one recorded tier verdict per candidate, in input order."""
+    """Author one recorded tier verdict per candidate, in input order.
+
+    ``chapter_teaching_order`` is the release's accepted concept sequence
+    in its own order (the bridge's ``concepts`` rows: ``concept_key``,
+    ``topic_title``, ``concept_title``, optional ``is_culmination``). It
+    rides every level payload as evidence, with the home concept's ordinal
+    in it, so the tier author can see where the concept sits in the
+    chapter (Q69). A caller that supplies none keeps the payload shape it
+    had. Transport only: no ordinal decides a tier.
+    """
 
     envelope_sha = _envelope_hash(envelope_sha256)
+    ordinal_by_concept_key: dict[str, int] | None = None
+    teaching_order_payload: list[dict[str, Any]] = []
+    if chapter_teaching_order is not None:
+        ordinal_by_concept_key = {}
+        for ordinal, entry in enumerate(chapter_teaching_order, start=1):
+            if not isinstance(entry, Mapping):
+                raise GroupingError(
+                    f"chapter_teaching_order entry {ordinal} is not an object")
+            concept_key = str(entry.get("concept_key") or "").strip()
+            if not concept_key:
+                raise GroupingError(
+                    f"chapter_teaching_order entry {ordinal} has no concept_key")
+            if concept_key in ordinal_by_concept_key:
+                raise GroupingError(
+                    f"chapter_teaching_order repeats concept_key {concept_key!r}")
+            ordinal_by_concept_key[concept_key] = ordinal
+            teaching_order_payload.append({
+                "ordinal": ordinal,
+                "concept_key": concept_key,
+                "topic_title": str(entry.get("topic_title") or ""),
+                "concept_title": str(entry.get("concept_title") or ""),
+                **(
+                    {"is_culmination": bool(entry["is_culmination"])}
+                    if isinstance(entry.get("is_culmination"), bool)
+                    else {}
+                ),
+            })
     prepared: list[tuple[Mapping, Mapping, str]] = []
     seen: set[str] = set()
     for position, unit in enumerate(units, start=1):
@@ -496,6 +545,13 @@ def decide_levels(
             raise GroupingError(
                 f"level units repeat candidate_id {candidate_id!r}")
         seen.add(candidate_id)
+        if ordinal_by_concept_key is not None and str(
+            concept.get("concept_key") or ""
+        ) not in ordinal_by_concept_key:
+            raise GroupingError(
+                f"level unit {position} home concept "
+                f"{str(concept.get('concept_key') or '')!r} is not in "
+                "chapter_teaching_order")
         prepared.append((candidate, concept, candidate_id))
     if not prepared:
         return []
@@ -516,6 +572,16 @@ def decide_levels(
             "metadata": copy.deepcopy(dict(meta)),
             "candidate": _member_payload([candidate])[0],
             "concept": _concept_payload(concept),
+            **(
+                {
+                    "chapter_teaching_order": copy.deepcopy(
+                        teaching_order_payload),
+                    "this_concept_ordinal": ordinal_by_concept_key[
+                        str(concept.get("concept_key") or "")],
+                }
+                if ordinal_by_concept_key is not None
+                else {}
+            ),
             "allowed_tier_labels": list(GROUP_LABELS),
             "critic_response_schema": advisory_critic_schema().identity(),
         }

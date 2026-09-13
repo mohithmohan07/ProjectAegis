@@ -15,7 +15,7 @@ module's kernel contract and the adopted architecture/handoff.
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
 | `assessment.marking` | `assessment-marking-9-column-spec` | Model-authored weight decomposition, exact policy-bound duration, and keyboard mode; the recorded cell owns total marks and its Objective selection mode | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |
-| `assessment.level` | `assessment-level-1` | Basic/Intermediate/Advanced verdict | `_aegis_assessment_level_verdict` |
+| `assessment.level` | `assessment-level-2-teaching-order` | Basic/Intermediate/Advanced verdict, with the release's accepted concept sequence and the home concept's ordinal supplied as evidence (Q69) | `_aegis_assessment_level_verdict` |
 | `assessment.variant_cluster` | `assessment-variant-cluster-1` | Same-tier variant families | `_aegis_assessment_variant_cluster` |
 | `assessment.group_description` | `assessment-group-description-1` | Visible semantic group description | `_aegis_assessment_group_description` |
 | `assessment.group_quality` | `assessment-group-quality-1` | Advisory touched-group QA | `_aegis_assessment_group_quality` |

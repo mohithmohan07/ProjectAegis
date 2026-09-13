@@ -740,6 +740,7 @@ CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALI
     "lookup stands in for this review. Name concrete evidence when something "
     "is generic, copied without teaching, mismatched, truncated or unsupported. "
     + 'Also flag a mastery sentence not in the imperative register, a learner-facing sentence that names the source/evidence or addresses the author, a pronoun that refers to the wrong actor, a subjectless or dangling sentence, or a definition that does not parse. ' +
+    "When the request carries chapter_topics_in_teaching_order and this_topic_position, also flag an explanation that relies on a structure, term or example the chapter first introduces in a LATER topic unless the concept's own source_blocks introduce it here, and name that later topic. " +
     "Missing source or image evidence must be stated as a limit. Response schema: {\"verdict\": "
     "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are an "
     "auditor, not a judge: your dissent is recorded on the output for "

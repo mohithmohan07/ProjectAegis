@@ -37,11 +37,21 @@ unit that answered `create_new` is re-decided once, sequentially, with every
 batch's creation in `settled_concepts` (`units#resolve#<start>`,
 `RESOLUTION_POLICY_VERSION`); the model names the host, an unreferenced
 first-pass row retires into the unit's `host_resolution` audit with a flag.
-Coherence is told which rows were created blind. **Still with the owner:**
-Q67's contract questions (a block on every non-culmination concept; folding
-Error Analysis into numbered Misconceptions) and the remaining planned items
-(teaching order, declared Pre options, duplicate case titles, placeholder
-captions). Q68 in `docs/aegis-restructure.md`.
+Coherence is told which rows were created blind. (5, **Q69**) **Teaching
+order as evidence.** Every Settle authoring payload carries
+`chapter_topics_in_teaching_order` and `this_topic_position` (composed once
+from the sealed graph's order and the skeleton titles) with one additive
+sentence: do not build an explanation on what a LATER topic first introduces
+unless this concept's own source blocks do; the critic flags the reverse.
+The level author receives `chapter_teaching_order` (the bridge's accepted
+concept sequence) and `this_concept_ordinal`, is asked to weigh a later
+concept's result as transfer and name it in the rationale;
+`LEVEL_POLICY_VERSION` is `assessment-level-2-teaching-order-2026-09-13`. No
+positional tier rule exists in code. **Still with the owner:** Q67's contract
+questions (a block on every non-culmination concept; folding Error Analysis
+into numbered Misconceptions; whether opening concepts should carry lower
+tiers) and the remaining planned items (declared Pre options, duplicate case
+titles, placeholder captions). Q68 and Q69 in `docs/aegis-restructure.md`.
 
 **Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
 The owner: "go through all of these properly … dont lose the technical details

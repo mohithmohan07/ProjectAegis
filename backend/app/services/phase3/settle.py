@@ -825,6 +825,33 @@ def settle(
     for index, row in enumerate(normal_rows, start=1):
         row["concept_id"] = f"TOPOLOGY-CONCEPT-{index:04d}"
 
+    # The chapter's topic roster in teaching order: the sealed graph's own
+    # topic order (a language plan's recorded order, Q67 item 9) with each
+    # topic's skeleton concept titles. Composed ONCE from the sealed rows
+    # so every topic's authoring payload carries byte-identical evidence
+    # whatever the parallel schedule; culmination rows are synthesis, not
+    # teaching, and stay out. Transport only (Rule 1): which term or
+    # example a concept may assume is the author's judgment and the
+    # critic's review, never a lookup against this list (Q69).
+    chapter_topics_in_teaching_order = [
+        {
+            "position": position,
+            "topic_id": str(topic.get("topic_id") or ""),
+            "title": str(topic.get("title") or topic.get("topic_id") or ""),
+            "concept_titles": [
+                _normal(row.get("concept_title"))
+                for row in normal_rows
+                if str(row.get("_semantic_topic_id") or "")
+                == str(topic.get("topic_id") or "")
+            ],
+        }
+        for position, topic in enumerate(topics, start=1)
+    ]
+    position_by_topic_id = {
+        entry["topic_id"]: entry["position"]
+        for entry in chapter_topics_in_teaching_order
+    }
+
     progress.log(
         f"Settle: deciding {len(normal_rows)} concept(s) across "
         f"{len(topics)} topic(s); {len(culmination_rows)} culmination "
@@ -1161,6 +1188,7 @@ def settle(
                     "Author each concept's learner-facing content in ONE "
                     "pass, grounded on its source_blocks, using reference_blocks "
                     "only for supporting context without changing ownership. "
+                    + "chapter_topics_in_teaching_order is the chapter's topic roster in teaching order and this_topic_position is where this topic sits in it: explain with the terms, structures and examples the learner has met by this point in the chapter, and when the chapter first introduces a structure, term or example in a LATER topic, do not build this concept's explanation on it unless this concept's own source_blocks introduce it here. " +
                     "concept_description: the full teaching paragraph in "
                     "original language — this text is the basis for books, "
                     "worksheets, notes, slides, and interactive content, so "
@@ -1195,6 +1223,10 @@ def settle(
                     + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
+                "this_topic_position": position_by_topic_id[topic_id],
+                "chapter_topics_in_teaching_order": copy.deepcopy(
+                    chapter_topics_in_teaching_order
+                ),
                 "concepts": [
                     {
                         "concept_id": concept_id,

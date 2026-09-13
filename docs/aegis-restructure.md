@@ -4319,7 +4319,7 @@ place where a rule's FORM changed is named below.
   creation; provenance sentence for the coherence merger. — DONE, see Q68.
 * **Settle and the tier author see the chapter's teaching order** (Topic 05
   using flowers before Topic 06 introduces them; advanced tiers on opening
-  concepts).
+  concepts). — DONE, see Q69.
 * **Declared `options` on generated Pre questions** so a dropped option is a
   materializer defect instead of a silent loss.
 * **Duplicate case titles as a coverage defect** in the mining follow-up
@@ -4622,4 +4622,74 @@ fixtures now carry their line); `tests/test_analysis_correction_policy.py`
 gate, the legacy join, the Refiner pairing gate); `tests/test_phase3_flip_seam.py`
 (the new-envelope metadata lists the key; the historical envelope does
 not). No paid generation was run.
+
+## Q69 — decided — the corrections catalogue's second pass: Settle and the tier author see the chapter's teaching order
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items). **Contract:**
+none changed; §37 / Rule 1 (evidence to the model, judgment stays with it).
+
+**Reproduced.** `settle.author`'s `content_authoring` payload carried
+`"topic": {topic_id, title}` and this topic's concepts only; the topics run
+as independent decision streams. The author of "Gametes, Fertilisation and
+Zygote Formation" (Topic 05) could not know that the chapter first
+introduces flowers in Topic 06, and the critic, seeing the same payload,
+could not flag it. `assessment_grouping.decide_levels` tiered ONE candidate
+against `_concept_payload(concept)` — titles and descriptions — with no
+chapter position, so a Triangles question hosted on an opening concept but
+needing a later theorem was tiered in isolation (the reviewer's "some
+advanced questions are coming in starting concepts").
+
+**Decided.** Evidence, not a rule. `settle.settle` composes
+`chapter_topics_in_teaching_order` once — the sealed graph's topics in their
+own order (a language plan's recorded order, Q67 item 9), each with its
+skeleton concept titles, culminations left out — and every authoring payload
+carries it with `this_topic_position`. The request rules gain one sentence
+beside "Author each concept's learner-facing content in ONE pass…": explain
+with what the learner has met by this point; when a later topic first
+introduces a structure, term or example, do not build on it unless this
+concept's own source_blocks introduce it here. `prompts.CRITIC_SYSTEM`
+flags the reverse, guarded by "when the request carries…" so the topology
+and grounding stages it also serves read nothing new. `decide_levels` accepts
+`chapter_teaching_order` — the release run passes the bridge's `concepts`,
+the accepted Concept file's record order, the same sequence
+`assessment_teaching_order` transports into the Master — and the payload
+carries the projected roster (`ordinal`, `concept_key`, `topic_title`,
+`concept_title`, `is_culmination` where recorded) and `this_concept_ordinal`,
+bound by `concept_key` and refused pre-spend if the home concept is missing;
+`LEVEL_SYSTEM` asks the author to weigh a demand for a later concept's result
+as transfer and to name that concept in the rationale, `LEVEL_CRITIC_SYSTEM`
+mirrors it, and `LEVEL_POLICY_VERSION` is
+`assessment-level-2-teaching-order-2026-09-13`. No "opening concepts carry
+lower tiers" rule exists in code or contract; whether it should is a contract
+question for the owner, recorded here. Moving content between topics stays
+the coherence author's decision (Q47).
+
+**Replay.** Both payloads change shape, so new runs mint new decision keys
+and a stored record is never served under them. A completed run never
+re-enters Settle or the Master's level stage; a run resuming from a
+non-terminal Phase 3 checkpoint re-decides Settle — all three stages, because
+`_policy_version` digests `CRITIC_SYSTEM`, exactly as Q67's own
+`CRITIC_SYSTEM` sentence already caused in this unmerged series — and a
+Master lane resumed mid-run re-decides its level verdicts only.
+`AUTHOR_POLICY_SUFFIX` stays `-q1`. The legacy session caller
+(`build_assessments._recorded_tiers`) passes no roster; its payload keeps
+its shape and re-keys only through the text and version.
+
+**Not taken.** A cross-chapter roster for the legacy session workflow; a lane
+branch for Pre (generated questions authored under Q30 never reach
+`decide_levels`).
+
+### Verification
+
+Offline only: `tests/test_phase3_settle_golden.py` (every authoring request
+carries the same roster, positions 1..N in the graph's order, its own
+position, the skeleton titles; the golden replay's 53 rows are unchanged),
+`tests/test_mes_routing_and_grouping.py` (payload with and without the
+roster, the ordinal binding, the pre-spend refusals, the sentences in both
+prompts and the version), `tests/test_assessment_release_run.py` (the level
+author's roster equals the router's `candidate_concepts` order; the policy
+pin updated), `tests/test_corrections_catalogue_2026_09_13.py` (the critic
+sentence). No paid generation was run.
 

@@ -214,3 +214,17 @@ def test_the_authoring_prompts_state_the_register_voice_and_casing_rules():
     assert "raw_task must carry the COMPLETE question wording verbatim" in inventory
     recovery = generation.prompts.get_text("concepts.opening_recovery.system")
     assert 'separated by exactly\n  " | "' in recovery or 'separated by exactly' in recovery
+
+
+def test_the_settle_critic_flags_forward_references_to_a_later_topic():
+    """Q69: the critic is told to flag an explanation that leans on a term
+    the chapter first introduces in a later topic, guarded by the evidence
+    being present so the topology and grounding stages it serves are
+    untouched."""
+    from app.services.phase3 import prompts
+
+    assert "chapter_topics_in_teaching_order" in prompts.CRITIC_SYSTEM
+    assert "first introduces in a LATER topic" in prompts.CRITIC_SYSTEM
+    assert "name that later topic" in prompts.CRITIC_SYSTEM
+    assert "When the request carries chapter_topics_in_teaching_order" in prompts.CRITIC_SYSTEM
+

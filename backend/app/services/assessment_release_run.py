@@ -2988,6 +2988,11 @@ def run_release_for_job(
         critic=level_critic,
         store=store,
         fixer=fixer,
+        # The release's accepted concept sequence, in the bridge's own
+        # order — the staged release's record order, the same sequence
+        # assessment_teaching_order transports into the Master — so the
+        # tier author sees where a home concept sits (Q69). Evidence only.
+        chapter_teaching_order=concept_payload,
     )
     expected_level_ids = [
         str(candidate.get("candidate_id") or "") for candidate in eligible

@@ -517,7 +517,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         authority = candidate[
             "_aegis_assessment_level_verdict"]["authority"]
         assert authority["decision_key"]
-        assert authority["policy_version"] == "assessment-level-1-column-spec"
+        assert authority["policy_version"] == "assessment-level-2-teaching-order-2026-09-13"
         assert "created_at" not in authority
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
@@ -1457,3 +1457,30 @@ def test_a_removed_candidate_is_not_a_rewritten_one(db):
     kept = {row[0] for row in before if row[0] in {"CAND-1"}}
     rebased = [row for row in before if str(row[0]) in kept]
     run._assert_learner_text_unchanged(rebased, survivors, stage="marking")
+
+
+def test_level_author_receives_the_release_concept_sequence(db):
+    """Q69: every level payload carries the bridge's concept order (the same
+    sequence the router saw) and the home concept's ordinal in it."""
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    calls: dict = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    run.run_release_for_job(
+        db, job.id, owner_sub=OWNER, authorities=authorities,
+        **_decision_context(),
+    )
+    assert calls["level"]
+    routed = [c["concept_key"] for c in calls["route"][0]["candidate_concepts"]]
+    rosters = set()
+    for payload in calls["level"]:
+        order = payload["chapter_teaching_order"]
+        assert [e["ordinal"] for e in order] == list(range(1, len(order) + 1))
+        assert order[payload["this_concept_ordinal"] - 1]["concept_key"] == (
+            payload["concept"]["concept_key"]
+        )
+        assert [e["concept_key"] for e in order] == routed
+        assert all(e["concept_title"] and "topic_title" in e for e in order)
+        rosters.add(json.dumps(order, sort_keys=True))
+    assert len(rosters) == 1
+

@@ -1,6 +1,8 @@
 """MES PR 4 — routing, grouping, descriptions, QA, Tag New (spec §6–§8)."""
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from app.services import assessment_grouping as ag
@@ -1249,3 +1251,88 @@ def test_partition_and_blueprint_coverage_gates():
     assert report["unfulfilled"] == {"CELL-1": 1}
     assert report["orphaned"] == ["CAND-2"]
     assert not report["complete"]
+
+
+def _teaching_order() -> list[dict]:
+    return [
+        {"concept_key": "db:0", "topic_title": "Shapes", "concept_title": "Plane Figures"},
+        {"concept_key": "db:1", "topic_title": "Shapes", "concept_title": "Solid Shapes",
+         "released_record": {"noise": True}},
+        {"concept_key": "db:9", "topic_title": "Shapes",
+         "concept_title": "Culmination - Shapes", "is_culmination": True},
+    ]
+
+
+def test_level_payload_carries_the_chapter_teaching_order_and_the_home_ordinal():
+    """Q69: the release's accepted concept sequence and the home concept's
+    ordinal ride the level payload as evidence; a caller passing none keeps
+    the payload shape it had."""
+    seen: list[dict] = []
+
+    def provider(payload):
+        seen.append(copy.deepcopy(payload))
+        return {"candidate_id": "CAND-1", "tier": "Basic", "rationale": "ok"}
+
+    with_order = ag.decide_levels(
+        [{"candidate": _candidate(), "concept": _grouping_concept()}],
+        meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
+        critic=_verified_critic, store=kernel.DecisionStore(), fixer=None,
+        chapter_teaching_order=_teaching_order(),
+    )
+    payload = seen[-1]
+    assert payload["this_concept_ordinal"] == 2
+    assert payload["chapter_teaching_order"] == [
+        {"ordinal": 1, "concept_key": "db:0", "topic_title": "Shapes",
+         "concept_title": "Plane Figures"},
+        {"ordinal": 2, "concept_key": "db:1", "topic_title": "Shapes",
+         "concept_title": "Solid Shapes"},
+        {"ordinal": 3, "concept_key": "db:9", "topic_title": "Shapes",
+         "concept_title": "Culmination - Shapes", "is_culmination": True},
+    ]
+    without = ag.decide_levels(
+        [{"candidate": _candidate(), "concept": _grouping_concept()}],
+        meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
+        critic=_verified_critic, store=kernel.DecisionStore(), fixer=None,
+    )
+    assert "chapter_teaching_order" not in seen[-1]
+    assert "this_concept_ordinal" not in seen[-1]
+    assert with_order[0]["authority"]["decision_key"] != without[0]["authority"]["decision_key"]
+    assert with_order[0]["authority"]["policy_version"] == ag.LEVEL_POLICY_VERSION
+    assert ag.LEVEL_POLICY_VERSION == "assessment-level-2-teaching-order-2026-09-13"
+
+
+def test_level_refuses_a_home_concept_missing_from_the_teaching_order_before_spend():
+    def never(_payload):
+        raise AssertionError("spent")
+
+    def run(order):
+        return ag.decide_levels(
+            [{"candidate": _candidate(), "concept": _grouping_concept()}],
+            meta=META, envelope_sha256=ENVELOPE_SHA256, provider=never,
+            critic=_verified_critic, store=kernel.DecisionStore(), fixer=None,
+            chapter_teaching_order=order,
+        )
+
+    with pytest.raises(ag.GroupingError, match="not in chapter_teaching_order"):
+        run([{"concept_key": "db:2", "concept_title": "Other"}])
+    with pytest.raises(ag.GroupingError, match="repeats concept_key"):
+        run([{"concept_key": "db:1"}, {"concept_key": "db:1"}])
+    with pytest.raises(ag.GroupingError, match="has no concept_key"):
+        run([{"concept_title": "x"}])
+
+
+def test_level_rules_name_the_teaching_order_evidence_in_author_and_critic():
+    assert "chapter_teaching_order" in ag.LEVEL_SYSTEM
+    assert "this_concept_ordinal" in ag.LEVEL_SYSTEM
+    assert "name the later concept in the rationale" in ag.LEVEL_SYSTEM
+    assert "chapter_teaching_order" in ag.LEVEL_CRITIC_SYSTEM
+    assert "flag a verdict that ignored it" in ag.LEVEL_CRITIC_SYSTEM
+    # The rules the new sentences extend survive verbatim.
+    assert "the home concept's teaching description" in ag.LEVEL_SYSTEM
+    assert "The blueprint difficulty label is deliberately absent" in ag.LEVEL_SYSTEM
+    assert "There is no quota" in ag.LEVEL_SYSTEM
+    assert "never balance, spread, or infer a tier" in ag.LEVEL_SYSTEM
+    assert "Do not substitute a blueprint difficulty label" in ag.LEVEL_CRITIC_SYSTEM
+    assert ag.LEVEL_CALIBRATION in ag.LEVEL_SYSTEM
+    assert ag.LEVEL_CALIBRATION in ag.LEVEL_CRITIC_SYSTEM
+

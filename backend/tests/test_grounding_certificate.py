@@ -1250,7 +1250,9 @@ def test_deposit_cleanup_cannot_drop_type_case_host_manifest(
     monkeypatch.setattr(
         build_concepts.concept_cleanup,
         "clean_concept_record",
-        lambda row: {
+        # The deposit passes the run's recorded figure policy (Q68); this
+        # stand-in drops the manifest whatever the policy says.
+        lambda row, **_kwargs: {
             key: copy.deepcopy(value)
             for key, value in row.items()
             if key != certificate.TYPE_CASE_HOST_MANIFEST_FIELD

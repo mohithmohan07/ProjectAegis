@@ -8,6 +8,7 @@ which must reproduce them.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from pathlib import Path
@@ -719,3 +720,55 @@ def test_critic_dissent_ships_flags_on_the_settled_rows(
         for row in flagged
         for flag in row["review_flags"]
     )
+
+
+def test_content_authoring_carries_the_chapter_roster_in_teaching_order(
+    golden_envelope, golden_rows,
+):
+    """Q69: every authoring request carries the chapter's topic roster in the
+    sealed graph's own order, with this topic's position — evidence for the
+    author and critic, composed once, identical across topics."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, critic = _providers(mapping)
+    requests: list[dict] = []
+
+    def capturing(request: dict) -> dict:
+        if request.get("stage") == "content_authoring":
+            requests.append(copy.deepcopy(request))
+        return analysis(request)
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=capturing,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+    assert len(settled) == 53
+    assert requests
+    graph_topics = [
+        row for row in golden_envelope["graph"]["topics"] if isinstance(row, dict)
+    ]
+    skeleton = golden_envelope["skeleton_rows"]
+    rosters = {json.dumps(r["chapter_topics_in_teaching_order"], sort_keys=True) for r in requests}
+    assert len(rosters) == 1
+    roster = requests[0]["chapter_topics_in_teaching_order"]
+    assert [e["position"] for e in roster] == list(range(1, len(graph_topics) + 1))
+    assert [e["topic_id"] for e in roster] == [t["topic_id"] for t in graph_topics]
+    assert [e["title"] for e in roster] == [t["title"] for t in graph_topics]
+    # Every topic lists its skeleton concepts (settle resolves each row's
+    # topic before the roster is composed); culminations stay out.
+    assert all(entry["concept_titles"] for entry in roster)
+    assert sorted(t for e in roster for t in e["concept_titles"]) == sorted(
+        _normal(row.get("concept_title"))
+        for row in skeleton
+        if not cr.is_culmination(str(row.get("concept_title") or ""))
+    )
+    for request in requests:
+        position = request["this_topic_position"]
+        assert roster[position - 1]["topic_id"] == request["topic"]["topic_id"]
+        assert "chapter_topics_in_teaching_order" in request["rules"]
+        assert "this_topic_position" in request["rules"]
+        assert "Author each concept's learner-facing content in ONE pass" in request["rules"]
+
