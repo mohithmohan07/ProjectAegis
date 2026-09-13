@@ -855,7 +855,8 @@ def settle(
     progress.log(
         f"Settle: deciding {len(normal_rows)} concept(s) across "
         f"{len(topics)} topic(s); {len(culmination_rows)} culmination "
-        "recap(s) will be derived without model calls.",
+        "recap(s) will be named, consolidated and given their mastery "
+        "inside the same authoring decisions.",
     )
     settled: list[dict[str, Any]] = []
     flags_by_row: dict[int, list[str]] = {}

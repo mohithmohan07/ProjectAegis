@@ -4431,9 +4431,30 @@ and the payload, both of which change, so no stored authoring decision is
 served under the new key: a completed run (restored `final_content_ready`)
 never re-enters Phase 3, while a run resuming from a NON-terminal checkpoint
 re-authors Settle for every topic — a re-spend, said here rather than hidden.
-`AUTHOR_POLICY_SUFFIX` stays `-q1`. Historical rows carrying a label-free
-culmination Description are left alone by every formatter (they canonicalise
-a label they find and touch nothing else).
+`AUTHOR_POLICY_SUFFIX` stays `-q1`. **The adversarial verification of this
+item found the replay claim incomplete and it is fixed in the same series:**
+sealed Post runs are NOT label-free — the pre-Q68 settle rules told the model
+to fold the capability into the paragraph, and 7 of job 139's 9 culminations
+carry "Achieving Mastery:" INLINE — and two of the four removed skips sit in
+the DATABASE DEPOSIT chain (`refine_chapter`,
+`_ensure_mastery_lines_via_api`), which runs over restored sealed rows before
+the final-certificate recompute that seals `concept_details`; an ungated
+formatter would have refused every pre-Q68 `final_content_ready` checkpoint
+deposited after this deploy (the queued, paused, crashed and console-Retried
+class) and discarded the checkpoint. Both formatters now take
+`format_culminations`, the run's recorded generation-quality answer
+(`culmination_mastery_formatted`, true from v2 on — v2 was minted in the same
+change as the widening, so no run stamped v2 or later was sealed under the
+skip), read from the bound routing record at the deposit and from the
+envelope or metadata in Assemble and the Refiner — the `keep_figures`
+pattern. Also recorded from that verification: `host._settled_index` keys
+settled rows by casefold title alone, so two topics given the same authored
+synthesis name would collide there (the member-list join made that impossible
+by construction); a topic-scoped index or a cross-topic duplicate-title
+review flag in Assemble is the mechanical option, not taken here. And
+`_MASTERY_LABEL_RE` (`mastery\s*[:\-]`) now also reaches culmination
+paragraphs — the pre-existing normal-row hazard ("reaches mastery: …" is cut
+at the label), unchanged in kind.
 
 **Prompts.** Every existing sentence is kept; the new ones sit beside the
 consolidation sentence they extend in `prompts.ANALYSIS_SYSTEM`, the settle

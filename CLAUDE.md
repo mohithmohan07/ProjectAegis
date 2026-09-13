@@ -14,9 +14,14 @@ duplicate-identity refresh (`prelearning_formation_contract`, a wrapper on
 `settle.settle` for EVERY lane — not "the Pre lane") no longer writes the
 member-list name; `CULMINATION_POLICY_VERSION` is `-2`. The four culmination
 exemptions (refine_chapter, `_ensure_mastery_lines_via_api`, Polish, the
-strict validator) are removed: contract §11.1 requires a real Mastery. A run
-resuming from a NON-terminal checkpoint re-authors Settle (the ANALYSIS_SYSTEM
-digest and payload changed); completed runs never re-enter Phase 3. (2)
+strict validator) are removed: contract §11.1 requires a real Mastery — but
+the two formatters in the DEPOSIT chain are gated on the run's recorded
+version (`culmination_mastery_formatted`, v2 on): 7 of job 139's 9 sealed
+culminations carry the label INLINE and the final certificate seals the
+text, so an ungated formatter would have refused every pre-Q68 checkpoint
+deposited after deploy. A run resuming from a NON-terminal checkpoint
+re-authors Settle (the ANALYSIS_SYSTEM digest and payload changed);
+completed runs never re-enter Phase 3. (2)
 **Paired corrections.** `analysis_correction_policy` is frozen on NEW
 envelopes; under it every misconception/error-analysis item carries a
 `correction`, the checker refuses an empty one, and the section renders

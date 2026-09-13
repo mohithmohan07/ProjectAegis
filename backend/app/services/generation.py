@@ -12617,8 +12617,13 @@ def _has_valid_terminal_mastery(details: str) -> bool:
 
 def _ensure_mastery_lines_via_api(
     records: list[dict], *, meta: dict, use_api: bool = True,
+    format_culminations: bool = True,
 ) -> list[dict]:
     """Normalize each concept's "Achieving Mastery: ..." line format.
+
+    ``format_culminations`` is the run's recorded generation-quality answer
+    (``generation_quality_policy.culmination_mastery_formatted``); a run
+    sealed before v2 replays the culmination skip it was assembled with.
 
     Settle's content-authoring pass owns mastery under the rewrite: this
     pass is pure format normalization (mechanics). A row still missing its
@@ -12628,6 +12633,10 @@ def _ensure_mastery_lines_via_api(
     del meta, use_api
     missing = 0
     for rec in records:
+        if not format_culminations and cr.is_culmination(
+            rec.get("concept_title", "")
+        ):
+            continue
         rec["concept_details"] = cr.format_mastery_statement(
             rec.get("concept_details", ""))
         if not _has_valid_terminal_mastery(rec.get("concept_details", "")):

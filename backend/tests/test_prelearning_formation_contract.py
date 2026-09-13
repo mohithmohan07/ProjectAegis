@@ -434,3 +434,49 @@ def test_install_is_reload_safe(monkeypatch):
 
     assert getattr(prelearn.merge, "_FORMATION_CONTRACT_WRAPPER", False)
     assert getattr(settle.settle, "_ROW_IDENTITY_CONTRACT_WRAPPER", False)
+
+
+def test_refresh_keeps_a_planned_culminations_title_and_mastery(monkeypatch):
+    """Q68: the sealed plan owns a planned culmination's title and mastery;
+    the refresh authors only its consolidation."""
+    from app.services import postlearning_formation_contract as post
+
+    monkeypatch.setattr(envelope, "validate", lambda value: copy.deepcopy(value))
+    rows = [
+        _row("Meaning of the poem", "BLK-POEM", "TOPOLOGY-CONCEPT-0001",
+             details="Description: One.\nAchieving Mastery: Explain the meaning."),
+        _row("Form of the poem", "BLK-FORM", "TOPOLOGY-CONCEPT-0002",
+             details="Description: Two.\nAchieving Mastery: Name the form."),
+        {
+            **_row("Culmination: Planned close", "BLK-POEM", "TOPOLOGY-CONCEPT-0003",
+                   details="Description: Old.\nAchieving Mastery: Recite the stanza with its meaning."),
+            "parent_concept": "Culmination",
+            post.PLAN_IDENTITY_FIELD: {"plan_topic_id": "PT-1", "plan_concept_id": "PC-3"},
+            post.SEMANTIC_ROLE_FIELD: "stanza_culmination",
+        },
+    ]
+    requests: list[dict] = []
+
+    def provider(request):
+        requests.append(copy.deepcopy(request))
+        topic = request["topics"][0]
+        return {"topics": [{
+            "topic_id": topic["topic_id"],
+            "culmination_title": topic["current_title"],
+            "consolidation": "Meaning and form together make the poem's invitation.",
+            "achieving_mastery": "",
+            "rationale": "Both final concepts are combined.",
+        }]}
+
+    fixed = contract._refresh_affected_culminations(
+        _env(), rows, {"TOPIC-1"}, provider=provider, store=kernel.DecisionStore(),
+    )
+    culmination = next(row for row in fixed if row["parent_concept"] == "Culmination")
+    assert culmination["concept_title"] == "Culmination: Planned close"
+    assert culmination["concept_details"] == (
+        "Description: Meaning and form together make the poem's invitation."
+        "\nAchieving Mastery: Recite the stanza with its meaning."
+    )
+    assert requests[0]["topics"][0]["planned"] is True
+    assert requests[0]["topics"][0]["current_title"] == "Culmination: Planned close"
+

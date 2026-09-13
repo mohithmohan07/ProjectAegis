@@ -185,3 +185,24 @@ def duplicate_case_titles_returned(value: Mapping[str, Any] | None) -> bool:
     recorded = version_of(value)
     return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V4)
 
+
+def culmination_mastery_formatted(value: Mapping[str, Any] | None) -> bool:
+    """v2: the mastery formatters no longer skip culminations (Q68).
+
+    A run sealed before v2 was assembled with ``concept_refiner.refine_chapter``
+    and ``generation._ensure_mastery_lines_via_api`` skipping culminations, and
+    its final certificate seals ``concept_details`` as it was — a culmination
+    carrying an inline "Achieving Mastery:" (measured: 7 of job 139's 9) must
+    replay through the skip, or the deposit recompute refuses the sealed
+    payload. v2 and later were minted in the same change as the widening, so
+    no run stamped v2 or later was sealed under the skip.
+    """
+    recorded = version_of(value)
+    return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V2)
+
+
+def bound_culmination_mastery_formatted() -> bool:
+    """The answer for the run this process is BOUND to (see ``bound_figure_references_kept``)."""
+    value = _run_policy.get()
+    return value is not _UNBOUND and culmination_mastery_formatted({KEY: value})
+

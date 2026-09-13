@@ -474,7 +474,8 @@ def test_deposit_cannot_remint_certificate_after_cleanup_drops_row(
     monkeypatch.setattr(
         build_concepts.concept_refiner,
         "refine_chapter",
-        lambda current: current,
+        # Q68: the deposit passes the run's recorded culmination-format answer.
+        lambda current, **_kwargs: current,
     )
     monkeypatch.setattr(
         build_concepts.concept_validator,

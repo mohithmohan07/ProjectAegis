@@ -172,3 +172,20 @@ def test_the_extraction_prompt_keeps_the_printed_figure_label_in_the_caption():
     assert "(its printed figure label\nincluded)" in source
     # The sentence it extends is still there.
     assert "source_caption is the exact printed caption, empty when none is printed;" in source
+
+
+def test_culmination_title_and_mastery_are_authored_fields():
+    """Q68: the Settle authoring response and the refresh seam both carry the
+    culmination's title and mastery; the seam's literal key is bumped."""
+    from app.services import prelearning_formation_contract as contract
+    from app.services.phase3 import prompts, settle
+
+    assert '"culmination_title"' in prompts.ANALYSIS_SYSTEM
+    assert '"achieving_mastery"' in prompts.ANALYSIS_SYSTEM
+    assert "exact prefix 'Culmination - '" in prompts.ANALYSIS_SYSTEM
+    assert "planned: true" in prompts.ANALYSIS_SYSTEM
+    assert "culmination_title" in contract.CULMINATION_SYSTEM
+    assert "achieving_mastery" in contract.CULMINATION_SYSTEM
+    assert contract.CULMINATION_POLICY_VERSION == "settle-row-identity-culmination-2"
+    assert settle.AUTHOR_POLICY_SUFFIX == "-q1"
+

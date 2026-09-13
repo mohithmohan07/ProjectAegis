@@ -1266,7 +1266,8 @@ def test_deposit_cleanup_cannot_drop_type_case_host_manifest(
     monkeypatch.setattr(
         build_concepts.concept_refiner,
         "refine_chapter",
-        lambda current: current,
+        # Q68: the deposit passes the run's recorded culmination-format answer.
+        lambda current, **_kwargs: current,
     )
     monkeypatch.setattr(
         build_concepts.concept_validator,

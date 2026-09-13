@@ -789,6 +789,7 @@ def _deposit_concepts(
     final_grounding_certificate: dict | None = None,
     grounding_certificate_sink: dict | None = None,
     keep_figures: bool | None = None,
+    format_culminations: bool = True,
 ) -> tuple[list[int], list[int]]:
     """Create concepts under the chapter, reusing existing ones across books.
 
@@ -855,7 +856,11 @@ def _deposit_concepts(
     records = concept_cleanup.filter_review_violations(
         records, subject=chapter.subject, board=chapter.board,
         chapter_title=chapter.chapter_title)
-    records = concept_refiner.refine_chapter(records)
+    # Q68: the two mastery formatters replay the culmination skip a run
+    # sealed before generation-quality v2 was assembled with, or the final
+    # certificate recompute below would refuse the sealed payload.
+    records = concept_refiner.refine_chapter(
+        records, format_culminations=format_culminations)
     # The final deposit boundary must be resilient when the API repair pass
     # fails or returns generic/misclassified learner analysis. Preserve valid
     # Misconceptions and/or Error Analysis, and add the deterministic fallback
@@ -863,7 +868,8 @@ def _deposit_concepts(
     records = concept_validator.ensure_valid_learner_analysis(records)
     if pre_post == "Post":
         records = generation._ensure_mastery_lines_via_api(
-            records, meta={}, use_api=False)
+            records, meta={}, use_api=False,
+            format_culminations=format_culminations)
         records = generation._ensure_terminal_culmination_contract(records)
         records = generation._canonicalize_concept_rich_text(records)
         records = _restore_deposit_source_topic_snapshot(
@@ -2140,6 +2146,7 @@ def _deposit_and_publish_concepts(
     phase3_pre_release: dict | None = None,
     explicit_duration_minutes: int = 0,
     keep_figures: bool | None = None,
+    format_culminations: bool = True,
 ) -> tuple[list[int], list[int], dict]:
     """Serialize final dedupe, DB commit, and shared workbook publication.
 
@@ -2174,6 +2181,7 @@ def _deposit_and_publish_concepts(
             final_grounding_certificate=final_grounding_certificate,
             grounding_certificate_sink=certificate_sink,
             keep_figures=keep_figures,
+            format_culminations=format_culminations,
         )
         if (
             pre_post == "Post"
@@ -5029,6 +5037,9 @@ def generate_post_learning(
                 # this call runs inside ``model_routing_run.bind_job``
                 # (uploads.py), so the bound run is the recorded answer.
                 keep_figures=generation_quality_policy.bound_figure_references_kept(),
+                format_culminations=(
+                    generation_quality_policy.bound_culmination_mastery_formatted()
+                ),
             )
         except DepositValidationError:
             db.rollback()

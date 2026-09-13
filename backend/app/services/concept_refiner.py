@@ -1215,8 +1215,17 @@ def ensure_misconceptions(records: list[dict]) -> list[dict]:
     return ensure_analysis_sections(records)
 
 
-def refine_chapter(records: list[dict]) -> list[dict]:
-    """Full deterministic refinement pass over a chapter's ordered records."""
+def refine_chapter(
+    records: list[dict], *, format_culminations: bool = True,
+) -> list[dict]:
+    """Full deterministic refinement pass over a chapter's ordered records.
+
+    ``format_culminations`` is the run's recorded generation-quality answer
+    (``generation_quality_policy.culmination_mastery_formatted``): a run
+    sealed before v2 was assembled with this formatter skipping culminations
+    and its final certificate seals ``concept_details``, so its deposit
+    replays the skip and the sealed rows stay a fixpoint.
+    """
     for rec in records:
         if rec.get("concept_details"):
             details = split_merged_description_blocks(rec["concept_details"])
@@ -1229,10 +1238,12 @@ def refine_chapter(records: list[dict]) -> list[dict]:
                     if flag not in flags:
                         flags.append(flag)
             details = reduce_type_sections(details)
-            # Culminations carry a mastery line too (contract §11.1); the
-            # formatter canonicalises a label it finds and leaves a
-            # label-free legacy Description alone.
-            details = format_mastery_statement(details)
+            # Culminations carry a mastery line too (contract §11.1). A run
+            # sealed before generation-quality v2 was assembled with this
+            # formatter skipping culminations; its deposit replays the skip
+            # (format_culminations=False) so the sealed rows stay a fixpoint.
+            if format_culminations or not is_culmination(rec.get("concept_title", "")):
+                details = format_mastery_statement(details)
             details = normalize_analysis_sections(details)
             rec["concept_details"] = details
     records = ensure_analysis_sections(records)

@@ -2239,3 +2239,16 @@ def test_rejected_types_rewrite_keeps_non_type_repairs():
     assert "Example: Use the formula." not in accepted[0]["concept_details"]
     assert not g._rendered_inventory_coverage_defects(
         accepted, inventory)["missing"]
+
+
+def test_final_validation_flags_a_culmination_without_mastery():
+    """Q68 (contract §11.1): a culmination without its Achieving Mastery line
+    is flagged on its own row and never halts the run."""
+    culmination = _strict_culmination()
+    culmination["concept_details"] = "Description: Recap of Electric Current Relationship."
+    g._validate_final_or_raise([_strict_normal_row(), culmination])
+    assert any(
+        "validation: missing_mastery_statement" in flag
+        for flag in culmination.get("review_flags") or []
+    )
+

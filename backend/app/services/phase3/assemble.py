@@ -1059,10 +1059,16 @@ def assemble(
             board=str(meta.get("board") or ""),
             chapter_title=str(meta.get("chapter_title") or ""),
         )
-        out_rows = concept_refiner.refine_chapter(out_rows)
+        format_culminations = (
+            generation_quality_policy.culmination_mastery_formatted(env)
+        )
+        out_rows = concept_refiner.refine_chapter(
+            out_rows, format_culminations=format_culminations
+        )
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         out_rows = generation._ensure_mastery_lines_via_api(
-            out_rows, meta={}, use_api=False
+            out_rows, meta={}, use_api=False,
+            format_culminations=format_culminations,
         )
         out_rows = generation._ensure_terminal_culmination_contract(
             out_rows

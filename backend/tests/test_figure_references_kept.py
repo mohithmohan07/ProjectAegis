@@ -256,3 +256,49 @@ def test_release_qc_records_a_prose_figure_with_no_image_on_the_row():
         issue for issue in release_qc.audit({"records": [in_example]})[0]
         if issue["code"] == release_qc.PROSE_FIGURE_WITHOUT_IMAGE
     ]
+
+
+def test_a_pre_v2_run_replays_the_culmination_mastery_skip():
+    """Q68: the two deposit-chain mastery formatters replay the culmination
+    skip a run sealed before generation-quality v2 was assembled with — its
+    final certificate seals concept_details, so an ungated formatter would
+    refuse the sealed payload at the deposit recompute."""
+    from app.services import concept_refiner as cr
+    from app.services import generation as g
+
+    inline = "Description: Together these explain germination. Achieving Mastery: Explain it."
+
+    def culm():
+        return {"concept_title": "Culmination - Germination",
+                "parent_concept": "Culmination", "concept_details": inline}
+
+    assert cr.refine_chapter([culm()], format_culminations=False)[0]["concept_details"] == inline
+    assert g._ensure_mastery_lines_via_api(
+        [culm()], meta={}, use_api=False, format_culminations=False,
+    )[0]["concept_details"] == inline
+    expected = "Description: Together these explain germination.\nAchieving Mastery: Explain it."
+    assert cr.refine_chapter([culm()])[0]["concept_details"] == expected
+    assert g._ensure_mastery_lines_via_api(
+        [culm()], meta={}, use_api=False,
+    )[0]["concept_details"] == expected
+    # A normal row is formatted either way.
+    normal = {"concept_title": "Germination", "parent_concept": "Seeds",
+              "concept_details": "Description: A seed sprouts. Achieving Mastery: Describe it."}
+    assert "\nAchieving Mastery:" in cr.refine_chapter(
+        [dict(normal)], format_culminations=False,
+    )[0]["concept_details"]
+    assert quality.culmination_mastery_formatted({quality.KEY: quality.V1}) is False
+    assert quality.culmination_mastery_formatted({quality.KEY: quality.V2}) is True
+    assert quality.culmination_mastery_formatted({"metadata": {quality.KEY: quality.V4}}) is True
+    assert quality.culmination_mastery_formatted(None) is False
+    assert quality.bound_culmination_mastery_formatted() is False
+    with quality.bind_run(quality.V1):
+        assert quality.bound_culmination_mastery_formatted() is False
+    with quality.bind_run(quality.V3):
+        assert quality.bound_culmination_mastery_formatted() is True
+    import inspect
+
+    from app.services import build_concepts
+    source = inspect.getsource(build_concepts._deposit_concepts)
+    assert "format_culminations=format_culminations" in source
+
