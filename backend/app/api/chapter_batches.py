@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from .. import schemas
 from ..db import get_db
 from ..services import auth, uploads
 from ..services import build_concepts as build_concepts_svc
@@ -100,7 +101,22 @@ def list_rows(
     )
 
 
-@router.get("/{chapter_id}")
+class ChapterBatchDetailOut(BaseModel):
+    """The row plus the job, through the same schema every job route uses.
+
+    Without a response_model FastAPI encodes the ORM object's loaded COLUMNS
+    only, and ``source_artifacts`` is a property installed at import time, not
+    a column — so the drawer's Concept and Master download links resolved to
+    nothing in every state, forever, while the identical code worked on Build
+    Concepts (which declares ``UploadJobOut``). Declaring it also stops the
+    route disclosing raw columns no console consumer reads.
+    """
+
+    row: dict[str, Any]
+    job: schemas.UploadJobOut | None = None
+
+
+@router.get("/{chapter_id}", response_model=ChapterBatchDetailOut)
 def get_row(
     chapter_id: int,
     db: Session = Depends(get_db),

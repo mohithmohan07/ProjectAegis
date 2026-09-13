@@ -460,6 +460,21 @@ def _run_step01(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
             job_id,
             lambda: release_contract.generate_post_learning(
                 db, job_id, int(row.chapter_id), owner_sub=owner_sub,
+                # Contract section 5 spells this call out with the kwarg, and
+                # the interactive route passes it
+                # (build_concepts_release_api_contract.py:143). Without it the
+                # flag defaults to False, the pause branch is skipped, and
+                # step01 falls through to _build_master_siblings: it renders
+                # the job's OWN staged Concept workbook, records it as an
+                # accepted "unchanged" reviewed input, and spends the whole of
+                # Step 02 on machine-authored content the team never saw —
+                # against Q49/Q51, which exist to keep Step 02 reading only a
+                # file a person reviewed. It also never calls
+                # initialize_concept_review, whose sole caller is that skipped
+                # branch, so the row ends with no marker and the console
+                # derives it as blocked/no_review_marker with every action but
+                # "upload source" greyed out. A full paid run, stranded.
+                pause_for_concept_review=True,
             ),
             owner_sub=owner_sub,
         )

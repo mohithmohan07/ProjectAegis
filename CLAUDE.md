@@ -1,6 +1,35 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q63 (marking containment, 13 September 2026).**
+**Latest owner amendment: Q64 (batch console audit, 13 September 2026).**
+The owner: "let's finish off the remaining work on batch api." Every clause of
+`docs/chapter-batch-console-contract.md` was read against the code and every
+claimed gap adversarially verified: **39 survived, 1 refuted, 3 blocking.**
+FIXED: (1) `chapter_queue_worker._run_step01` omitted
+`pause_for_concept_review=True`, which contract section 5 spells out and the
+interactive route passes. Without it the pause branch is skipped, and — worse
+than "Masters from unreviewed Concepts" — `reviewed_file_input.prepare` takes
+its unchanged-file branch, RENDERS the job's own staged Concept workbook,
+records it as an accepted reviewed input and spends the whole of Step 02 on it,
+against Q49/Q51. `initialize_concept_review` (sole caller: that skipped branch)
+never runs, so the row derives `blocked/no_review_marker` with only "upload
+source" left — a full paid run, stranded, verified end to end. (2)
+`GET /chapter-batches/{chapter_id}` declared no `response_model`, so FastAPI
+encoded loaded COLUMNS only and dropped `source_artifacts`, which is a property
+— the drawer's Concept and Master downloads read undefined in every state,
+forever. **NOT fixed, needs the owner:** Step 02 is inadmissible under every
+configuration but `fly.toml`'s exact 48/16, and even there at zero margin
+(`gate >= 2*workers + 16`; code defaults 8/6 need 28, staging 3/1 needs 18).
+The dispatcher also `break`s on the first inadmissible task instead of skipping
+it, so a queued step02 starves admissible step01s behind it, silently. The
+skip-with-anti-starvation half is mechanics; making a step02 admissible at 8/6
+is a policy choice (raise the floor, lower the reserve, or refuse to start below
+a named gate size). **Also awaiting the owner:** chapters already pushed through
+the old code are stranded and will not self-heal — a data question. Full list in
+`docs/chapter-batch-console-audit-2026-09-13.md`. The deferred OpenAI Batch-API
+lane is not recommended yet: batching fan-out on a queue that cannot admit a
+step02 would measure nothing.
+
+**Previous owner amendment: Q63 (marking containment, 13 September 2026).**
 **A regression Q56 introduced, found in the owner's Triangles run.** Q56 gave
 marking the containment materialization already had — an impossible question
 becomes a BLOCKED row and the lane carries on — then undid it two lines later.
