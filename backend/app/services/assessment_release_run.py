@@ -2664,6 +2664,9 @@ def run_release_for_job(
         critic=marking_critic,
         store=store,
         fixer=fixer,
+        # One impossible candidate must not cost the lane every other
+        # finished, paid-for question (Q56).
+        contain_exhausted=True,
         on_result=(
             None if stage_progress is None
             else lambda index, item, result: _observe_stage(
@@ -2674,6 +2677,72 @@ def run_release_for_job(
     marking_by_candidate = _candidate_rows_exactly(
         "assessment marking", candidates, marking_rows
     )
+    # A candidate whose marking exhausted bounded corrections AND The Fixer
+    # comes back as a blocked marker instead of a verdict. Exclude it exactly
+    # the way a materialization block is excluded above — same index-aligned
+    # ``keep``, same ledger, same loud per-question record — so that one
+    # impossible question can never again take a whole Master lane down with
+    # every other finished, paid-for question in it.
+    marking_blocked = [
+        copy.deepcopy(dict(candidate)) for candidate in candidates
+        if marking_by_candidate[candidate["candidate_id"]].get(
+            marking.BLOCKED_MARKER
+        )
+    ]
+    if marking_blocked:
+        keep = [
+            index for index, candidate in enumerate(candidates)
+            if not marking_by_candidate[candidate["candidate_id"]].get(
+                marking.BLOCKED_MARKER
+            )
+        ]
+        for blocked in marking_blocked:
+            verdict = marking_by_candidate[blocked["candidate_id"]]
+            blocked["assessment_eligibility"] = (
+                materialization.BLOCKED_ELIGIBILITY
+            )
+            blocked["flags"] = list(verdict.get("flags") or [])
+            identity_label = (
+                (blocked.get("source_atom_ids") or [""])[0]
+                or str(
+                    (blocked.get("generated_question") or {}).get(
+                        "pre_question_id"
+                    )
+                    or ""
+                )
+                or str(blocked.get("candidate_id") or "")
+            )
+            progress.log(
+                f"Master file: question {identity_label} could not be marked "
+                "to contract after bounded corrections and The Fixer; it is "
+                "BLOCKED from this Master and recorded for review: "
+                + "; ".join(
+                    str(flag) for flag in (blocked.get("flags") or [])[:4]
+                ),
+                level="error",
+            )
+        candidates = [candidates[index] for index in keep]
+        obligations = [obligations[index] for index in keep]
+        cells = [cells[index] for index in keep]
+        if not generate_lane:
+            atoms = [atoms[index] for index in keep]
+        blocked_candidates = blocked_candidates + marking_blocked
+        progress.log(
+            f"Master file continues with {len(candidates)} of "
+            f"{len(candidates) + len(marking_blocked)} marked question(s); "
+            f"{len(marking_blocked)} blocked question(s) are recorded on the "
+            "release for review.",
+            level="warning",
+        )
+        if not candidates:
+            # Only reachable because marking blocked EVERY question — an
+            # empty lane that never had candidates is a different, legitimate
+            # case and must keep its existing behaviour.
+            raise ReleaseRunError(
+                "every question in this Master lane was blocked at marking; "
+                "nothing is left to release. The blocked questions and their "
+                "defects are recorded on the release."
+            )
     for candidate in candidates:
         verdict = marking_by_candidate[candidate["candidate_id"]]
         candidate["marks"] = verdict.get("marks")

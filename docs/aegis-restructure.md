@@ -3373,3 +3373,87 @@ zero times: `pruned 0`, `retained_with_content []`.
 
 **Not changed:** what a run produces, any model route, any review stage, and
 every code already stored.
+
+## Q56 — decided — a Step 2 failure names its lane, and one bad question no longer costs the lane
+
+Two of the owner's jobs failed Step 2 on 12 September 2026, for three unrelated
+reasons, behind messages that named none of them.
+
+**Job Triangles (Mathematics, Grade 10).** The Post Master lane's last narrative
+event was "Authoring marking for 51 candidate(s)" at 15:46:25. Its last provider
+call **succeeded** at 15:52:55 (`semantic_resolution`, 52.9s). Then the lane
+produced nothing at all — no event, no attempt, no error — while the Pre lane ran
+on for 51 minutes and published `REL-bd91309f430c4deabc1a v1` at 16:44:37. At
+16:46:05 the run ended with "The backend could not finish Master generation."
+
+**Job 139 (Social Science, Grade 10).** A 502. The console retained one event,
+the job stayed at `master_building`, and the badge read "Step 2 stopped · retry
+available".
+
+An earlier attempt on Triangles had failed a third way — both lanes walking the
+RateLimitError ladder to `retry 10/10`. All three produced the same sentence.
+
+### What was actually wrong
+
+| | |
+| --- | --- |
+| `_build_lane` caught every exception and returned `None` with **no log at all** | `build_concepts_release_contract.py:769` |
+| marking had no `ContractError` containment, though materialization has had one all along | `assessment_marking.py` vs `assessment_materialization.py:1411` |
+| the recorded reason was routed only to the outputs-card manifest | `build_concepts_release.py:986` |
+| the console printed a fixed sentence and discarded `master_outputs[lane].reason` | `RunConsole.tsx:731` |
+| any non-2xx on the streaming POST became a plain `Error`, bypassing every reattach path | `api/client.ts:176` |
+| `master_building` is durable; "is it running" is a process-local lock, and nothing swept the difference | `uploads.py:48` |
+| the batch queue read a refused Master lane as a green `done` row | `chapter_queue_worker.py` |
+
+The asymmetry between the two lanes is the whole story. Both hit the same
+exhausted-decision condition. Materialization contains it as a recorded BLOCKED
+row — which is exactly the Pre lane's "6 blocked question(s)" at 15:50:28, and
+why that lane shipped 39 of 45 questions. Marking does not, so the identical
+defect one stage later raised out of the fan-out, out of the lane worker, and
+took 51 finished, paid-for questions with it. CLAUDE.md answers this in as many
+words: *finished work always ships*.
+
+### Decided
+
+1. **The lane says what happened.** `_build_lane` emits one error event inside
+   its own `label_scope` before returning, and a `logger.exception` for the
+   frames. The recorded issue keeps the type and message; only the server log
+   keeps where it stopped.
+2. **Marking contains an exhausted decision.** `decide_markings` returns a
+   `BLOCKED_MARKER` row instead of raising, and `assessment_release_run` excludes
+   it with the same index-aligned `keep`, the same per-question error log and the
+   same `materialization_blocked` ledger that materialization blocks already use.
+   A lane with nothing left to release refuses explicitly rather than shipping an
+   empty Master.
+3. **The reason reaches the console.** `master_outputs[lane].reason` transcribes
+   the recorded issue, and the terminal state renders the failing lane and its
+   reason instead of one fixed sentence.
+4. **A dead process no longer strands a job.** A startup sweep retires any job
+   still marked `master_building` — a fresh process holds no generation lock, so
+   such a marker can only belong to a worker that no longer exists.
+5. **A gateway failure is transport, not an answer.** `isTransientTransportStatus`
+   (5xx, 408, 429) makes the streaming POST agree with the run-events poller,
+   which already retried exactly these, so a 502 reaches the reattach path.
+6. **The queue tells the truth.** A Step 02 task whose review marker says
+   `master_failed` records `failed` with the lane reasons, not `done`.
+
+Nothing here changes what a run produces, any model route, or any review stage.
+
+### Reported, not fixed here
+
+`katex_rules._equation_has_loose_prose` masks every `\command`, then flags any
+remaining run of two or more ASCII letters as prose. Measured against real Grade
+10 Triangles notation it rejects `AC`, `PQ`, `\angle BAC`,
+`\triangle ABC \sim \triangle DEF` and `\frac{AB}{DE} = \frac{AC}{DF}` — all
+valid, renderable KaTeX. That is a regex deciding what content *means*, which
+Rule 1 forbids in as many words, and on a similarity chapter it rejects nearly
+every answer.
+
+It also forms a closed cycle with two sibling gates. For the correct answer `AC`,
+of the four spellings a model would naturally write, exactly one passes all
+three — `a) [Katex] \text{AC} [/Katex]. …` — and no prompt, contract clause or
+defect message names it. The Fixer is re-validated by the same checker, so it
+burns three author and three Fixer calls and raises. That is the Pre lane's six
+blocked questions, and the likely trigger of the Post lane's death.
+
+The owner chose the reliability set first; the gate repair is a separate piece.

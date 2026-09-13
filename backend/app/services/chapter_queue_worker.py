@@ -25,7 +25,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .. import config, models
@@ -524,6 +524,27 @@ def _after_generation(db, job_id: int, result: Any) -> dict[str, Any]:
                 pending.get("question") or pending.get("prompt")
                 or "this run needs a recorded decision before it can continue"
             ),
+        }
+    # Step 02 returns normally even when a Master lane was refused — the
+    # Concept files are finished and must stay available (Q13), so the failure
+    # rides the review marker instead of an exception. Reading only the return
+    # therefore recorded a lane that produced no Master as a green ``done``
+    # row on the console. Ask the marker.
+    from . import build_concepts_release as concept_release
+
+    review = concept_release.concept_review_state(job)
+    if review.get("status") == concept_release.CONCEPT_REVIEW_MASTER_FAILED:
+        outputs = review.get("master_outputs")
+        reasons = [
+            f"{lane}: {str((outputs or {}).get(lane, {}).get('reason') or '').strip()}"
+            for lane in ("pre", "post")
+            if isinstance(outputs, Mapping)
+            and not (outputs.get(lane) or {}).get("ready")
+        ]
+        return {
+            "state": "failed", "failure_code": "master_lane_unavailable",
+            "error": "; ".join(r for r in reasons if r.strip(": "))
+            or "a Master lane did not build; retry Step 02",
         }
     return {"state": "done"}
 

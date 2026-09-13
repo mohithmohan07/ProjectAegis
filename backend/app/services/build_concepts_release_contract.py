@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import logging
 import threading
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -25,6 +26,8 @@ from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
 from . import storage_capacity
+
+_LOGGER = logging.getLogger(__name__)
 from .phase3 import kernel
 
 # The two Master lanes build concurrently (owner "Go", 2026-08-21), each
@@ -766,10 +769,33 @@ def _build_master_siblings(
                         ).id}
                         lane_db.commit()
                     return result
-                except Exception:  # noqa: BLE001 — see the docstring
+                except Exception as exc:  # noqa: BLE001 — see the docstring
                     # ``rebuild_lane_master`` already recorded the failure as
                     # this lane's issue. Swallow only here so the sibling and
                     # both finished Concept outputs remain available.
+                    #
+                    # But SAY SO first. The recorder writes the reason onto the
+                    # lane's staged payload, which only the outputs card reads,
+                    # so a lane that died mid-stage used to leave no trace in
+                    # the Activity log at all: the sibling ran on for another
+                    # 51 minutes and the run ended with one generic sentence
+                    # that named no lane, no stage and no reason (owner report,
+                    # 12 September 2026). One event here, inside the lane's own
+                    # ``label_scope``, is the difference between a diagnosable
+                    # failure and a silent one. Error plumbing is mechanics —
+                    # nothing about the content is judged (CLAUDE.md Rule 1).
+                    progress.log(
+                        f"This Master lane stopped: {type(exc).__name__}: {exc}"
+                        ". The other lane continues and both Concept files stay"
+                        " available; Step 2 can be retried for this lane.",
+                        level="error",
+                    )
+                    # The server-side traceback is the only durable copy of
+                    # WHERE it stopped: the recorded issue keeps the type and
+                    # message, never the frames.
+                    _LOGGER.exception(
+                        "Master lane %s failed for job %s", lane, job_id,
+                    )
                     try:
                         lane_db.rollback()
                     except Exception:
@@ -1443,12 +1469,45 @@ def build_review_masters(
         )
         raise
 
+    def _lane_reason(lane: str) -> str:
+        """The reason THIS lane has no Master, in the lane's own words.
+
+        ``record_assessment_lane_unavailable`` already stored the exception
+        type and message on the lane's staged payload; only the outputs-card
+        manifest read it, so every failure — an exhausted rate-limit ladder,
+        a contract fault mid-marking — reached the console as one fixed
+        sentence that named neither. Transcribe what was recorded; fall back
+        to the old wording only when nothing was.
+        """
+
+        # Read the job again rather than trusting the outer binding: the
+        # lanes committed on their own sessions, so the recorded issue is
+        # only guaranteed visible through a fresh load.
+        recorded_job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts"
+        )
+        issue = release.assessment_lane_issue(
+            release.release_payload(recorded_job, lane=lane)
+        )
+        details = (issue or {}).get("details")
+        details = details if isinstance(details, Mapping) else {}
+        recorded = str(details.get("error") or "").strip()
+        kind = str(details.get("exception") or "").strip()
+        if recorded:
+            return f"{kind}: {recorded}" if kind else recorded
+        # The issue's own sentence already names the lane and the cause; it is
+        # the next-best record when the structured details are absent.
+        message = str((issue or {}).get("message") or "").strip()
+        return message or (
+            "Master lane unavailable; inspect release issues or retry"
+        )
+
     master_outputs = {
         lane: {
             "ready": builds.get(lane) is not None,
             **(builds.get(lane) or {}),
             **({} if builds.get(lane) is not None else {
-                "reason": "Master lane unavailable; inspect release issues or retry"
+                "reason": _lane_reason(lane)
             }),
         }
         for lane in (release.LANE_PRE, release.LANE_POST)

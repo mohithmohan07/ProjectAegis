@@ -670,6 +670,48 @@ def initialize_concept_review(
     return state
 
 
+def sweep_interrupted_master_builds(db: Session) -> list[int]:
+    """Retire Step 2 runs whose process died mid-build, at startup.
+
+    ``master_building`` is durable; the "is it still running?" answer is a
+    process-local ``threading.Lock``. A worker that dies — OOM, a deploy
+    replacing the machine, any hard stop — therefore leaves a job that reads
+    *building* forever, with nothing to finish it and no way for the console to
+    tell it apart from a run in progress (owner report, job 139, 12 September
+    2026: "Step 2 stopped · retry available", stranded).
+
+    A process that has just started holds no generation lock by definition, so
+    every ``master_building`` marker seen here belongs to a process that no
+    longer exists. Mark them failed with a named reason so the reviewer sees
+    what happened and can retry. Mechanics only: no content is judged, and the
+    staged Concept files and every stored decision are untouched.
+    """
+
+    interrupted: list[int] = []
+    for job in db.query(models.UploadJob).filter(
+        models.UploadJob.module == "build_concepts",
+    ).all():
+        state = concept_review_state(job)
+        if state.get("status") != CONCEPT_REVIEW_MASTER_BUILDING:
+            continue
+        try:
+            update_concept_review_state(
+                db, job,
+                status=CONCEPT_REVIEW_MASTER_FAILED,
+                master_completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            job.detail = (
+                "Master generation was interrupted before it finished — the "
+                "server restarted while Step 2 was running. Your reviewed "
+                "files and every settled decision are saved; retry Step 2."
+            )
+            db.commit()
+            interrupted.append(int(job.id))
+        except Exception:
+            db.rollback()
+    return interrupted
+
+
 def update_concept_review_state(
     db: Session,
     job: models.UploadJob,

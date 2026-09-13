@@ -8,6 +8,7 @@ import {
 import {
   fourOutputCompletionFromResult,
   incompleteFourOutputLabel,
+  masterLaneFailures,
 } from "./fourOutputCompletion";
 import type { GenerationRecovery, OpenAIUsage, UploadJob } from "./types";
 
@@ -729,10 +730,30 @@ function terminalResultState(state: RunState, data: unknown): RunState {
   // the result contains later Master-lane spend.
   const terminalState = stateWithResultUsage(state, data);
   if (reviewWorkflowStatus(data) === "master_failed") {
+    // Name the lane and say why. The backend records the failing lane's
+    // exception on that lane's payload and hands it back as
+    // master_outputs[lane].reason; printing one fixed sentence instead made a
+    // rate-limit wall, a gateway death and a contract fault mid-marking
+    // indistinguishable to the reviewer (owner report, 12 September 2026).
+    const failures = masterLaneFailures(data);
+    const named = failures.length > 0
+      ? failures.map((failure) => failure.reason
+        ? `${failure.label}: ${failure.reason}`
+        : `${failure.label} is unavailable`)
+      : [];
+    const headline = failures.length > 0
+      ? `Step 2 could not finish ${failures.map((f) => f.label).join(" and ")}.`
+      : "The backend could not finish Master generation.";
+    const lines = [
+      { level: "error", ts: Date.now() / 1000,
+        message: `${headline} Your reviewed files are saved; retry Step 2.` },
+      ...named.map((message) => ({
+        level: "error", ts: Date.now() / 1000, message,
+      })),
+    ];
     return { ...terminalState, active: false, status: "error",
       progressLabel: "Step 2 failed · retry Master generation",
-      lines: [...terminalState.lines, { level: "error", ts: Date.now() / 1000,
-        message: "The backend could not finish Master generation. Your reviewed files are saved; retry Step 2." }] };
+      lines: [...terminalState.lines, ...lines] };
   }
   const incomplete = incompleteRunResult(data);
   if (incomplete) {
