@@ -12348,7 +12348,7 @@ def _has_valid_terminal_mastery(details: str) -> bool:
 def _ensure_mastery_lines_via_api(
     records: list[dict], *, meta: dict, use_api: bool = True,
 ) -> list[dict]:
-    """Normalize each normal concept's "Achieving Mastery: ..." line format.
+    """Normalize each concept's "Achieving Mastery: ..." line format.
 
     Settle's content-authoring pass owns mastery under the rewrite: this
     pass is pure format normalization (mechanics). A row still missing its
@@ -12358,8 +12358,6 @@ def _ensure_mastery_lines_via_api(
     del meta, use_api
     missing = 0
     for rec in records:
-        if cr.is_culmination(rec.get("concept_title", "")):
-            continue
         rec["concept_details"] = cr.format_mastery_statement(
             rec.get("concept_details", ""))
         if not _has_valid_terminal_mastery(rec.get("concept_details", "")):

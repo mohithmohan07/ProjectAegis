@@ -1038,7 +1038,7 @@ def empty_capture_verdict(
         store=store,
         policy_version=EMPTY_CAPTURE_POLICY_VERSION
         + (";" + foundation_policy.VERSION if foundation_fields else "")
-        + (";" + quality.VERSION if quality.active(env) else "")
+        + quality.suffix(env)
         + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
@@ -1389,7 +1389,7 @@ def build(
         policy_version=_policy_version("PREMAP_SYSTEM")
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else "")
+        + quality.suffix(env)
         + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )

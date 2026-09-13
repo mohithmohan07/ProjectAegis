@@ -269,3 +269,34 @@ def test_add_concept_cleans_name_and_description(db, first_chapter):
     assert "&" not in concept.concept_title
     assert "and Monsoon Dependence" in concept.concept_title
     assert "Example 19" not in concept.concept_details
+
+
+def test_clean_record_keeps_prose_figure_whose_image_sits_in_the_hub():
+    """Q68: under generation-quality v2 the cleaner keeps a figure the prose
+    cites (the reviewers' three sentences) and still neutralises dangling
+    example/table apparatus; the result is a fixpoint, as assemble requires."""
+    description = (
+        "Description: Cut the flower as illustrated in Fig. 7.7. Then compare "
+        "with Fig. 7.9: the cotyledon. Figure 7.10 labels the penis, urethra. "
+        "Refer table no. 1 and Example 2 for details."
+    )
+    hub = (
+        ' // Activity/ Info Hub: [img src="https://x.test/f77.png" '
+        'alt="Fig. 7.7 Longitudinal section of a flower"]'
+    )
+    rec = {"concept_title": "Flower", "concept_details": description + hub, "keywords": ""}
+    out = clean_concept_record(dict(rec), keep_figures=True)
+    details = out["concept_details"]
+    assert "as illustrated in Fig. 7.7." in details
+    assert "compare with Fig. 7.9: the cotyledon" in details
+    assert "Figure 7.10 labels the penis" in details
+    assert "table no. 1" not in details and "Example 2" not in details
+    assert "for details" in details
+    assert '[img src="https://x.test/f77.png"' in details
+    assert clean_concept_record(dict(out), keep_figures=True) == out
+    # Without the flag the reproduction is exact: the three broken sentences.
+    legacy = clean_concept_record(dict(rec))["concept_details"]
+    assert "as illustrated in." in legacy
+    assert "compare with: the cotyledon" in legacy
+    assert "labels the penis" in legacy and "Figure 7.10" not in legacy
+

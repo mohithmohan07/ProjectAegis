@@ -385,7 +385,7 @@ def _quota_stop(exc: Exception) -> bool:
 
 def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
     payload = {
-        **({quality.KEY: quality.VERSION} if quality.active(meta) else {}),
+        **quality.fields(meta),
         # A Step 2 reviewed-file batch carries its own policy stamp, so its
         # cache identity and prompts are distinct from a Step 1 batch.
         **_reviewed_step_fields(meta),
@@ -794,9 +794,9 @@ def polish_inventory(
         if isinstance(decision.get("audit"), dict):
             item["polish_audit"] = copy.deepcopy(decision["audit"])
             if quality.active(meta):
-                item["polish_audit"][quality.KEY] = quality.VERSION
+                item["polish_audit"][quality.KEY] = quality.version_of(meta)
                 if "learner_context" in decision:
-                    item[quality.KEY] = quality.VERSION
+                    item[quality.KEY] = quality.version_of(meta)
                     item["learner_context"] = decision["learner_context"]
                 else:
                     # A rejected/missing context decision has no authority to

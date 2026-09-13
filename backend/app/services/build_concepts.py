@@ -44,6 +44,7 @@ from . import (
     concept_validator,
     drive_checkpoints,
     generation,
+    generation_quality_policy,
     generation_recovery,
     grounding_certificate,
     identity,
@@ -628,6 +629,7 @@ def _find_or_create_topic(
 
 def _add_concept(db: Session, topic: models.Topic, rec: dict,
                  source_book: str = "", *, clean: bool = True,
+                 keep_figures: bool | None = None,
                  ) -> models.Concept:
     chapter = topic.chapter
     # Normalize name (& collapse) and description (strip dangling refs) before
@@ -638,7 +640,8 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
     # 2.1" reference and its sentence head destroyed. The deposit lane keeps
     # the default.
     if clean:
-        rec = concept_cleanup.clean_concept_record(dict(rec))
+        rec = concept_cleanup.clean_concept_record(
+            dict(rec), keep_figures=keep_figures)
     concept = models.Concept(
         topic_id=topic.id,
         concept_title=rec["concept_title"],
@@ -785,6 +788,7 @@ def _deposit_concepts(
     source_text: str = "",
     final_grounding_certificate: dict | None = None,
     grounding_certificate_sink: dict | None = None,
+    keep_figures: bool | None = None,
 ) -> tuple[list[int], list[int]]:
     """Create concepts under the chapter, reusing existing ones across books.
 
@@ -840,7 +844,14 @@ def _deposit_concepts(
     # "Recap" description for culminations. Chapter-wide *intelligence* (dedup,
     # Types enrichment, naming) is done by the API passes in concepts_from_mmd;
     # this pass only enforces the numbering/format the team requires.
-    records = [concept_cleanup.clean_concept_record(dict(r)) for r in records]
+    # Q68: clean under the generation-quality version the sealed rows were
+    # cleaned with (plain rows carry no stamp; the caller reads the bound
+    # run), so a v2 row's kept figure reference survives the deposit and
+    # the final-certificate recompute sees the sealed text.
+    records = [
+        concept_cleanup.clean_concept_record(dict(r), keep_figures=keep_figures)
+        for r in records
+    ]
     records = concept_cleanup.filter_review_violations(
         records, subject=chapter.subject, board=chapter.board,
         chapter_title=chapter.chapter_title)
@@ -1093,7 +1104,8 @@ def _deposit_concepts(
             continue
         topic = _find_or_create_topic(db, chapter, rec["topic"], pre_post)
         topic.source_order = topic_positions[topic_key]
-        concept = _add_concept(db, topic, rec, source_book)
+        concept = _add_concept(
+            db, topic, rec, source_book, keep_figures=keep_figures)
         concept.source_order = source_order
         # Identity settles HERE, after source_order, at the same ordinal a
         # later export would predict; the shells then take their SOP names.
@@ -2127,6 +2139,7 @@ def _deposit_and_publish_concepts(
     grounding_audit_job: models.UploadJob | None = None,
     phase3_pre_release: dict | None = None,
     explicit_duration_minutes: int = 0,
+    keep_figures: bool | None = None,
 ) -> tuple[list[int], list[int], dict]:
     """Serialize final dedupe, DB commit, and shared workbook publication.
 
@@ -2160,6 +2173,7 @@ def _deposit_and_publish_concepts(
             source_text=source_text,
             final_grounding_certificate=final_grounding_certificate,
             grounding_certificate_sink=certificate_sink,
+            keep_figures=keep_figures,
         )
         if (
             pre_post == "Post"
@@ -5010,6 +5024,11 @@ def generate_post_learning(
                 explicit_duration_minutes=int(
                     getattr(job, "chapter_duration_minutes", 0) or 0
                 ),
+                # The deposit chain must clean under the policy the sealed
+                # rows were cleaned with (Q68). Plain rows carry no stamp;
+                # this call runs inside ``model_routing_run.bind_job``
+                # (uploads.py), so the bound run is the recorded answer.
+                keep_figures=generation_quality_policy.bound_figure_references_kept(),
             )
         except DepositValidationError:
             db.rollback()

@@ -464,15 +464,23 @@ def _math_format_defect(concept_id: str, field: str, text: str) -> str:
 def _authoring_checker(
     concept_ids: list[str],
     culmination_ids: list[str] | None = None,
+    *,
+    planned_titles: Mapping[str, str] | None = None,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     expected = set(concept_ids)
     expected_culms = set(culmination_ids or ())
+    # A culmination the sealed literary plan owns keeps the plan's title
+    # (postlearning_formation_contract aligns it by wire title) and the
+    # plan's own mastery is appended after Settle; only its consolidation
+    # is authored here.
+    planned = dict(planned_titles or {})
 
     def check(response: Mapping[str, Any]) -> list[str]:
         defects: list[str] = []
         rows = response.get("rows")
         if not isinstance(rows, list):
             return ["response has no rows array"]
+        culm_masteries: dict[str, str] = {}
         if expected_culms:
             culm_rows = response.get("culminations")
             if not isinstance(culm_rows, list):
@@ -494,6 +502,32 @@ def _authoring_checker(
                 prose = _normal(row.get("consolidation"))
                 if not prose:
                     defects.append(f"{culm_id} consolidation is empty")
+                title = _normal(row.get("culmination_title"))
+                if culm_id in planned:
+                    if title != planned[culm_id]:
+                        defects.append(
+                            f"{culm_id} is a sealed-plan culmination: "
+                            "culmination_title must be returned exactly "
+                            "as supplied"
+                        )
+                    continue
+                if not title.startswith("Culmination - "):
+                    defects.append(
+                        f"{culm_id} culmination_title must begin with the "
+                        "exact prefix 'Culmination - '"
+                    )
+                mastery = _FIELD_LABEL.sub(
+                    "", _normal(row.get("achieving_mastery"))
+                )
+                if not mastery:
+                    defects.append(f"{culm_id} achieving_mastery is empty")
+                else:
+                    math_defect = _math_format_defect(
+                        culm_id, "achieving_mastery", mastery
+                    )
+                    if math_defect:
+                        defects.append(math_defect)
+                    culm_masteries[culm_id] = mastery
             missing_culms = sorted(expected_culms - culm_seen)
             if missing_culms:
                 defects.append(
@@ -554,6 +588,13 @@ def _authoring_checker(
                     )
                 else:
                     mastery_seen[key] = concept_id
+        for culm_id, mastery in culm_masteries.items():
+            owner = mastery_seen.get(mastery.casefold())
+            if owner:
+                defects.append(
+                    f"{culm_id} achieving_mastery repeats {owner}'s — the "
+                    "culmination needs its own combined capability"
+                )
         missing = sorted(expected - seen)
         if missing:
             defects.append("unauthored concept(s): " + ", ".join(missing))
@@ -1094,6 +1135,8 @@ def settle(
             )
         topic_culms = selected_culms
         culm_consolidations: dict[str, str] = {}
+        culm_titles: dict[str, str] = {}
+        culm_masteries: dict[str, str] = {}
         authoring_batches = _batched(list(range(len(topic_settled))))
 
         def _decide_authoring(offset_batch):
@@ -1147,7 +1190,8 @@ def settle(
                     "any single concept's description. Author this response's "
                     "ordinary concepts first, then consolidate those completed "
                     "descriptions with every member marked completed in the "
-                    "request; do not consolidate from titles or stale drafts."
+                    "request; do not consolidate from titles or stale drafts. "
+                    + "For each culmination also return culmination_title: a short learner-facing synthesis name beginning with the exact prefix 'Culmination - ', authored from the member teaching in THIS response and the members marked completed — what the FINAL member concepts achieve together — never the member names joined into a list, never a concept outside this topic or one that no longer exists in it; draft_culmination_title is a stale draft to replace, not to echo. Also return achieving_mastery: ONE imperative sentence, verb first, naming what the learner can now do with the member concepts combined — distinct from every member's own mastery and never restated inside the consolidation paragraph. A culmination marked planned: true carries the sealed plan's own title and mastery: return its draft_culmination_title exactly as supplied as culmination_title and an empty achieving_mastery."
                     + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
@@ -1178,9 +1222,10 @@ def settle(
                         "culminations": [
                             {
                                 "concept_id": culm_id,
-                                "culmination_title": _normal(
+                                "draft_culmination_title": _normal(
                                     culm.get("concept_title")
                                 ),
+                                "planned": _is_planned_culmination(culm),
                                 "member_concepts": [r["concept_title"] for r in topic_settled],
                                 "member_teaching": [
                                     {
@@ -1210,7 +1255,15 @@ def settle(
                 envelope_sha256=envelope_sha,
                 payload=payload,
                 provider=analysis_provider,
-                checker=_authoring_checker(concept_ids, batch_culm_ids),
+                checker=_authoring_checker(
+                    concept_ids,
+                    batch_culm_ids,
+                    planned_titles={
+                        culm_id: _normal(culm.get("concept_title"))
+                        for culm_id, culm in zip(batch_culm_ids, topic_culms)
+                        if _is_planned_culmination(culm)
+                    },
+                ),
                 critic=critic,
                 store=store,
                 # Q1 re-key: the authoring schema lost its analysis field,
@@ -1259,8 +1312,15 @@ def settle(
                 }
                 for row in decision["response"].get("culminations") or []:
                     if isinstance(row, Mapping):
-                        culm_consolidations[str(row.get("concept_id") or "")] = (
-                            _normal(row.get("consolidation"))
+                        culm_id = str(row.get("concept_id") or "")
+                        culm_consolidations[culm_id] = _normal(
+                            row.get("consolidation")
+                        )
+                        culm_titles[culm_id] = _normal(
+                            row.get("culmination_title")
+                        )
+                        culm_masteries[culm_id] = _FIELD_LABEL.sub(
+                            "", _normal(row.get("achieving_mastery"))
                         )
                 for concept_id, row in zip(concept_ids, batch_rows):
                     authored = authored_by_id[concept_id]
@@ -1290,12 +1350,16 @@ def settle(
             level="success",
         )
 
-        # -- culminations: structure derived, prose authored above -------
+        # -- culminations: structure derived, name and prose authored above
         # The Description is the model-authored consolidation paragraph —
-        # never a code-composed "Recap of ..." title list. The authoring
-        # checker makes the consolidation mandatory, so an empty one here
-        # is an unexpected defect: the row still ships (never dropped),
-        # flagged for review.
+        # never a code-composed "Recap of ..." title list — and the title
+        # and Achieving Mastery are authored from the FINAL member set in
+        # the same response (contract §11.1: a Culmination carries a real
+        # Description and Mastery). The authoring checker makes all three
+        # mandatory, so an empty one here is an unexpected defect: the row
+        # still ships (never dropped), flagged for review. A culmination the
+        # sealed literary plan owns keeps the plan's title and its mastery
+        # is appended by the plan seam after Settle, exactly as before.
         culm_rows: list[dict[str, Any]] = []
         for culm_index, row in enumerate(topic_culms):
             derived_blocks: list[str] = []
@@ -1304,11 +1368,25 @@ def settle(
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
             prose = culm_consolidations.get(f"CULM#{culm_index}", "")
+            planned = _is_planned_culmination(row)
+            authored_title = (
+                "" if planned else culm_titles.get(f"CULM#{culm_index}", "")
+            )
+            mastery = (
+                "" if planned else culm_masteries.get(f"CULM#{culm_index}", "")
+            )
+            details = "Description: " + prose
+            if mastery:
+                details = kr.repair_unwrapped_math(
+                    details + "\nAchieving Mastery: " + mastery
+                )
             culm_row = {
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
-                "concept_title": _normal(row.get("concept_title")),
-                "concept_details": "Description: " + prose,
+                "concept_title": (
+                    authored_title or _normal(row.get("concept_title"))
+                ),
+                "concept_details": details,
                 "keywords": _normal(row.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 "_source_block_ids": derived_blocks,
@@ -1321,6 +1399,18 @@ def settle(
                 culm_flags.append(
                     "culmination shipped without an authored consolidation "
                     "paragraph; the authoring pass returned none and no "
+                    "text was code-composed — needs review"
+                )
+            if not planned and not authored_title:
+                culm_flags.append(
+                    "culmination shipped under its pre-Settle draft title; "
+                    "the authoring pass returned no culmination_title and "
+                    "no name was code-composed — needs review"
+                )
+            if not planned and not mastery:
+                culm_flags.append(
+                    "culmination shipped without an authored Achieving "
+                    "Mastery line; the authoring pass returned none and no "
                     "text was code-composed — needs review"
                 )
             if culm_flags:

@@ -169,12 +169,23 @@ def _providers(mapping: dict[str, list[dict]]):
             response["culminations"] = [
                 {
                     "concept_id": culm["concept_id"],
+                    # The golden replay keys culminations by (topic, title),
+                    # so the fixture returns the draft name as the authored
+                    # one; a planned row must echo it by contract anyway.
+                    "culmination_title": culm["draft_culmination_title"],
                     "consolidation": (
                         "Together these concepts let the learner connect "
                         + ", ".join(culm["member_concepts"][:3])
                         + " into one coherent account of the topic, moving "
                         "from each idea on its own to the combined "
                         "understanding the chapter builds toward."
+                    ),
+                    "achieving_mastery": (
+                        ""
+                        if culm.get("planned")
+                        else "Combine "
+                        + ", ".join(culm["member_concepts"][:3])
+                        + " in one task that needs them together."
                     ),
                 }
                 for culm in culms
@@ -521,9 +532,122 @@ def test_culmination_description_is_the_authored_consolidation(
             "Description: Together these concepts let the learner connect"
         ), row["concept_title"]
         assert "Recap of" not in details
-        # The authored consolidation is mandatory, so no culmination ships
-        # with the empty-consolidation review flag on this golden replay.
+        # Contract §11.1: the culmination carries its own authored mastery
+        # line, composed exactly like a normal row's.
+        assert "\nAchieving Mastery: Combine " in details, row["concept_title"]
+        assert details.count("Achieving Mastery:") == 1
+        # The authored consolidation, title and mastery are mandatory, so
+        # no culmination ships with a review flag on this golden replay.
         assert not row.get("review_flags")
+
+
+def test_culmination_title_is_the_authored_synthesis_name(
+    golden_envelope, golden_rows,
+):
+    """The culmination title is what the authoring pass returns from the
+    FINAL member set, not the pre-Settle draft the request carries."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, critic = _providers(mapping)
+    authored_title = "Culmination - Reading the Chapter as One Account"
+    drafts: list[str] = []
+
+    def renaming_analysis(request: dict) -> dict:
+        response = analysis(request)
+        culms = response.get("culminations") or []
+        if culms and not request["culminations"][0].get("planned"):
+            drafts.append(request["culminations"][0]["draft_culmination_title"])
+            culms[0]["culmination_title"] = authored_title
+        return response
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=renaming_analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert drafts, "no unplanned culmination was authored"
+    renamed = [
+        row for row in settled if row["concept_title"] == authored_title
+    ]
+    assert len(renamed) == len(drafts)
+    for row in renamed:
+        assert not row.get("review_flags")
+        assert row["concept_title"] not in drafts
+    # The request names the supplied title as a draft, never as the
+    # response field, so the authored name is unambiguous.
+    assert all(draft.startswith("Culmination - ") for draft in drafts)
+
+
+def test_authoring_checker_requires_culmination_title_and_mastery():
+    check = settle._authoring_checker(["C-1"], ["CULM#0"])
+    row = {
+        "concept_id": "C-1",
+        "concept_description": "The teaching paragraph.",
+        "achieving_mastery": "Apply the rule to a new case.",
+    }
+    good = {
+        "concept_id": "CULM#0",
+        "culmination_title": "Culmination - Using the Rule End to End",
+        "consolidation": "Together these let the learner finish the task.",
+        "achieving_mastery": "Combine the rule with its conditions in one solution.",
+    }
+    assert check({"rows": [row], "culminations": [good]}) == []
+
+    no_title = {**good, "culmination_title": ""}
+    assert any(
+        "culmination_title must begin with the exact prefix" in defect
+        for defect in check({"rows": [row], "culminations": [no_title]})
+    )
+    # A bare prefix normalises to "Culmination -", which names nothing and
+    # so fails the same prefix rule.
+    bare = {**good, "culmination_title": "Culmination - "}
+    assert any(
+        "culmination_title must begin with the exact prefix" in defect
+        for defect in check({"rows": [row], "culminations": [bare]})
+    )
+    list_form = {**good, "culmination_title": "Recap of A, B"}
+    assert any(
+        "exact prefix 'Culmination - '" in defect
+        for defect in check({"rows": [row], "culminations": [list_form]})
+    )
+    no_mastery = {**good, "achieving_mastery": ""}
+    assert check({"rows": [row], "culminations": [no_mastery]}) == [
+        "CULM#0 achieving_mastery is empty"
+    ]
+    repeated = {**good, "achieving_mastery": "Apply the rule to a new case."}
+    assert any(
+        "CULM#0 achieving_mastery repeats C-1's" in defect
+        for defect in check({"rows": [row], "culminations": [repeated]})
+    )
+    labelled = {**good, "achieving_mastery": "Achieving Mastery: Combine both."}
+    assert check({"rows": [row], "culminations": [labelled]}) == []
+
+
+def test_authoring_checker_makes_a_planned_culmination_echo_its_title():
+    planned_title = "Culmination: Planned stanza close"
+    check = settle._authoring_checker(
+        ["C-1"], ["CULM#0"], planned_titles={"CULM#0": planned_title},
+    )
+    row = {
+        "concept_id": "C-1",
+        "concept_description": "The teaching paragraph.",
+        "achieving_mastery": "Apply the rule to a new case.",
+    }
+    echoed = {
+        "concept_id": "CULM#0",
+        "culmination_title": planned_title,
+        "consolidation": "Together these let the learner finish the task.",
+        "achieving_mastery": "",
+    }
+    assert check({"rows": [row], "culminations": [echoed]}) == []
+    renamed = {**echoed, "culmination_title": "Culmination - Something new"}
+    assert check({"rows": [row], "culminations": [renamed]}) == [
+        "CULM#0 is a sealed-plan culmination: culmination_title must be "
+        "returned exactly as supplied"
+    ]
 
 
 def test_authoring_critic_dissent_flags_the_authored_rows(

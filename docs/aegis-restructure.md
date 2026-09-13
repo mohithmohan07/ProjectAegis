@@ -2767,7 +2767,10 @@ to stand alone without large repeated chapter extracts in concept descriptions.
 Remove repeating concepts, follow source teaching order through Post Types,
 Cases and questions, and handle statistics tables correctly in KaTeX.
 
-New uploads freeze `owner-generation-quality-2026-09-11-v1` before source work.
+New uploads freeze the current generation-quality stamp before source work
+(`owner-generation-quality-2026-09-11-v1` until 13 September 2026, then
+`owner-generation-quality-2026-09-13-v2`, which adds only the kept figure
+references of Q68); a run keeps the version it recorded.
 The stamp travels through source semantics, polishing, the sealed Phase 3
 envelope, staged Pre/Post releases, assessment profiles, authors and reviewers.
 An existing upload's saved model record without this quality stamp retains its
@@ -4298,16 +4301,19 @@ place where a rule's FORM changed is named below.
   without one by construction) and **Settle re-authoring the culmination
   title** from the FINAL member set (the Post title is minted before Settle,
   Host and coherence change the members — hence phantom and cross-topic
-  members in names); the Pre lane's mechanical member-list join
-  (`prelearning_formation_contract.py`) becomes an authored title.
+  members in names); the post-Settle duplicate-identity refresh's mechanical
+  member-list join (`prelearning_formation_contract._refresh_affected_culminations`,
+  a wrapper on `settle.settle` for every lane, fired only on duplicate
+  (topic, title) groups — not "the Pre lane", which mints no culminations)
+  becomes an authored title. — DONE, see Q68.
 * **Paired `correction` on every misconception/error item** with a numbered
   render (schema, checker, inventory carry, both renders, legacy replay
-  branch).
+  branch). — DONE, see Q68.
 * **`strip_dangling_references` deleting "Fig. 7.7" from prose** and leaving
   "as illustrated in." — reproduced byte for byte; the publication path
   already removed this cleaner for the same reason, staging still runs it.
   Needs version gating so a sealed run's deposit fixpoint replays
-  identically.
+  identically. — DONE, see Q68.
 * **Host `create_new` across blind parallel batches** (three same-meaning
   Triangles concepts): a second sequential pass that sees every first-pass
   creation; provenance sentence for the coherence merger.
@@ -4366,3 +4372,202 @@ tree before it was changed; the new tests pin the reviewers' exact cases
 pinned the old behaviour were updated with the reason in place ("Covers A."
 and the delivery-integrity name list; the cell policy version pins). No paid
 generation was run. Nothing here changes what a sealed run replays.
+
+## Q68 — decided — the corrections catalogue's second pass: culminations authored whole, corrections paired, figure references kept
+
+**Status:** decided (owner: "go through all of these first and then set up a
+proper workflow … you can make it better; but dont lose the existing ones").
+**Date:** 2026-09-13. **Amends:** Q67 (executes two of its "planned next"
+items), Q1 (mastery on every concept), Q13 (the Fixer). **Contract:** §11.1
+("A Culmination MUST contain a real Description and Mastery.").
+
+### Culmination title and Achieving Mastery are authored from the FINAL members
+
+**Reproduced.** `settle._settle_topic` composed a culmination as
+`"Description: " + consolidation` under the title the skeleton minted at
+0.81 — before Settle, the Host and the coherence pass changed the member set.
+The authoring response schema (`prompts.ANALYSIS_SYSTEM`) declared
+`{concept_id, consolidation}` only; the settle rules told the model to fold
+the capability INTO the paragraph; `_authoring_checker` demanded a non-empty
+consolidation and nothing else. Downstream, four culmination exemptions —
+`concept_refiner.refine_chapter`, `generation._ensure_mastery_lines_via_api`,
+`polish._failures` and `concept_validator` (`strict_mastery_statement and not
+is_culm`) — meant nothing ever asked for the missing line or repaired it.
+The one code-composed list-form name left on the tree was the post-Settle
+duplicate-identity refresh (`prelearning_formation_contract.
+_refresh_affected_culminations`, a wrapper on `settle.settle` for every
+lane), which overwrote whatever Settle had named with `"Culmination - " +
+", ".join(member titles)` — the "Culmination - A, B, C" names the reviewers
+corrected, with phantom and cross-topic members.
+
+**Decided.** The Settle authoring response carries, per culmination,
+`culmination_title` and `achieving_mastery` beside `consolidation`. The
+request names the supplied title `draft_culmination_title` — a stale draft
+to replace, never the response field — and marks a sealed-plan row
+`planned: true`. The checker (mechanics, the class of "consolidation is
+empty") requires the exact `Culmination - ` prefix (the identity
+`cr.is_culmination` keys on), a non-empty mastery in `[Katex]` form, and
+refuses a culmination mastery that repeats a member's in the same response;
+a planned row must echo its title exactly and return an empty mastery,
+because the sealed literary plan owns both (its mastery is appended by the
+plan seam after Settle, as before). The row is composed exactly like a
+normal row — `Description: <prose>\nAchieving Mastery: <mastery>` through
+`kr.repair_unwrapped_math` — so Assemble, the refiners, the validator and
+the workbook writer treat it like every other concept. A response that
+somehow still lacks a title or a mastery ships the row visibly flagged,
+never dropped (R4). The refresh seam asks for the same two fields
+(`CULMINATION_POLICY_VERSION` is a literal, so it is bumped to
+`settle-row-identity-culmination-2`: `kernel.decide` serves a stored hit
+unchecked, and a `-1` record has no title to apply); its critic dissents on
+a list-form title or a missing/repeated mastery, advisory as ever. The four
+exemptions are removed: a culmination missing its line is now a Polish
+repair target with culmination-specific guidance, and the strict gate
+reports it (`missing_mastery_statement` is outside the blocking codes, so
+the terminal gate flags and never halts).
+
+**Replay.** `settle.author` is keyed through the `ANALYSIS_SYSTEM` digest
+and the payload, both of which change, so no stored authoring decision is
+served under the new key: a completed run (restored `final_content_ready`)
+never re-enters Phase 3, while a run resuming from a NON-terminal checkpoint
+re-authors Settle for every topic — a re-spend, said here rather than hidden.
+`AUTHOR_POLICY_SUFFIX` stays `-q1`. Historical rows carrying a label-free
+culmination Description are left alone by every formatter (they canonicalise
+a label they find and touch nothing else).
+
+**Prompts.** Every existing sentence is kept; the new ones sit beside the
+consolidation sentence they extend in `prompts.ANALYSIS_SYSTEM`, the settle
+request rules, `CULMINATION_SYSTEM` and `CULMINATION_CRITIC_SYSTEM`.
+
+**Not taken.** `ensure_analysis_sections`' Q1 rule that a culmination carries
+no inventory item; `_ensure_parent_concepts` (only defaults a culmination's
+parent); the refresh seam's `keywords = ", ".join(titles)` (the delimiter is
+the recorded Q33/contract question and `column_spec.keyword_cell`
+re-tokenises it at the writer).
+
+### Every misconception and error-analysis item carries its paired correction
+
+**Reproduced.** Both lanes' inventory passes (`phase3/analyse.py`,
+`phase3/preanalyse.py`) asked each item for `{item_id, kind, text,
+evidence, rationale}` only; the checkers refused only an empty text; the
+composers (`assemble.stamp_analysis_allotments`, `preanalyse.stamp`)
+rendered `Misconceptions: <t1>. <t2>; Error Analysis: <t3>` through
+`_join_analysis_texts` — unnumbered, no correction. The Science reviewer
+rewrote 34 concepts to "(1) <false statement>. Correction: <what is true>."
+
+**Decided.** One envelope-frozen, instruction-only policy module,
+`analysis_correction_policy` (`KEY "_analysis_correction_policy"`, `VERSION
+"analysis-correction-2026-09-13"`), sealed onto NEW envelopes beside
+`prelearning_foundation_policy` by `concept_topology_contract` — inside the
+seal, hence inside `envelope_sha256` and every decision key. Under it: both
+lanes' build payloads carry the key and an additive rules sentence directly
+after "never restate one as the other."; the live author and critic
+adapters append the same text (every `*_SYSTEM` constant is untouched, so
+the prompt digests, the Instruction Architect's frozen-core hash and the
+`analysis-1`/`pre-analysis-1` pins do not move); the checkers add "<id> has
+empty correction" (mechanics, the class of "has empty text"); the
+recorded decision's `policy_version` gains a readable `;analysis-correction-…`
+marker; the inventory dicts carry `correction` only when the response row
+has it, so a stored pre-policy decision rebuilds the identical dict and the
+recorded snapshot, the capture packet and the allot payloads replay byte for
+byte. One new composer branch, `assemble._render_analysis_component`,
+renders per component `Misconceptions: (1) <text>. Correction: <c>. (2) …;
+Error Analysis: (1) <text>. Correction: <c>.` — `(n)` is the item's position
+within THAT component, never the LA-/PLA- id; both contract §10 kinds are
+kept; an inventory without the field takes the unchanged
+`_join_analysis_texts`. A leading "Correction:" echo is stripped once
+(`concept_refiner.strip_correction_label_echo`, the sibling of the kind-label
+strip). The Refiner's editable-field rule gains the pairing sentence and its
+mechanical identity check refuses a refinement that merges, drops or
+renumbers a pair; rows rendered before the policy carry no `Correction:`
+marker and are exempt. Verified offline: the pair body passes
+`repair_unwrapped_math`, `_CANONICAL_ANALYSIS_CONTENT_RE`,
+`normalize_analysis_sections`, `ensure_valid_learner_analysis` and the strict
+validator byte-identically.
+
+**Replay.** A sealed envelope without the key: `fields()` is `{}`, the
+split rules literal reconcatenates to the byte-identical old string, the
+checker runs without the requirement, the suffix is empty — the decision key
+is exactly the pre-change key, and a cache hit (served unchecked) carries no
+`correction`, so the section renders exactly as it always did. A run
+mid-flight at deployment keeps its sealed envelope, so it keeps the old
+prompt, checker and render with no re-spend and no mixed shapes.
+
+**Still with the owner (Q67's two sibling questions, untouched here):** a
+block on EVERY non-culmination concept (would remove "NOT every concept
+receives an item — that is the design" from both allot prompts and amend
+§10), and folding Error Analysis into one numbered Misconceptions component
+(would collapse the two kinds §10 defines as distinct). Neither is needed
+for the pairing.
+
+### Figure references survive the dangling-reference cleaner (policy v2)
+
+**Reproduced.** `concept_cleanup.strip_dangling_references` deleted "Fig.
+7.7" and "Figure 6.3" from prose because the row carried no image, leaving
+"as illustrated in." — the reviewers' three sentences, byte for byte. The
+publication path had already stopped running this cleaner for the same
+reason; the staging deposit fixpoint (`phase3/assemble`) and the Master
+refiner still ran it.
+
+**Decided.** `generation_quality_policy` becomes two-version: `V1` (the
+recorded 2026-09-11 stamp) and `V2` (`owner-generation-quality-2026-09-13-v2`);
+`SUPPORTED` names both, `VERSION` is `V2`, `is_current` accepts any
+supported version, `fields` carries the RECORDED version forward and
+`figure_references_kept` is true from V2 on. Under V2 the cleaner keeps
+figure references (`Fig.`/`Figure`/`Diagram`) and still strips dangling
+example/table references; a row that carries an image keeps every reference
+as before. `clean_concept_record(..., keep_figures=None)` reads the row's
+own stamp; the deposit pipeline and the release refiner read the envelope's
+or the metadata's. `release_workbook_edits` carries the run's recorded
+version instead of re-stamping the latest, so a v1 run's edited release
+still replays under v1.
+
+**The reach of a shared constant, found by the second pass's own design
+review and fixed before commit.** Bumping `VERSION` alone would have (a)
+refused every existing checkpoint bundle and routing record, since
+`checkpoints._validate_payload` and `model_routing_run.save_profile_for_job`
+compared the recorded stamp against the single latest constant — both now
+accept every `SUPPORTED` version; (b) re-stripped a v2 run's sealed rows at
+the database deposit, where plain rows carry no stamp — the deposit chain
+(`_deposit_and_publish_concepts` → `_deposit_concepts` → `_add_concept`) now
+takes `keep_figures` from `bound_figure_references_kept()`, the routing
+record the process is bound to, so the final-certificate recompute sees the
+sealed text; (c) made the T7.2 publication receipt report a kept figure as
+"house normalization" — it now cleans under the payload's recorded version;
+(d) re-keyed sealed v1 decisions on replay, because fourteen sites minted the
+bare constant behind an `active()` guard that is now true for v1 — every one
+(`premap`, `prelearn`, `coherence`, `prelearning_authority_v2`,
+`question_polishing`, `assessment_source_inventory`,
+`assessment_materialization`, `assessment_item_review`,
+`assessment_master_refiner`, and `assessment_teaching_order`, whose atom
+audit rides into every cell payload) now carries the RECORDED version, and a
+source sweep pins the pattern out. A figure cited in Description or
+learner-analysis prose that no `[img]` caption on the row names is recorded
+as the advisory, never-blocking release-QC issue
+`prose_figure_reference_without_image` — kept as written, never deleted.
+
+**Replay.** A sealed v1 run cleans exactly as before (pinned:
+`tests/test_figure_references_kept.py` runs the reviewers' sentences under
+v1, v2, legacy-unstamped and forced; every old-cleaned section is a fixpoint
+of the new cleaner; a v1-stamped bundle imports and keeps v1; the recorded
+version rides every key). New envelopes freeze V2.
+
+### Verification
+
+Offline only. `tests/test_phase3_settle_golden.py` (the fixture now returns
+the draft as the authored title so the golden replay's (topic, title) keys
+still resolve; a new test renames one culmination and finds the authored
+name on the settled row; two checker tests pin the prefix, mastery,
+repeat and planned-echo refusals),
+`tests/test_prelearning_formation_contract.py` (the two assertions that
+pinned the member-list join are inverted; the refresh checker is pinned),
+`tests/test_concept_validator.py` (the exemption assertion is inverted),
+`tests/test_chapter_topic_quality.py` (renamed; a label-free legacy
+culmination stays byte-identical, a labelled one is canonicalised),
+`tests/test_generation_validation_diagnostics.py` (the strict culmination
+fixtures now carry their line); `tests/test_analysis_correction_policy.py`
+(the golden Post and Pre replays with and without the key, the fail-closed
+"has empty correction" path, the numbered render against every mechanical
+gate, the legacy join, the Refiner pairing gate); `tests/test_phase3_flip_seam.py`
+(the new-envelope metadata lists the key; the historical envelope does
+not). No paid generation was run.
+

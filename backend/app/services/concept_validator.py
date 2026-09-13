@@ -495,7 +495,9 @@ def validate_concept_rows(
         if len(_DESCRIPTION_LABEL_RE.findall(details)) > 1:
             _add(errors, i, "concept_details", "merged_description",
                  "cell contains multiple concepts' Description blocks")
-        if strict_mastery_statement and not is_culm:
+        # Contract §11.1: a Culmination carries a real Description and
+        # Mastery, so the gate no longer exempts it.
+        if strict_mastery_statement:
             description = _description_text(details)
             description_markers = list(
                 _MASTERY_MARKER_RE.finditer(description)
@@ -508,7 +510,7 @@ def validate_concept_rows(
                 _add(
                     errors, i, "concept_details",
                     "missing_mastery_statement",
-                    "normal concept Description requires one terminal "
+                    "Description requires one terminal "
                     "'Achieving Mastery: <nonempty text>' line",
                 )
             elif canonical_mastery is None or not canonical_mastery.group("statement").strip():
@@ -522,7 +524,7 @@ def validate_concept_rows(
                 _add(
                     errors, i, "concept_details",
                     "duplicate_mastery_statement",
-                    "normal concepts must contain exactly one mastery marker",
+                    "every concept must contain exactly one mastery marker",
                 )
             if len(all_markers) > len(description_markers):
                 _add(

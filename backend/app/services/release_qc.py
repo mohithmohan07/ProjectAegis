@@ -59,6 +59,10 @@ CHAPTER_DESCRIPTION_UNAUTHORED = "chapter_description_unauthored"
 BAND_DESCRIPTION_CODES = frozenset({
     TOPIC_DESCRIPTION_UNAUTHORED, CHAPTER_DESCRIPTION_UNAUTHORED,
 })
+#: Advisory, never blocking (Q68): learner prose keeps the figure it cites;
+#: when no canonical [img] caption on that ROW names the figure, the omission
+#: is recorded here instead of the token being deleted.
+PROSE_FIGURE_WITHOUT_IMAGE = "prose_figure_reference_without_image"
 PUBLICATION_UNKNOWN = "publication_unknown"
 # Master Governing Contract v2.0 §8.6 (register Q29): every shipped Pre
 # concept carries at least one routed diagnostic question. A Pre concept
@@ -513,6 +517,57 @@ def _band_description_findings(
     return issues, []
 
 
+
+def _figure_reference_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """A prose section cites a figure no image on its row carries.
+
+    ``concept_cleanup`` used to DELETE "Fig. 7.7" from any prose section
+    without an image tag — the reviewers' three subjectless sentences (Q67).
+    Under generation-quality v2 the token stays and this pass records, per
+    row, every figure a Description or learner-analysis section names that no
+    canonical ``[img]`` caption on the same row names. Mechanics only: the
+    validator's own figure-id readers over the row's own text; nothing judges
+    whether the figure belongs or rewords the sentence. Rows sealed under v1
+    carry no such token, so nothing fires on them.
+    """
+    from . import concept_refiner
+    from . import concept_validator as cv
+
+    issues: list[dict[str, Any]] = []
+    for position, row in enumerate(_records(payload), start=1):
+        details = str(row.get("concept_details") or "")
+        if not details:
+            continue
+        carried = cv._example_image_figure_ids(details)
+        missing: list[str] = []
+        for label, content in concept_refiner.split_sections(details):
+            lowered = label.strip().lower()
+            if not (
+                lowered.startswith("description")
+                or concept_refiner.is_learner_analysis_label(lowered)
+            ):
+                continue
+            for figure_id in cv._example_figure_ids(content):
+                if figure_id not in carried and figure_id not in missing:
+                    missing.append(figure_id)
+        if missing:
+            issues.append(_issue(
+                code=PROSE_FIGURE_WITHOUT_IMAGE,
+                message=(
+                    f"row {position} ({str(row.get('concept_title') or '')!r}) "
+                    "cites a figure in its Description/analysis prose that no "
+                    "[img] tag on the row carries (missing Fig. "
+                    f"{', Fig. '.join(missing)}); the reference is kept as "
+                    "written — attach the figure or reword it through the "
+                    "Refiner"
+                ),
+                severity="warning",
+                phase="release_qc",
+            ))
+    return issues, []
+
 def _publication_findings(
     payload: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -717,6 +772,13 @@ def audit(
         blocking.extend(band_blocking)
 
     _pass("band-descriptions", _run_band_descriptions)
+
+    def _run_prose_figures() -> None:
+        figure_issues, figure_blocking = _figure_reference_findings(payload)
+        issues.extend(figure_issues)
+        blocking.extend(figure_blocking)
+
+    _pass("prose-figure-references", _run_prose_figures)
 
     def _run_publication() -> None:
         publication_issues, publication_blocking = _publication_findings(

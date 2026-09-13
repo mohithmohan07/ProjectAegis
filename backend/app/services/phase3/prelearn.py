@@ -810,7 +810,7 @@ def capture_stage(
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else "")
+        + quality.suffix(env)
         + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
@@ -978,7 +978,7 @@ def merge(
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else "")
+        + quality.suffix(env)
         + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )

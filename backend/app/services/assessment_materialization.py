@@ -1116,7 +1116,7 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
             "frozen_task_text": copy.deepcopy(atom.get("frozen_task_text")),
             "normalized_source_text": copy.deepcopy(atom.get("normalized_source_text")),
             "polish_audit": copy.deepcopy(atom.get("polish_audit")),
-            **({quality.KEY: quality.VERSION,
+            **({**quality.fields(atom),
                 **({"learner_context": copy.deepcopy(atom["learner_context"])}
                    if "learner_context" in atom else {}),
                 **({"reviewed_context": copy.deepcopy(atom["reviewed_context"])}

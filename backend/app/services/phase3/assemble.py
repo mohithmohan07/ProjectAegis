@@ -176,6 +176,61 @@ def _join_analysis_texts(texts: list[str]) -> str:
     return joined
 
 
+def _close_sentence(text: str) -> str:
+    return text if re.search(r"[.!?;]\s*$", text) else text + "."
+
+
+def _join_analysis_pairs(pairs: list[tuple[str, str]]) -> str:
+    """Merge allotted ``(text, correction)`` pairs into one numbered component.
+
+    ``(n)`` is the pair's position within THIS component (the caller
+    passes item-id order), never the LA-/PLA- item id, which rides only
+    the row-private allotment marker. Each half gets a terminal period
+    where it lacks one — the same join ``_join_analysis_texts`` applies —
+    and one leading ``Correction:`` echo is dropped
+    (``concept_refiner.strip_correction_label_echo``). A pair whose
+    correction is empty renders its text alone, so nothing recorded is
+    ever dropped; nothing about the content is judged.
+    """
+    from .. import concept_refiner
+
+    rendered: list[str] = []
+    for text, correction in pairs:
+        text = _normal(text)
+        if not text:
+            continue
+        correction = _normal(
+            concept_refiner.strip_correction_label_echo(correction)
+        )
+        piece = f"({len(rendered) + 1}) {_close_sentence(text)}"
+        if correction:
+            piece += f" Correction: {_close_sentence(correction)}"
+        rendered.append(piece)
+    return " ".join(rendered)
+
+
+def _render_analysis_component(
+    items: list[Mapping[str, Any]], *, strip=None,
+) -> str:
+    """One labelled component of the section, in the caller's item order.
+
+    Numbered pairs when ANY item carries a non-empty ``correction`` (the
+    correction policy authored one for every item); otherwise the legacy
+    join, so a recorded inventory without the field — every run sealed
+    before the policy — renders byte for byte as it always did.
+    """
+    texts = [
+        strip(str(item.get("text") or "")) if strip else str(item.get("text") or "")
+        for item in items
+    ]
+    if any(_normal(item.get("correction")) for item in items):
+        return _join_analysis_pairs([
+            (text, str(item.get("correction") or ""))
+            for text, item in zip(texts, items)
+        ])
+    return _join_analysis_texts(texts)
+
+
 def stamp_analysis_allotments(
     ordered_rows: list[dict[str, Any]],
     analysis: Mapping[str, Any] | None,
@@ -189,7 +244,12 @@ def stamp_analysis_allotments(
     item texts are merged into ONE canonical
     ``// Misconception/ Error Analysis:`` section (Misconceptions
     before Error Analysis, items in item-id order) with NO visible
-    item id — the ids ride the row-private audit field instead. Any
+    item id — the ids ride the row-private audit field instead. Under
+    ``analysis_correction_policy`` a component renders numbered pairs
+    ``(n) <text>. Correction: <correction>.``; ``(n)`` is the item's
+    position within THAT component, never its LA- id, and a recorded
+    inventory whose items carry no ``correction`` renders exactly as
+    before (``_render_analysis_component``). Any
     row arriving with a learner-analysis section not backed by the
     inventory (a legacy or checkpoint row) has it removed with a
     review flag recording the removed text verbatim — generated
@@ -293,18 +353,16 @@ def stamp_analysis_allotments(
         if items is not None:
             from .. import concept_refiner
 
-            misconceptions = _join_analysis_texts([
-                concept_refiner.strip_analysis_label_echo(
-                    str(item.get("text") or ""))
-                for item in items
-                if str(item.get("kind") or "") == "misconception"
-            ])
-            error_analyses = _join_analysis_texts([
-                concept_refiner.strip_analysis_label_echo(
-                    str(item.get("text") or ""))
-                for item in items
-                if str(item.get("kind") or "") == "error_analysis"
-            ])
+            misconceptions = _render_analysis_component(
+                [item for item in items
+                 if str(item.get("kind") or "") == "misconception"],
+                strip=concept_refiner.strip_analysis_label_echo,
+            )
+            error_analyses = _render_analysis_component(
+                [item for item in items
+                 if str(item.get("kind") or "") == "error_analysis"],
+                strip=concept_refiner.strip_analysis_label_echo,
+            )
             combined: list[str] = []
             if misconceptions:
                 combined.append(f"Misconceptions: {misconceptions}")
@@ -985,9 +1043,14 @@ def assemble(
         from .. import concept_validator as cv
         from .. import generation
 
+        from .. import generation_quality_policy
+
         meta = env.get("metadata") or {}
+        # The envelope's recorded policy decides whether learner prose keeps
+        # its figure references (Q67); a candidate row carries no stamp yet.
+        keep_figures = generation_quality_policy.figure_references_kept(env)
         out_rows = [
-            concept_cleanup.clean_concept_record(dict(row))
+            concept_cleanup.clean_concept_record(dict(row), keep_figures=keep_figures)
             for row in candidate_rows
         ]
         out_rows = concept_cleanup.filter_review_violations(

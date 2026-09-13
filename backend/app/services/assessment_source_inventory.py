@@ -427,7 +427,7 @@ def source_atom_from_item(
         **repair.fields(item),
         **({
             source_format.FIELD: source_format.VERSION,
-            **({quality.KEY: quality.VERSION,
+            **({**quality.fields(item),
                 **({"learner_context": copy.deepcopy(item["learner_context"])}
                    if "learner_context" in item else {}),
                 **({"reviewed_context": copy.deepcopy(item["reviewed_context"])}

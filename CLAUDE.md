@@ -1,6 +1,38 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
+**Latest amendment: Q68 (corrections catalogue, second pass, 13 September 2026).**
+Three of Q67's "planned next" items are executed, each version-gated so a
+sealed run replays byte for byte. (1) **Culminations are authored whole.** The
+Settle authoring response carries `culmination_title` and `achieving_mastery`
+beside `consolidation`; the request names the supplied name
+`draft_culmination_title` (a stale draft to replace) and marks a sealed-plan
+row `planned: true` (its title is echoed, its mastery left to the plan seam).
+The checker requires the exact `Culmination - ` prefix and a non-empty
+mastery that repeats no member's; the row is composed exactly like a normal
+row (`Description: …\nAchieving Mastery: …`). The post-Settle
+duplicate-identity refresh (`prelearning_formation_contract`, a wrapper on
+`settle.settle` for EVERY lane — not "the Pre lane") no longer writes the
+member-list name; `CULMINATION_POLICY_VERSION` is `-2`. The four culmination
+exemptions (refine_chapter, `_ensure_mastery_lines_via_api`, Polish, the
+strict validator) are removed: contract §11.1 requires a real Mastery. A run
+resuming from a NON-terminal checkpoint re-authors Settle (the ANALYSIS_SYSTEM
+digest and payload changed); completed runs never re-enter Phase 3. (2)
+**Paired corrections.** `analysis_correction_policy` is frozen on NEW
+envelopes; under it every misconception/error-analysis item carries a
+`correction`, the checker refuses an empty one, and the section renders
+`(1) <text>. Correction: <c>.` per component. Every `*_SYSTEM` constant is
+untouched; a sealed envelope without the key keeps the identical payload,
+key, checker and render. The Refiner refuses a refinement that merges, drops
+or renumbers a pair. (3) **Figure references kept.** `generation_quality_policy`
+V2 (`owner-generation-quality-2026-09-13-v2`): the dangling-reference cleaner
+keeps "Fig. 7.7"/"Figure 6.3" in prose and still strips dangling example and
+table references; V1 rows clean exactly as before. **Still with the owner:**
+Q67's contract questions (a block on every non-culmination concept; folding
+Error Analysis into numbered Misconceptions) and the remaining planned items
+(blind Host batches, teaching order, declared Pre options, duplicate case
+titles, placeholder captions). Q68 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
 The owner: "go through all of these properly … dont lose the technical details
 of writing the columns/rows, the rules … the prompting (you can make it better;
 but dont lose the existing ones)." Every hand correction in `Corrections.docx`

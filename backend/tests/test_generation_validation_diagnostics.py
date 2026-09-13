@@ -179,7 +179,9 @@ def _strict_culmination(*, question: str = "") -> dict:
     )
     return _row(
         "Culmination - Electric Current Relationship",
-        "Description: Recap of Electric Current Relationship." + types,
+        "Description: Recap of Electric Current Relationship."
+        "\nAchieving Mastery: Combine the current, voltage and resistance "
+        "relationships in one circuit calculation." + types,
         topic="Electric Current",
         parent="Culmination",
     )
@@ -1280,6 +1282,8 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
             (
                 "Description: Recap of Use the Finite-sum Formula "
                 r"S_n = \frac{n}{2}(a+l)."
+                "\nAchieving Mastery: Combine the finite-sum formula with "
+                "its terms in one calculation."
             ),
             topic="T",
             parent="Culmination",
@@ -1333,6 +1337,8 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
             (
                 "Description: Recap of Use the Finite-sum Formula "
                 r"[Katex] S_n = \frac{n}{2}(a+l) [/Katex]."
+                "\nAchieving Mastery: Combine the finite-sum formula with "
+                "its terms in one calculation."
             ),
             topic="T",
             parent="Culmination",

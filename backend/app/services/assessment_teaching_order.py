@@ -24,6 +24,7 @@ def project_atoms(
     """Project recorded row/QID ordinals; preserve unallocated evidence once."""
     if not quality.is_current(release):
         return list(atoms), {}
+    recorded_version = quality.version_of(release) or quality.VERSION
     locations: dict[str, dict[str, Any]] = {}
     for row_index, row in enumerate(release.get("records") or []):
         qids = row.get("_aegis_release_qids") or []
@@ -52,7 +53,9 @@ def project_atoms(
         qid = str(atom["source_qid"])
         location = locations.get(qid)
         atom[AUDIT_FIELD] = {
-            "policy_version": quality.VERSION,
+            # The release's RECORDED stamp: the atom rides into every cell
+            # payload, so a v1 Master resume must not re-key on v2 (Q68).
+            "policy_version": recorded_version,
             **copy.deepcopy(location or {"source_qid": qid, "ordinal": None}),
         }
         if location is None:
@@ -62,7 +65,7 @@ def project_atoms(
                 "after the ordered questions in original inventory sequence for review"
             )
     return result, {
-        "policy_version": quality.VERSION,
+        "policy_version": recorded_version,
         "accepted_concept_qids": list(locations),
         "ordered_atom_qids": [str(atom["source_qid"]) for atom in result],
         "unmapped_qids": unmapped,

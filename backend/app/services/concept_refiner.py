@@ -158,6 +158,22 @@ def strip_analysis_label_echo(text: str) -> str:
     return _ANALYSIS_LABEL_ECHO_RE.sub("", str(text or ""), count=1).strip()
 
 
+_CORRECTION_LABEL_ECHO_RE = re.compile(r"^correction\s*:\s*", re.IGNORECASE)
+
+
+def strip_correction_label_echo(text: str) -> str:
+    """Drop a leading ``Correction:`` echo from ONE item's correction.
+
+    The composer writes the ``Correction:`` marker itself
+    (``assemble._join_analysis_pairs``); a correction that already begins
+    with it would render "Correction: Correction: …". The same mechanics as
+    ``strip_analysis_label_echo``: one exact leading label token, nothing
+    else, idempotent — the correction's content is not re-judged.
+    """
+
+    return _CORRECTION_LABEL_ECHO_RE.sub("", str(text or ""), count=1).strip()
+
+
 def split_sections(details: str) -> list[tuple[str, str]]:
     """Split ``Label: content // Label: content`` into ordered (label, content)."""
     out: list[tuple[str, str]] = []
@@ -1213,8 +1229,10 @@ def refine_chapter(records: list[dict]) -> list[dict]:
                     if flag not in flags:
                         flags.append(flag)
             details = reduce_type_sections(details)
-            if not is_culmination(rec.get("concept_title", "")):
-                details = format_mastery_statement(details)
+            # Culminations carry a mastery line too (contract §11.1); the
+            # formatter canonicalises a label it finds and leaves a
+            # label-free legacy Description alone.
+            details = format_mastery_statement(details)
             details = normalize_analysis_sections(details)
             rec["concept_details"] = details
     records = ensure_analysis_sections(records)

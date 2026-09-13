@@ -89,10 +89,9 @@ def _failures(
         # The terminal boundary normalizes mastery-line FORMAT before it
         # validates; only missing, empty, duplicate or misplaced markers
         # reach this repair pass. Substance is an independent API judgment.
-        if not _cr.is_culmination(str(row.get("concept_title") or "")):
-            row["concept_details"] = _cr.format_mastery_statement(
-                str(row.get("concept_details") or "")
-            )
+        row["concept_details"] = _cr.format_mastery_statement(
+            str(row.get("concept_details") or "")
+        )
     report = cv.validate_concept_rows(
         normalized_rows,
         allow_culmination=True,
@@ -131,6 +130,17 @@ def _failures(
                         "can…'>'. Ground "
                         "the capability in the supplied teaching evidence."
                     )
+                    if _cr.is_culmination(
+                        str(rows[index].get("concept_title") or "")
+                    ):
+                        entry["repair_guidance"] += (
+                            " This row is a Culmination: the sentence names "
+                            "what the learner can now do with the topic's "
+                            "member concepts combined — distinct from every "
+                            "member's own mastery — grounded on the "
+                            "consolidation paragraph already in the "
+                            "Description."
+                        )
                 elif entry["code"] in (
                     "analysis_section_format", "missing_learner_analysis",
                 ):

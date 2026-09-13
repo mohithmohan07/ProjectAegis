@@ -269,7 +269,9 @@ def prepare_reviewed_pre_scope(
                 topics.append(topic)
         payload["pre_topics"] = topics
     payload[repair.KEY] = repair.VERSION
-    payload[generation_quality_policy.KEY] = generation_quality_policy.VERSION
+    payload[generation_quality_policy.KEY] = (
+        generation_quality_policy.version_of(payload) or generation_quality_policy.VERSION
+    )
 
 
 def _refresh_edited_validation_reports(
@@ -1436,7 +1438,10 @@ def apply_workbook_for_review(
             from . import generation_repair_policy, generation_quality_policy
             review_payload = copy.deepcopy(payload)
             review_payload[generation_repair_policy.KEY] = generation_repair_policy.VERSION
-            review_payload[generation_quality_policy.KEY] = generation_quality_policy.VERSION
+            review_payload[generation_quality_policy.KEY] = (
+                generation_quality_policy.version_of(payload)
+                or generation_quality_policy.VERSION
+            )
         question_rows = _question_workbook_rows(
             workbook_path, payload=review_payload, concept_rows=parsed, lane=lane
         )

@@ -151,6 +151,23 @@ def _image_tokens(value: str) -> list[str]:
     return [match.group(0) for match in katex_rules._IMAGE_TAG_RE.finditer(value)]
 
 
+_ANALYSIS_PAIR_TOKEN_RE = re.compile(r"\(\d+\)(?=\s)|Correction:")
+
+
+def _analysis_pair_tokens(value: str) -> list[str]:
+    """The ordered ``(n)`` / ``Correction:`` markers of a pair-rendered
+    learner-analysis section (Q68). Mechanics: a refinement may reword a
+    half, never merge, drop or renumber a pair. A section without a
+    ``Correction:`` marker — every row rendered before the policy — has no
+    pairing to keep, so it yields no tokens and stays exempt.
+    """
+
+    text = str(value or "")
+    if "Correction:" not in text:
+        return []
+    return _ANALYSIS_PAIR_TOKEN_RE.findall(text)
+
+
 def _identity_violations(
     before_row: Mapping[str, Any],
     after_details: str,
@@ -189,6 +206,14 @@ def _identity_violations(
                     violations.append(
                         f"image attachments changed in section {label!r} "
                         "(preserve exact tags, URLs, alt text and order)"
+                    )
+                if cr.is_learner_analysis_label(label) and _analysis_pair_tokens(
+                    before_content
+                ) != _analysis_pair_tokens(after_content):
+                    violations.append(
+                        "misconception/correction pairing changed in section "
+                        f"{label!r} (keep every '(n)' ordinal and "
+                        "'Correction:' marker, in order)"
                     )
                 continue
             if before_content != after_content:
@@ -326,8 +351,12 @@ def _deposit_deterministic_pipeline(
 
     inventory = dict(metadata.get("inventory") or {})
     mined_types = dict(metadata.get("mined_types") or {})
+    from . import generation_quality_policy
+
+    keep_figures = generation_quality_policy.figure_references_kept(metadata)
     out_rows = [
-        concept_cleanup.clean_concept_record(dict(row)) for row in rows
+        concept_cleanup.clean_concept_record(dict(row), keep_figures=keep_figures)
+        for row in rows
     ]
     out_rows = concept_cleanup.filter_review_violations(
         out_rows,
@@ -545,7 +574,7 @@ _RULES = (
     "'Case NN:' or 'Example:' text, the Activity/Info Hub section, or any "
     "QINV- id. You may reword ONLY the Description prose (including its "
     "'Achieving Mastery:' sentence), the Misconception/ Error Analysis "
-    "wording, and the keywords. " + "Wording polish includes grammar and voice: every pronoun must refer unambiguously to the noun the source means (check each he/she/it/they against the named actor); every sentence must have its subject and must not end in a dangling connector or preposition (e.g. 'as illustrated in.'); a definition must parse ('X is a method in which …', never 'X is a method, meaning that …'); a phrase such as 'this change' must name what changes; a mastery sentence that opens with 'A learner can', 'The learner …' or 'The student …' is rewritten in the imperative (verb first) without changing the capability it names; a sentence addressed to the author, reviewer or evaluator, or that narrates the evidence ('the source states that …'), is restated as a direct teaching sentence; a Description sentence that merely repeats an attached figure's caption or a 'Source visual' label is removed. Repair these in place without altering facts. " +
+    "wording, and the keywords. " + "Inside the Misconception/ Error Analysis section keep any numbered pairing exactly: every '(n) <text>. Correction: <text>.' pair stays one pair in the same order — reword within a half, never merge, drop or renumber a pair or its 'Correction:' marker; a mechanical check discards a response that changes them. " + "Wording polish includes grammar and voice: every pronoun must refer unambiguously to the noun the source means (check each he/she/it/they against the named actor); every sentence must have its subject and must not end in a dangling connector or preposition (e.g. 'as illustrated in.'); a definition must parse ('X is a method in which …', never 'X is a method, meaning that …'); a phrase such as 'this change' must name what changes; a mastery sentence that opens with 'A learner can', 'The learner …' or 'The student …' is rewritten in the imperative (verb first) without changing the capability it names; a sentence addressed to the author, reviewer or evaluator, or that narrates the evidence ('the source states that …'), is restated as a direct teaching sentence; a Description sentence that merely repeats an attached figure's caption or a 'Source visual' label is removed. Repair these in place without altering facts. " +
     "Keep every section label and the section "
     "order byte-identical, keep all factual content and [Katex] wrapping, "
     "and preserve every existing [img] attachment byte-identically, including "

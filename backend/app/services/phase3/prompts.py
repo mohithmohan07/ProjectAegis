@@ -84,10 +84,12 @@ ANALYSIS_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + column_spec.CONCEPT_Q
     "exactly as [Katex] valid LaTeX [/Katex]; never emit raw TeX, $ "
     "delimiters, bare sub/superscripts, or bare equations outside "
     "those tags. When the request carries a culminations array, also "
-    "return {\"culminations\": [{\"concept_id\", \"consolidation\"}]}: "
+    "return {\"culminations\": [{\"concept_id\", \"culmination_title\", "
+    "\"consolidation\", \"achieving_mastery\"}]}: "
     "for each culmination a 2-4 sentence consolidation paragraph tying "
     "the topic's member concepts together — what the learner can now "
-    "do with them combined — never a list of concept names."
+    "do with them combined — never a list of concept names. "
+    + "culmination_title: a short learner-facing synthesis name beginning with the exact prefix 'Culmination - ', naming what the FINAL member concepts achieve together — never the member names joined into a list, never a concept outside this topic or one that no longer exists in it; the request's draft_culmination_title is a stale draft to replace, not to echo. achieving_mastery: ONE imperative sentence, verb first, naming what the learner can now do with the member concepts combined — distinct from every member's own mastery and never restated inside the consolidation paragraph. A culmination marked planned: true carries the sealed plan's own title and mastery: return its draft_culmination_title exactly as supplied as culmination_title and an empty achieving_mastery."
 )
 
 ANALYSE_INVENTORY_SYSTEM = _SHARED + column_spec.CONCEPT_QUALITY + (

@@ -136,9 +136,11 @@ def _foundation_instruction(payload: Mapping[str, Any]) -> str:
 
 
 def _quality_fields(*values: Mapping[str, Any] | None) -> dict[str, str]:
-    return (
-        {quality.KEY: quality.VERSION}
-        if any(quality.is_current(value) for value in values) else {}
+    # The RECORDED stamp of the first carrier, never the latest constant: a
+    # v1 run's request identity must replay as v1 (Q68).
+    return next(
+        (quality.fields(value) for value in values if quality.is_current(value)),
+        {},
     )
 
 

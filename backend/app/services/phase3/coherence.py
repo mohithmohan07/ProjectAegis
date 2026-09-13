@@ -263,7 +263,9 @@ def consolidate(
         "required_orders": orders,
         "response_schema": SCHEMA.identity(),
     }
-    policy = quality.VERSION + ";coherence:" + hashlib.sha256(
+    # The RECORDED stamp, never the latest constant; an unstamped envelope
+    # keeps the literal it was keyed with (Q68).
+    policy = (quality.version_of(env) or quality.V1) + ";coherence:" + hashlib.sha256(
         (SYSTEM + CRITIC_SYSTEM).encode("utf-8")
     ).hexdigest()
     decision = decide_with_visual_evidence(
