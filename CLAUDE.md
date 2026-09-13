@@ -1,6 +1,22 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q56 (Step 2 failure reporting, 13 September 2026).**
+**Latest owner amendment: Q57 (reviewed-file reader memory, 13 September 2026).**
+Job 139's Step 2 failed with a bare 502 after ~1h39m. The files were fine — the
+importer reports zero issues on both. The server process had died: the
+"Step 2 stopped" badge needs `master_building` AND a false `generation_running`,
+which is a process-local lock, so only a dead process produces it. Measured:
+`reviewed_file_input.read_document` opened the workbook TWICE fully materialised,
+and the sheets declare 201,580 cells (Excel's formatted-but-empty rows) to hold
+1,416 real ones — 306 MB of RSS for a 0.48 MB file, twice over, on a 2048 MB
+machine running two lanes. The cell pass now streams with `read_only`; the
+cached-value load is deferred until a formula is actually seen; a full load
+happens only for a workbook whose zip holds `xl/media`. Byte-identical output on
+all four real files; +140 MB becomes +2 MB. `fly.toml` memory is 10240 MB — that
+block only sizes machines a deploy CREATES, so the existing machine still needs
+`fly scale vm shared-cpu-2x --memory 10240 -a projectaegis` run out of band.
+Q57 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q56 (Step 2 failure reporting, 13 September 2026).**
 Two jobs failed Step 2 for three unrelated reasons behind one uninformative
 message. The owner chose the reliability set first. A Master lane now emits an
 error event naming its exception before the worker swallows it, plus a server
