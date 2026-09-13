@@ -141,5 +141,27 @@ class PreQuestionAuthorResponse(BaseModel):
     questions: list[PreQuestionDraft]
 
 
-def pre_question_author_schema() -> ResponseSchema:
+class PreQuestionDeclaredDraft(PreQuestionDraft):
+    """v2 of the Pre author draft (generation-quality v4, Q70).
+
+    ``options`` is the complete choice set the question offers, one entry
+    per option in display order, empty when it offers none. Required and
+    never defaulted: a strict provider schema must require every property
+    it declares or the provider refuses the whole request (Q61).
+    """
+
+    options: list[str]
+
+
+class PreQuestionAuthorDeclaredResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    questions: list[PreQuestionDeclaredDraft]
+
+
+def pre_question_author_schema(*, declared_options: bool = False) -> ResponseSchema:
+    """v1 for every run sealed before generation-quality v4; v2 declares options."""
+    if declared_options:
+        return ResponseSchema(
+            "aegis_pre_question_author_v2", PreQuestionAuthorDeclaredResponse,
+        )
     return ResponseSchema("aegis_pre_question_author_v1", PreQuestionAuthorResponse)

@@ -16,13 +16,17 @@ KEY = "generation_quality_policy"
 #: figure reference from learner prose. v3 (13 September 2026, Q68):
 #: everything in v2, plus ``host_creations_resolved`` — a Host unit that
 #: minted a concept in a parallel batch is re-decided once with every
-#: batch's creation visible. A run keeps the version it recorded; only newly
-#: stamped work adopts the latest.
+#: batch's creation visible. v4 (13 September 2026, Q70): everything in v3,
+#: plus ``declared_pre_options`` — the Pre author declares each question's
+#: choice set as an ``options`` array, the cell carries it and the
+#: materializer's checker holds the projected answers[] to that count. A run
+#: keeps the version it recorded; only newly stamped work adopts the latest.
 V1 = "owner-generation-quality-2026-09-11-v1"
 V2 = "owner-generation-quality-2026-09-13-v2"
 V3 = "owner-generation-quality-2026-09-13-v3"
-SUPPORTED: tuple[str, ...] = (V1, V2, V3)
-VERSION = V3
+V4 = "owner-generation-quality-2026-09-13-v4"
+SUPPORTED: tuple[str, ...] = (V1, V2, V3, V4)
+VERSION = V4
 POST_DESCRIPTION_INSTRUCTION = """POST CONCEPT DESCRIPTION AND QUESTION CONTEXT
 Teach the concept in coherent, original, source-faithful language. Do not copy
 large chapter extracts into a concept description merely to supply context for
@@ -146,4 +150,21 @@ def host_creations_resolved(value: Mapping[str, Any] | None) -> bool:
     """
     recorded = version_of(value)
     return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V3)
+
+
+def declared_pre_options(value: Mapping[str, Any] | None) -> bool:
+    """v4: the Pre author declares each question's choice set (Q70).
+
+    A generated Pre MCQ shipped with its fourth option missing (Bholi, the
+    reviewers' corrections catalogue) and nothing on the generated lane
+    could see it: the author response had no ``options`` field and the
+    materializer's option-cardinality gate reads the source atom, which the
+    Pre lane never has. Under v4 the author response carries ``options``
+    (empty when the question offers no choice set), the cell carries it and
+    ``assessment_materialization`` holds the projected answers[] to that
+    count. A run stamped v3 or earlier keeps the v1 response schema, prompt
+    and checker it was sealed with.
+    """
+    recorded = version_of(value)
+    return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V4)
 

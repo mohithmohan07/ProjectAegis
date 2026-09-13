@@ -159,6 +159,32 @@ from .. import progress
 POLICY_VERSION = "prequestions-1"
 ADAPTIVE_POLICY_VERSION = "prequestions-2-adaptive-coverage"
 
+# Generation-quality v4 (register Q70): the author declares its own choice
+# set. Appended by ``_author_system`` to BOTH author systems only when the
+# payload carries a v4 stamp, because the sentence must match the wire
+# schema ``_live_author`` selects for the same payload: the v1 strict schema
+# forbids an ``options`` field, so an ungated sentence would ask a historical
+# cache-miss for a shape its own transport refuses. Deliberately NOT written
+# into ``prompts.PREQUESTIONS_AUTHOR_SYSTEM``: that constant is in The
+# Architect's frozen core, and changing it moves the checkpoint fingerprint
+# of every legacy job without a stored instruction hash.
+_DECLARED_OPTIONS_INSTRUCTION = (
+    " options declares that choice set: an array of the option texts the "
+    "question offers, one entry per option in the display order question_text "
+    "lists them, each non-empty and none repeated, with the correct answer "
+    "among them; a question that offers no choice set declares an empty "
+    "array. The materializer projects exactly the declared entries into "
+    "answers[] and refuses a different count, so the array is the complete "
+    "set — never a sample, and never a set question_text does not show."
+)
+
+_DECLARED_OPTIONS_REVIEW = (
+    " When the questions carry an options array, also flag — as advisory "
+    "issues, never a rewrite — a selection question whose array is empty or "
+    "disagrees with the options its question_text lists, and an answer that "
+    "is not one of the declared options."
+)
+
 _FOUNDATION_QUESTION_GUIDANCE = """
 For a Grade 1 foundation, keep each generated check at simple readiness and
 within the child's demonstrated level. Prefer one short step, recognition or
@@ -476,6 +502,7 @@ def _author_checker(
     *,
     rule: Mapping[str, Any] | None = None,
     split: Mapping[str, int] | None = None,
+    declared_options: bool = False,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     """Mechanics only: positional ids, non-empty fields, plan↔output.
 
@@ -537,6 +564,25 @@ def _author_checker(
             for field in ("question_text", "answer", "rationale"):
                 if not _normal(row.get(field)):
                     defects.append(f"{label} has an empty {field}")
+            if declared_options:
+                # Generation-quality v4: the declared choice set is a wire
+                # shape — an array of non-empty, non-repeating texts, empty
+                # when the question offers no choices. Which options exist
+                # and which is correct stay the author's judgment; nothing
+                # here reads the question's wording.
+                options = row.get("options")
+                if not isinstance(options, list):
+                    defects.append(
+                        f"{label} has no options array; declare the choice "
+                        "set the question offers as an array of option "
+                        "texts, empty when it offers none"
+                    )
+                else:
+                    texts = [_normal(option) for option in options]
+                    if any(not text for text in texts):
+                        defects.append(f"{label} declares an empty option")
+                    if len(set(texts)) != len(texts):
+                        defects.append(f"{label} declares a repeated option")
         if len(rows) != planned_total:
             defects.append(
                 f"{concept_id} was authored {len(rows)} question(s) but its "
@@ -602,13 +648,21 @@ def _plan_system(payload: Mapping[str, Any]) -> str:
 def _author_system(payload: Mapping[str, Any]) -> str:
     from . import prompts
 
+    # Generation-quality v4: the declared-options sentence and the schema
+    # field appear together, and only for a payload whose recorded stamp
+    # also selects the v2 wire schema in ``_live_author``. An unstamped or
+    # pre-v4 payload renders this text byte for byte as before.
+    declared = quality.declared_pre_options(payload)
     if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
-        return prompts.PREQUESTIONS_AUTHOR_SYSTEM
+        return prompts.PREQUESTIONS_AUTHOR_SYSTEM + (
+            _DECLARED_OPTIONS_INSTRUCTION if declared else ""
+        )
     return prompts._SHARED + (
         " Task: author one Pre-Learning concept's fresh diagnostic questions "
         "under its accepted adaptive coverage plan. Response schema: "
         "{\"questions\":[{\"question_id\":\"PRQ-0001\",\"question_text\":\"\","
-        "\"answer\":\"\",\"rationale\":\"\",\"tier\":\"Basic|Intermediate|Advanced\"}]}. "
+        + ("\"options\":[]," if declared else "")
+        + "\"answer\":\"\",\"rationale\":\"\",\"tier\":\"Basic|Intermediate|Advanced\"}]}. "
         "The plan's total and tier split were chosen from this prerequisite's "
         "context, not a fixed quota; author exactly that recorded plan without "
         "padding, repetitions, tier balancing or scope extension. Cite the "
@@ -622,7 +676,8 @@ def _author_system(payload: Mapping[str, Any]) -> str:
         "you intend: a fill-in shows its blank, a selection question lists its "
         "options, and a question asking for a reason or explanation asks for "
         "it in a sentence; do not leave the response form for a later stage to "
-        "invent. question_text contains the complete "
+        "invent." + (_DECLARED_OPTIONS_INSTRUCTION if declared else "")
+        + " question_text contains the complete "
         "learner task with its required data, options and parts, without "
         "answers or evaluator commentary. answer gives the complete expected "
         "response and reasoning. Do not award unasked demands. Wrap mathematics "
@@ -634,8 +689,11 @@ def _critic_system(payload: Mapping[str, Any]) -> str:
     from . import prompts
     from .. import column_spec
 
+    declared = quality.declared_pre_options(payload)
     if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
-        return prompts.PREQUESTIONS_CRITIC_SYSTEM
+        return prompts.PREQUESTIONS_CRITIC_SYSTEM + (
+            _DECLARED_OPTIONS_REVIEW if declared else ""
+        )
     return prompts._SHARED + column_spec.REVIEW_QUALITY + (
         " Task: independently audit the adaptive Pre question plan or its "
         "authored questions. For a PLAN, judge sufficiency, proportion and "
@@ -655,7 +713,7 @@ def _critic_system(payload: Mapping[str, Any]) -> str:
         "source evidence. Response schema: {\"verdict\":\"verified|rejected\","
         "\"confidence\":0.0,\"issues\":[]}. Dissent is recorded and advisory; "
         "never rewrite, retry, gate or enlarge the concept or question set."
-    )
+    ) + (_DECLARED_OPTIONS_REVIEW if declared else "")
 
 
 def _live_plan(payload: dict[str, Any]) -> dict[str, Any]:
@@ -684,7 +742,9 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
         + ("\n" + repair.PRE_ASSESSMENT_INSTRUCTION if repair.active(payload) else ""),
         prompts.render(payload),
         purpose="pre_learning", stage="prequestions.author",
-        **({"response_schema": pre_question_author_schema()} if model_provider.bound_profile() is not None else {}),
+        **({"response_schema": pre_question_author_schema(
+            declared_options=quality.declared_pre_options(payload),
+        )} if model_provider.bound_profile() is not None else {}),
     )
 
 
@@ -1241,6 +1301,13 @@ def build(
         payload = {
             "stage": "prequestions.author",
             **capture_policy.boundary_fields(env),
+            # Generation-quality v4 (Q70): the author payload carries the
+            # run's RECORDED stamp so the wire schema, the rules sentence,
+            # the checker and the critic all read one answer, and the
+            # decision key carries it through ``_policy_version``. Gated
+            # on v4 so every earlier stamped run's payload — and key — is
+            # byte-identical to what it recorded.
+            **(quality.fields(env) if quality.declared_pre_options(env) else {}),
             "rules": _author_rules(rules_suffix, rule),
             "chapter": calibration,
             "coverage_plan": plan,
@@ -1271,6 +1338,7 @@ def build(
                         for entry in plan.get("split") or []
                         if isinstance(entry, Mapping)
                     },
+                    declared_options=quality.declared_pre_options(payload),
                 ),
                 critic=critic,
                 store=store,
@@ -1315,6 +1383,13 @@ def build(
                 # Register Q30: the tier is authored, and it rides the
                 # question into the assessment lane, which groups by it.
                 entry["tier"] = _normal(row.get("tier"))
+            if quality.declared_pre_options(payload):
+                # Generation-quality v4 (Q70): the declared choice set rides
+                # the question into the assessment lane exactly as the tier
+                # does; the checker above already held its shape.
+                entry["options"] = [
+                    _normal(option) for option in row.get("options") or []
+                ]
             authored.append(entry)
         return concept_id, authored, "", list(decision.get("review_flags") or [])
 

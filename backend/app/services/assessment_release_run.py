@@ -50,6 +50,7 @@ from . import assessment_master_refiner as master_refiner
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
 from . import assessment_release as rel
+from . import generation_quality_policy
 from . import assessment_release_snapshot as release_snapshot
 from . import assessment_release_service as release_service
 from . import assessment_routing as routing
@@ -1180,6 +1181,21 @@ def _bind_generated_cells(
             # Pre coverage rule carries it into the level stage, which
             # transports the authoring decision rather than re-deciding.
             cell["generated_question"]["tier"] = authored_tier
+        declared_options = question.get("options")
+        if (
+            generation_quality_policy.declared_pre_options(profile)
+            and isinstance(declared_options, list)
+        ):
+            # Generation-quality v4 (Q70): the author's declared choice set
+            # rides the question into materialization, whose checker holds
+            # the projected answers[] to this count. Gated on the run's
+            # RECORDED stamp, not on key presence: a reviewed-file Pre row
+            # already carries an ``options`` list from its extraction
+            # (reviewed_file_input), and carrying it onto a pre-v4 cell
+            # would move that cell's materialization key on replay.
+            cell["generated_question"]["options"] = [
+                str(option) for option in declared_options
+            ]
         cell["flags"] = list(decided_flags)
         cell["authority"] = authority
         cell[_CELL_AUDIT_FIELD] = {

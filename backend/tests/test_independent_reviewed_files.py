@@ -172,6 +172,8 @@ def test_real_pre_planner_and_author_use_only_accepted_file_scope(db, tmp_path, 
         if payload["stage"] == "prequestions.author":
             for question in response["questions"]:
                 question["tier"] = "Basic"
+                # Q70: a new run's author declares its choice set (none here).
+                question.setdefault("options", [])
         return response
     def build(env, scope, **kw):
         outcome = real_build(env, scope, provider=provider, critic=critic, store=kernel.DecisionStore())

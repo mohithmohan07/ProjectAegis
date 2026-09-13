@@ -52,7 +52,14 @@ def test_a_v2_row_keeps_its_figures_and_an_older_row_does_not():
 
 
 def test_the_policy_keeps_every_recorded_version_and_mints_only_the_latest():
-    assert quality.VERSION == quality.V3 and quality.SUPPORTED == (quality.V1, quality.V2, quality.V3)
+    assert quality.VERSION == quality.V4 and quality.SUPPORTED == (quality.V1, quality.V2, quality.V3, quality.V4)
+    # v4 is monotone too: it keeps v2 and v3 and adds the declared Pre options.
+    assert quality.figure_references_kept({quality.KEY: quality.V4}) is True
+    assert quality.host_creations_resolved({quality.KEY: quality.V4}) is True
+    assert quality.declared_pre_options({quality.KEY: quality.V3}) is False
+    assert quality.declared_pre_options({"metadata": {quality.KEY: quality.V4}}) is True
+    assert quality.declared_pre_options({"profile": {quality.KEY: quality.V4}}) is True
+    assert quality.declared_pre_options({}) is False
     # v3 is monotone: it keeps v2's figure references and adds the Host resolution.
     assert quality.figure_references_kept({quality.KEY: quality.V3}) is True
     assert quality.host_creations_resolved({quality.KEY: quality.V2}) is False

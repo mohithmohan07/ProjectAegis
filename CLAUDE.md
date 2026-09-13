@@ -47,11 +47,18 @@ The level author receives `chapter_teaching_order` (the bridge's accepted
 concept sequence) and `this_concept_ordinal`, is asked to weigh a later
 concept's result as transfer and name it in the rationale;
 `LEVEL_POLICY_VERSION` is `assessment-level-2-teaching-order-2026-09-13`. No
-positional tier rule exists in code. **Still with the owner:** Q67's contract
-questions (a block on every non-culmination concept; folding Error Analysis
-into numbered Misconceptions; whether opening concepts should carry lower
-tiers) and the remaining planned items (declared Pre options, duplicate case
-titles, placeholder captions). Q68 and Q69 in `docs/aegis-restructure.md`.
+positional tier rule exists in code. (6, **Q70**) **Declared Pre options.**
+V4 (`owner-generation-quality-2026-09-13-v4`, `declared_pre_options`): the Pre
+author's v2 strict schema REQUIRES an `options` array (empty when no choice
+set), the checker holds its shape, the cell carries it under a v4 profile,
+and the materializer refuses a projected answers[] whose count differs from
+the declared set. The author payload carries the stamp under v4 only, so
+every earlier run's payload and key are unchanged. **Still with the owner:**
+Q67's contract questions (a block on every non-culmination concept; folding
+Error Analysis into numbered Misconceptions; whether opening concepts should
+carry lower tiers; four options per MCQ; an empty declared set as a
+mechanical defect) and the remaining planned items (duplicate case titles,
+placeholder captions). Q68–Q70 in `docs/aegis-restructure.md`.
 
 **Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
 The owner: "go through all of these properly … dont lose the technical details

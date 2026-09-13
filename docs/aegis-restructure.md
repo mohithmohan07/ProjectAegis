@@ -4321,7 +4321,7 @@ place where a rule's FORM changed is named below.
   using flowers before Topic 06 introduces them; advanced tiers on opening
   concepts). — DONE, see Q69.
 * **Declared `options` on generated Pre questions** so a dropped option is a
-  materializer defect instead of a silent loss.
+  materializer defect instead of a silent loss. — DONE, see Q70.
 * **Duplicate case titles as a coverage defect** in the mining follow-up
   (the prompt rule is in).
 * **Placeholder captions minted into source text** (`_markdown_image`,
@@ -4692,4 +4692,60 @@ prompts and the version), `tests/test_assessment_release_run.py` (the level
 author's roster equals the router's `candidate_concepts` order; the policy
 pin updated), `tests/test_corrections_catalogue_2026_09_13.py` (the critic
 sentence). No paid generation was run.
+
+## Q70 — decided — generated Pre questions declare their options (generation-quality v4)
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items), Q30 (the Pre
+author's response), Q61 (strict schemas). **Contract:** §22 fixes no option
+count; unchanged.
+
+**Reproduced.** A generated Pre MCQ shipped with its fourth option missing
+(Bholi). The Pre author response was `{question_id, question_text, answer,
+rationale, tier}` under a strict schema with no `options` field;
+`_bind_generated_cells` copied six fields plus the tier into the cell; the
+only option-cardinality gate (`assessment_materialization._proposal_defects`)
+read the source atom, which the generated lane never has (`atom=None`), so a
+materializer that projected three of four options shipped unseen.
+
+**Decided.** `generation_quality_policy` V4
+(`owner-generation-quality-2026-09-13-v4`, `declared_pre_options`). Under it:
+a v2 strict author schema `aegis_pre_question_author_v2` with a REQUIRED
+`options: list[str]` (empty when the question offers no choice set; Q61 —
+declared means required); the checker holds it to a list of non-empty,
+non-repeating texts (nothing reads the wording); one additive sentence in
+BOTH author systems and a review sentence for the critic, appended only for
+a v4 payload because the sentence must match the wire schema `_live_author`
+selects for the same payload — deliberately not written into the frozen-core
+`PREQUESTIONS_AUTHOR_SYSTEM`; the authored entry carries `options` exactly as
+it carries the tier; `_bind_generated_cells` carries it into the cell only
+under a v4-stamped profile (a reviewed-file Pre row already carries an
+extraction `options` list, and carrying it onto a pre-v4 cell would move
+that cell's materialization key); the materializer's existing cardinality
+defect applies with the declared count and the generated-lane noun, and one
+gated instruction tells it the declared set is the set to project. The
+design review claimed the author key already carried the stamp; it did not
+— the author payload carried only the capture-boundary fields — so the
+payload now carries `quality.fields(env)` under v4 only, which is what makes
+the schema, sentence, checker, critic and key read one answer.
+
+**Replay.** A v1–v3 or unstamped run keeps the v1 schema, prompt, checker,
+cell shape and every key byte for byte (pinned: the v3 author system equals
+the unstamped one; a v3 materialization payload's key equals the key with
+the predicate forced off). Only a v4 Step 02 or fresh run declares options.
+
+**Recorded for the owner, unchanged from Q67:** whether a generated MCQ must
+carry exactly four options (§22 fixes no count), and whether an Objective
+verdict on a question that declared an EMPTY set should be a mechanical
+defect rather than the advisory critic flag it is now.
+
+### Verification
+
+Offline only: `tests/test_declared_pre_options.py` (the two schemas, the
+checker with and without the flag, a v4 build carrying options and replaying
+for free, a v3 build byte-identical, the live author's schema selection, the
+cell carry under a v4 profile only, the materializer's declared-count refusal
+and its historical skip, the gated instruction and the unchanged pre-v4 key);
+the V4 pin in `tests/test_figure_references_kept.py`. No paid generation.
 
