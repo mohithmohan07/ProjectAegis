@@ -213,7 +213,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
             for key, value in response.items()
             if key != "source_qid"
         }
-        assert cell["authority"]["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
+        assert cell["authority"]["policy_version"] == "assessment-cell-5-lane-mechanics-2026-09-13"
 
     candidates = first["materialized"]["candidates"]
     for candidate, response in zip(

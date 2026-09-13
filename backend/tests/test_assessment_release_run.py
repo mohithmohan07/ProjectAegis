@@ -523,7 +523,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
         ] == (
-            "assessment-cell-4-response-mechanism-sop-2026-09-09;"
+            "assessment-cell-5-lane-mechanics-2026-09-13;"
             "assessment-output-vocabulary-2026-09-11-v2"
         )
         assert candidate["_aegis_assessment_materialization"]["authority"][
@@ -1352,7 +1352,7 @@ def test_explicit_subjective_cell_binds_under_its_profile_contract():
     assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
     assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert bound[0]["source_policy"] == "reuse"
-    assert bound[0]["authority"]["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-5-lane-mechanics-2026-09-13"
 
 
 def test_a_question_blocked_at_marking_does_not_take_the_lane_with_it(db):

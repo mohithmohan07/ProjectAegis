@@ -2089,11 +2089,17 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_post_master.xlsx": {
-        "digest": "3de7a40fffc28b6f485eed45d59f77e8d884a280524b9272dd550027fb2e48b3",
+        # Q67: one cell moved — Objective row 38 ``keywords`` carried four
+        # duplicated tokens ("subtraction", "difference", "ascending order",
+        # "descending order" twice), which contract §16 forbids ("no …
+        # duplicated token"); ``column_spec.keyword_cell`` now projects the
+        # list without them. Every other cell of every sheet is byte-identical
+        # (measured cell by cell against the previous render).
+        "digest": "d931516ca13604fe20c0feaf507986050f09048f222fa134411f07f481426186",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
-                "f0cb28914223ef57c29496d51e300431b379a0392666a8a1186ee67e0fef7865",
+                "4d7a47aebcb3810607e2cb1efdaf33ea9f7b58b66e73dd243d624d26d0299ef1",
             ),
             "Descriptive": (
                 24, 440, 10560,
@@ -2176,8 +2182,11 @@ def test_math_post_native_tex_breaks_are_the_only_changed_pinned_cells():
             matrix.append(cells)
         historical.append([sheet, fields, matrix])
     assert changed == expected
+    # Q67 moved exactly one further cell — Objective row 38 ``keywords`` lost
+    # its four §16-forbidden duplicated tokens — so the restored full-workbook
+    # digest is the one below; the nine math cells above are unchanged.
     assert _digest(historical) == (
-        "92e8cc77c757aa979a2b8d38d1f5a68cc8829c599b5de7d7ed7bff04223eeaba"
+        "e49232233f613a16d29c43930d7be74824d7ebbcc3b237e31df3b32933f6856e"
     )
 
 

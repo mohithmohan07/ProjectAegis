@@ -23,7 +23,7 @@ PROFILE = {
     "sheet_kinds": ("objective", "descriptive"),
 }
 CURRENT_CELL_POLICY = (
-    "assessment-cell-4-response-mechanism-sop-2026-09-09;"
+    "assessment-cell-5-lane-mechanics-2026-09-13;"
     + output_vocabulary.VERSION
 )
 

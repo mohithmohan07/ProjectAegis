@@ -53,6 +53,12 @@ AUDIT_UNAVAILABLE = "release_qc_unavailable"
 # whose chapter has none is blocked from the database write (every
 # download still ships) until one is supplied.
 CHAPTER_DURATION_UNREGISTERED = "chapter_duration_unregistered"
+TOPIC_DESCRIPTION_UNAUTHORED = "topic_description_unauthored"
+CHAPTER_DESCRIPTION_UNAUTHORED = "chapter_description_unauthored"
+#: Advisory, never blocking: a band cell nothing authored ships blank (Q67).
+BAND_DESCRIPTION_CODES = frozenset({
+    TOPIC_DESCRIPTION_UNAUTHORED, CHAPTER_DESCRIPTION_UNAUTHORED,
+})
 PUBLICATION_UNKNOWN = "publication_unknown"
 # Master Governing Contract v2.0 §8.6 (register Q29): every shipped Pre
 # concept carries at least one routed diagnostic question. A Pre concept
@@ -425,12 +431,18 @@ def _chapter_duration_findings(
         chapter_meta.get("chapter_duration_minutes")
     ) != "":
         return [], []
+    # Say what was measured, and only that. The message used to assert that
+    # the registry has no row, while a Step 02 payload that had dropped the
+    # frozen value fired it for Bholi — a chapter the registry lists at 126
+    # minutes (13 September 2026). This audit stays a pure function of the
+    # payload's own material (it wrote the recorded key at staging), so it
+    # does not consult the registry; it names the two places it read.
     message = (
-        "the chapter has no frozen duration: the accepted duration registry "
-        "has no row for this board/grade/subject/chapter and no explicit "
-        "chapter duration was supplied with the upload; the workbooks ship "
-        "the cell blank and the database write is blocked until one is "
-        "supplied (contract v2.0 §32.1) — a duration is never estimated"
+        "the staged payload carries no frozen chapter duration: neither an "
+        "accepted duration-registry value nor an explicit upload variable "
+        "was frozen onto it by the step that staged it; the workbooks ship "
+        "the cell blank and the database write is blocked until the payload "
+        "carries one (contract v2.0 §32.1) — a duration is never estimated"
     )
     issue = _issue(
         code=CHAPTER_DURATION_UNREGISTERED,
@@ -439,6 +451,66 @@ def _chapter_duration_findings(
         phase="release_qc",
     )
     return [issue], [f"{CHAPTER_DURATION_UNREGISTERED}: {message}"]
+
+
+def _band_description_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Contract v2.0 §9.1: a topic description explains, a name list is invalid.
+
+    The transient hierarchy used to fill an unauthored topic with a
+    code-composed "Covers <concept names>." and the Concept-file read-back
+    certified it. Both are gone: an unauthored description ships BLANK, and
+    this names it — visibly, never blocking, so a reviewed Master whose file
+    carries no band cell still publishes with the cell honest rather than
+    stranding the team behind a re-upload the route refuses (Q66). Mechanics:
+    a presence check over the payload's own topics and authored metadata; no
+    judgment about the content. The register (Q67) records that §9.1 would
+    support making the topic finding blocking, for the owner.
+    """
+    from .. import bulk_import as bi
+
+    chapter_meta = payload.get("chapter_meta")
+    chapter_meta = chapter_meta if isinstance(chapter_meta, Mapping) else {}
+    authored = chapter_meta.get("topic_descriptions")
+    authored = authored if isinstance(authored, Mapping) else {}
+    topics: list[str] = []
+    for record in payload.get("records") or []:
+        if not isinstance(record, Mapping):
+            continue
+        topic = str(record.get("topic") or "").strip()
+        if topic and topic not in topics:
+            topics.append(topic)
+    issues: list[dict[str, Any]] = []
+    missing = [
+        topic for topic in topics
+        if not str(authored.get(bi.normalize_question_text(topic)) or "").strip()
+    ]
+    if missing:
+        listed = "; ".join(missing)
+        issues.append(_issue(
+            code=TOPIC_DESCRIPTION_UNAUTHORED,
+            message=(
+                f"{len(missing)} topic(s) have no authored topic_description "
+                f"({listed}): the cell ships blank — a concept-name list is "
+                "never composed for it (contract v2.0 §9.1); the metadata pass "
+                "or the reviewed file's own topic band is the only author"
+            ),
+            severity="warning",
+            phase="release_qc",
+        ))
+    if topics and not str(chapter_meta.get("chapter_description") or "").strip():
+        issues.append(_issue(
+            code=CHAPTER_DESCRIPTION_UNAUTHORED,
+            message=(
+                "the chapter has no authored chapter_description: the cell "
+                "ships blank; the metadata pass or the reviewed file's own "
+                "chapter band is the only author"
+            ),
+            severity="warning",
+            phase="release_qc",
+        ))
+    return issues, []
 
 
 def _publication_findings(
@@ -638,6 +710,13 @@ def audit(
         blocking.extend(duration_blocking)
 
     _pass("chapter-duration", _run_chapter_duration)
+
+    def _run_band_descriptions() -> None:
+        band_issues, band_blocking = _band_description_findings(payload)
+        issues.extend(band_issues)
+        blocking.extend(band_blocking)
+
+    _pass("band-descriptions", _run_band_descriptions)
 
     def _run_publication() -> None:
         publication_issues, publication_blocking = _publication_findings(

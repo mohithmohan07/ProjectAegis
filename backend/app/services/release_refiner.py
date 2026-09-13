@@ -545,7 +545,8 @@ _RULES = (
     "'Case NN:' or 'Example:' text, the Activity/Info Hub section, or any "
     "QINV- id. You may reword ONLY the Description prose (including its "
     "'Achieving Mastery:' sentence), the Misconception/ Error Analysis "
-    "wording, and the keywords. Keep every section label and the section "
+    "wording, and the keywords. " + "Wording polish includes grammar and voice: every pronoun must refer unambiguously to the noun the source means (check each he/she/it/they against the named actor); every sentence must have its subject and must not end in a dangling connector or preposition (e.g. 'as illustrated in.'); a definition must parse ('X is a method in which …', never 'X is a method, meaning that …'); a phrase such as 'this change' must name what changes; a mastery sentence that opens with 'A learner can', 'The learner …' or 'The student …' is rewritten in the imperative (verb first) without changing the capability it names; a sentence addressed to the author, reviewer or evaluator, or that narrates the evidence ('the source states that …'), is restated as a direct teaching sentence; a Description sentence that merely repeats an attached figure's caption or a 'Source visual' label is removed. Repair these in place without altering facts. " +
+    "Keep every section label and the section "
     "order byte-identical, keep all factual content and [Katex] wrapping, "
     "and preserve every existing [img] attachment byte-identically, including "
     "its full source URL and alt text, in the same section or field and in the "

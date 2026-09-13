@@ -28,7 +28,7 @@ from .phase3 import kernel
 from .response_schemas import assessment_cell_schema, ResponseSchema
 
 
-CELL_POLICY_VERSION = "assessment-cell-4-response-mechanism-sop-2026-09-09"
+CELL_POLICY_VERSION = "assessment-cell-5-lane-mechanics-2026-09-13"
 
 CELL_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author. For ONE source-owned question "
@@ -47,7 +47,7 @@ CELL_SYSTEM = (
     "profile.allowed_sheet_kinds. question_category must be one exact key "
     "supplied for that sheet under "
     "profile.assessment_format_policy.formats_by_sheet; never abbreviate or "
-    "paraphrase it. Apply that category's marks contract. A fixed contract "
+    "paraphrase it. " + "LANE MECHANICS (Master Contract §21/§23): Subjective is the placeholder-bound lane. A Subjective verdict makes the materializer project the expected answer into $$a$$ blank(s) that an evaluator matches against a bounded accepted set. Choose Subjective only when the complete full-credit response IS such a slot value — a word, term, name, number, date, symbol, True/False, or a fill-in the question already frames as a blank or a one-term entry. A question whose expected answer is a sentence of explanation, reason, description, inference or comparison is Descriptive even when that sentence is short and its content is bounded; boundedness is recorded later as answer_restriction = Specific, never by choosing the Subjective lane. A category's presence under formats_by_sheet.subjective (for example Very Short Answer Questions or Short Answer Type (2 Marks)) is catalogue availability, not evidence for that lane; choose the lane first, then a compatible category. " + "Apply that category's marks contract. A fixed contract "
     "permits only its listed value; a per-subpoint contract sets total marks "
     "from the number of represented subpoints and its marks-per-subpoint. "
     "Respect max_subpoints. This response owns ONE cell and cannot split "
@@ -66,7 +66,7 @@ CELL_SYSTEM = (
 )
 
 GENERATED_CELL_POLICY_VERSION = (
-    "assessment-generated-cell-4-response-mechanism-sop-2026-09-09"
+    "assessment-generated-cell-5-lane-mechanics-2026-09-13"
 )
 
 _GENERATED_FOUNDATION_GUIDANCE = """
@@ -137,7 +137,7 @@ GENERATED_CELL_SYSTEM = (
     "profile.allowed_sheet_kinds. question_category must be one exact key "
     "supplied for that sheet under "
     "profile.assessment_format_policy.formats_by_sheet; never abbreviate or "
-    "paraphrase it. Apply that category's marks contract. A fixed contract "
+    "paraphrase it. " + "LANE MECHANICS (Master Contract §21/§23): Subjective is the placeholder-bound lane. A Subjective verdict makes the materializer project the expected answer into $$a$$ blank(s) that an evaluator matches against a bounded accepted set. Choose Subjective only when the complete full-credit response IS such a slot value — a word, term, name, number, date, symbol, True/False, or a fill-in the question already frames as a blank or a one-term entry. A question whose expected answer is a sentence of explanation, reason, description, inference or comparison is Descriptive even when that sentence is short and its content is bounded; boundedness is recorded later as answer_restriction = Specific, never by choosing the Subjective lane. A category's presence under formats_by_sheet.subjective (for example Very Short Answer Questions or Short Answer Type (2 Marks)) is catalogue availability, not evidence for that lane; choose the lane first, then a compatible category. " + "Apply that category's marks contract. A fixed contract "
     "permits only its listed value; a per-subpoint contract sets total marks "
     "from the number of represented subpoints and its marks-per-subpoint. "
     "When that rule supplies max_subpoints, author only a cell within that "
@@ -161,7 +161,10 @@ GENERATED_CELL_CRITIC_SYSTEM = (
     "concept it checks, the metadata, and the active profile.\n"
     + response_policy.CRITIC_RULES
     + "Never infer "
-    "meaning from length or question volume. There is no quota. Do not "
+    "meaning from length or question volume. Flag a Subjective verdict whose "
+    "expected answer is a constructed sentence rather than a slot value, and "
+    "a rationale that rests on a category's availability under a sheet. "
+    "There is no quota. Do not "
     "revise, gate, retry, or replace the verdict; dissent ships as review "
     "evidence while the recorded verdict stands. State your honest "
     "confidence.\n"
@@ -177,7 +180,10 @@ CELL_CRITIC_SYSTEM = (
     "and active profile.\n"
     + response_policy.CRITIC_RULES
     + "Never infer meaning from length, print position, "
-    "neighbours, or question volume. There is no quota. Do not revise, gate, "
+    "neighbours, or question volume. Flag a Subjective verdict whose expected "
+    "answer is a constructed sentence rather than a slot value, and a "
+    "rationale that rests on a category's availability under a sheet. There "
+    "is no quota. Do not revise, gate, "
     "retry, or replace the verdict; dissent ships as review evidence while the "
     "recorded verdict stands. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"

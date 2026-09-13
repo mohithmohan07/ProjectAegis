@@ -67,7 +67,7 @@ def display_view_extraction(document):
         "concepts": [{
             "topic": "Lenses", "concept_title": "Refraction through a lens",
             "parent_concept": "", "concept_details": view(PAIRED_CELL),
-            "keywords": "lens", "source_refs": [block["ref"]],
+            "keywords": "lens", "topic_description": "", "source_refs": [block["ref"]],
         }],
         "questions": [{
             "concept_index": 0, "source_refs": [block["ref"]],
@@ -83,6 +83,7 @@ def display_view_extraction(document):
             {"source_ref": b["ref"], "disposition": "concept", "rationale": "Reviewed."}
             for b in document["blocks"]],
         "empty_reason": "",
+        "chapter_description": "",
     }
 
 

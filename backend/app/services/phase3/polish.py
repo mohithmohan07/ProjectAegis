@@ -126,7 +126,9 @@ def _failures(
                     entry["repair_guidance"] = (
                         "End the Description with one line-broken "
                         "'Achieving Mastery: <ONE substantive sentence naming "
-                        "what a learner can do with this concept>'. Ground "
+                        "what a learner can do with this concept, in the "
+                        "imperative register, verb first — never 'A learner "
+                        "can…'>'. Ground "
                         "the capability in the supplied teaching evidence."
                     )
                 elif entry["code"] in (

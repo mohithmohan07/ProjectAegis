@@ -722,7 +722,10 @@ def test_sync_chapter_topic_summary_authors_nothing_without_meta(db):
     build_concepts._sync_chapter_topic_summary(chapter)
     assert not (chapter.chapter_description or "")
     assert not (chapter.chapter_duration or "")
-    assert topic.topic_description == "Covers A."
+    # Q67: the "Covers A." name list is gone too — contract §9.1 declares a
+    # name list invalid, so an unauthored topic ships blank and release QC
+    # names it (``topic_description_unauthored``).
+    assert topic.topic_description == ""
 
 
 def test_mastery_line_pass_normalizes_format_and_never_backfills(monkeypatch):

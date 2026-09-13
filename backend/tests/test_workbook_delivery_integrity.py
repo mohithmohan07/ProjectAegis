@@ -90,8 +90,9 @@ def test_scoped_export_excludes_stale_labels_and_uses_source_topic_order(db):
         labels = str(row[labels_index])
         assert f"Current Concept {number}" in labels
         assert "Stale Concept" not in labels
-        assert str(row[description_index]).startswith(
-            f"Covers Current Concept {number}")
+        # Q67: nothing authored a description here, so the cell is blank —
+        # never the "Covers Current Concept N" name list, and never stale.
+        assert str(row[description_index] or "") == ""
 
 
 def test_multi_chapter_type_numbers_restart_without_false_split_failure(db):

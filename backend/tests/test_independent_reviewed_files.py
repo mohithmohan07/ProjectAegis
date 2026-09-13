@@ -33,14 +33,15 @@ def document(tmp_path, text="Definition and uses\nWhat is DNA, and what are its 
 def result(question=True):
     return {"pre_scope_verdict": "retained", "concepts": [{"topic": "Reorganized", "concept_title": "New reviewed concept", "parent_concept": "",
              "concept_details": "Description: Definition and uses.<br>Achieving Mastery: Explain definition and uses.",
-             "keywords": "definition", "source_refs": ["B1"]}],
+             "keywords": "definition", "topic_description": "", "source_refs": ["B1"]}],
         "questions": [{"concept_index": 0, "source_refs": ["B1"],
             "question_spans": ["What is DNA, and what are its uses?"], "context_spans": [],
             "answer_spans": [], "pre_answer": "A molecule carrying genetic information.", "options": [], "tables": [], "image_refs": [],
             "type_title": "Definition and uses", "type_definition": "Define and explain uses.",
             "case_title": "", "case_definition": "", "placement_section": "types"}] if question else [],
         "dispositions": [{"source_ref": "B1", "disposition": "concept", "rationale": "Reviewed concept and complete dependent question."}],
-        "empty_reason": "No questions were supplied." if not question else ""}
+        "empty_reason": "No questions were supplied." if not question else "",
+        "chapter_description": ""}
 
 
 def critic(_):

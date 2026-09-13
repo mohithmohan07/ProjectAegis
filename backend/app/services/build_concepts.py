@@ -1273,8 +1273,9 @@ def _sync_chapter_topic_summary(
     ``meta_summary`` (the API-written chapter/topic metadata) is available it
     OVERWRITES the chapter description, chapter duration, and per-topic
     descriptions — these fields were previously synthesized and read weak.
-    Deterministic summaries remain the fallback for anything missing, so the
-    output never ships "NA" in a required column.
+    Nothing is composed for a missing value: an unauthored description ships
+    BLANK and is named by release QC, never filled with a name list or an
+    estimate (Rule 1; contract §9.1 and §32.1).
     """
     meta_summary = meta_summary or {}
     active_concept_ids = set(active_concept_ids or ())
@@ -1332,10 +1333,17 @@ def _sync_chapter_topic_summary(
                 )
             ]
             if names:
-                # Always replace the fallback for the accepted topology. A
-                # non-blank old description can be semantically stale after
-                # concepts are moved between topics.
-                t.topic_description = "Covers " + ", ".join(names) + "."
+                # PURGED with the two fallbacks below: this used to write
+                # "Covers <concept names>." — a code-composed name list the
+                # contract declares invalid (§9.1: "A name list is invalid")
+                # and the reviewer had to rewrite on every topic of every
+                # Master (Bholi, 13 September 2026). A topic nothing authored
+                # ships BLANK and is named by release QC
+                # (``topic_description_unauthored``); the reviewed file's own
+                # cell or the metadata pass is the only author. The old value
+                # is still cleared: a non-blank description can be
+                # semantically stale after concepts move between topics.
+                t.topic_description = ""
 
     # PURGED (Rule 1, CLAUDE.md:17-18), atomically with spec-step8 S8's
     # ``forced_blank_fields`` lever. Two code-composed fallbacks used to

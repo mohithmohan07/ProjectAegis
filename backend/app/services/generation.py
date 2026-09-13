@@ -1059,11 +1059,14 @@ CONCEPT GRANULARITY (fine-grained, discrete, non-redundant):
 CONCEPT NAMING (no repetition, no section numbers):
 {{name_templates}}
 - NEVER prefix or embed decimal section numbers (1., 1.1, 1.2, 2.3, Exercise 1.1,
-  Ex 2.1, etc.) in topic or concept names — use descriptive words only.
+  Ex 2.1, etc.) or lettered/roman sub-section enumerators ((a), (b), (i)) in
+  topic or concept names — use descriptive words only.
 - Sibling concepts under the same topic must use DISTINCT stems; never repeat the
   same opening phrase on multiple rows.
 - NEVER chain names with '&'. Culmination rows are named
-  "Culmination - <A>, <B> and <C>" (comma list with a final 'and').
+  "Culmination - <what the topic's concepts achieve together>": a short
+  synthesis name with the exact prefix "Culmination - ", never the member
+  concept names joined into a list.
 
 OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - ALWAYS start with: Description: <{{detail_line}}>
@@ -1128,6 +1131,12 @@ chapter-specific exceptions):
 - Cover the section exhaustively at concept level, but stay within syllabus scope
   (max ~90 words per section of the description).
 - keywords: 3-6 lowercase terms separated by " | " (space, pipe, space).
+- Topic names and concept names are in Title Case (principal words
+  capitalised, connector words such as of/and/the/to lowercase, acronyms,
+  symbols and units exactly as the source spells them — DNA, pH, NaCl);
+  never reproduce a source heading's ALL-CAPS or sentence case. A name an
+  accepted source-topic roster or sealed topology plan supplies is kept as
+  given.
 - Infer structure from THIS upload's headings, reading order, and task blocks.
   Review feedback (Activity/Info Hub, omit Overview/Summary, Cases are
   conceptual, Culmination is synthesis-only) is structural and chapter-agnostic.
@@ -1171,7 +1180,8 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    leading phrase or formulaic opener. Names must be specific, not templated.
 
 3. **Strip section numbers.** Remove decimal/section prefixes (1., 1.1, 1.2,
-   2.3, Exercise 1.1, Ex 2.1, etc.) from topic and concept names — words only.
+   2.3, Exercise 1.1, Ex 2.1, etc.) and lettered/roman sub-section enumerators
+   ((a), (b), (i), (ii)) from topic and concept names — words only.
 
 4. **Types (critical — preserve and enrich, never strip).** Types are how
    teachers segregate question varieties under each concept — generate them
@@ -1759,6 +1769,9 @@ Rules:
   application, project or activity prompts if assessable.
 - raw_task must carry the COMPLETE question wording verbatim — never truncate,
   paraphrase, or drop givens, data, sub-parts, quotations, or conditions.
+- The source's own question ordinal or list letter ("5.", "(b)", "Q3") is
+  provenance, not wording: record it in source_label/subpart_label and do not
+  begin raw_task with it.
 - For MCQ/objective items, raw_task MUST include the stem and every option in
   the original order. Never borrow options from an adjacent question. Also
   return options as an ordered list when the source exposes discrete choices;
@@ -1810,7 +1823,9 @@ Rules:
 - Each concept_description starts with "Description:" and explains the actual
   source-grounded idea in 2-4 compact sentences. Do not cite section/figure/page
   numbers or mention the upload format.
-- State keywords as 3-6 concise terms. Never create a Culmination row.
+- State keywords as 3-6 concise terms, as ONE string separated by exactly
+  " | " (space, pipe, space) — never a comma list or an array. Never create a
+  Culmination row.
 """)
 
 prompts.register(
@@ -1902,6 +1917,9 @@ CASE WORDING (each Case must be properly defined):
 - Create a separate Case only when a given/asked/constraint combination is a
   genuinely different variety of the pattern; near-identical variations of
   the same variety share one Case (a Case can hold several Examples).
+- Two Cases in one chapter never share a case_title. Two Examples that share
+  a description share ONE Case; two Examples that genuinely differ get
+  case_titles that name what differs (the given, the ask or the constraint).
 - A multi-part question (sub-parts a), b), c) …) is ONE question and ONE
   Example — never spread its parts across Cases or Types. Classify it by
   everything it asks together; parts spanning several concepts make it a
@@ -1952,6 +1970,8 @@ EXAMPLES CARRY THE FULL SOURCE QUESTION (mandatory):
   type_title, type_description, or task_pattern — always substitute the real
   content those labels point to. Figure references WITH their image URL are
   allowed and encouraged.
+- example_prompt never begins with the source's question number or list
+  letter ("5.", "(b)"); that ordinal is provenance the inventory keeps.
 
 TYPE WORDING (each Type must be properly defined):
 - type_title must be a precise, self-explanatory pattern name that states the
@@ -2304,9 +2324,16 @@ Rules:
   decision D8, 2026-08-29).
   The normal concept rows are merged back programmatically; NEVER restate,
   rewrite, drop, or return them.
-- Name: "Culmination - <A>, <B> and <C>".
-  - Use ONLY normal concept names from that exact topic; never leak a concept
-    from an earlier/later topic into the title or metadata.
+- Name: "Culmination - <what this topic's concepts achieve together>" — a
+  short learner-facing synthesis name (for example "Culmination - Modes of
+  Asexual Reproduction and Body Organisation"), never the member concept
+  names joined into a list (an eight-concept topic made a 368-character
+  title that way), and never a name that mentions a concept outside this
+  topic or one that does not exist in it. Keep the exact prefix
+  "Culmination - ".
+  - Draw the name only from what that exact topic's normal concepts teach;
+    never leak a concept from an earlier/later topic into the title or
+    metadata.
 - Description must be exactly: "Description: Recap" (the final output expands
   it automatically to "Recap of <every merged concept in the topic>").
 - Do not invent starter Types. A later inventory-backed assignment pass adds
@@ -4294,6 +4321,12 @@ def _activity_hub_marker(item: dict) -> str:
     ).strip()
     if label:
         label = label[:100].strip(" .:-")
+        if re.fullmatch(r"\d+(?:\.\d+)*", label):
+            # A label captured as the bare printed number ("7.1") rendered
+            # "Activity — 7.1:"; the reviewer relabelled every one to
+            # "Activity — Activity 7.1:" (13 September 2026). The kind word
+            # is the item's own recorded kind, not a judgment.
+            label = f"Activity {label}"
         if _source_label_is_generic(label):
             plain = bi.to_plain_text(_inventory_task_text(item))
             words = re.findall(r"\S+", _strip_public_source_heading(plain))
@@ -4356,9 +4389,26 @@ def _compact_activity_hub_note(item: dict, suggested: str = "") -> str:
     if not gist:
         note = f"{prefix}: Complete the source-grounded classroom task."
     note = note.rstrip()
-    if not note.endswith((".", "!", "?")):
-        note += "."
+    # Punctuate the TEXT only. A note ending in an ``[img …]`` tag used to
+    # get its "." after the tag, which the live display wrapper then
+    # orphaned before the re-appended tag — the reviewer's stray " . "
+    # before a trailing figure (13 September 2026).
+    body, tags = _split_trailing_image_tags(note)
+    if body and not body.endswith((".", "!", "?")):
+        body += "."
+    note = f"{body} {tags}".strip() if tags else body
     return kr.canonicalize_rich_text(note)
+
+
+_TRAILING_IMAGE_TAGS_RE = re.compile(r"(?:\s*\[img\b[^\]]*\]\s*)+$", re.IGNORECASE)
+
+
+def _split_trailing_image_tags(text: str) -> tuple[str, str]:
+    """``(body, tags)`` — the trailing canonical image tags split off the prose."""
+    match = _TRAILING_IMAGE_TAGS_RE.search(text)
+    if not match:
+        return text.rstrip(), ""
+    return text[: match.start()].rstrip(), match.group(0).strip()
 
 
 def _activity_hub_locations(records: list[dict], item: dict) -> list[int]:
@@ -4491,6 +4541,14 @@ def _activity_record_matches_owner(record: dict, item: dict) -> bool:
     )
 
 
+# The literal defaults the converters mint for a figure with no caption of its
+# own ("Source visual", "Source visual 3", "Source figure"); never a judgment
+# about a real caption.
+_PLACEHOLDER_FIGURE_CAPTION_RE = re.compile(
+    r"source (?:visual|figure)(?: \d+)?\.?", re.IGNORECASE,
+)
+
+
 def _figure_hub_note(figure: dict) -> str:
     """Render one placed source figure for the Activity/Info Hub.
 
@@ -4501,17 +4559,26 @@ def _figure_hub_note(figure: dict) -> str:
     """
     caption = re.sub(r"\s+", " ", str(figure.get("caption") or "")).strip()
     url = str(figure.get("url") or "").strip()
-    marker = caption[:100].strip(" .:-") or str(
-        figure.get("block_id") or ""
-    ).strip()
-    note = f"Figure — {marker}: {caption}".rstrip() if caption else (
-        f"Figure — {marker}: Source figure."
-    )
+    block_id = str(figure.get("block_id") or "").strip()
+    # The caption used to be rendered TWICE ("Figure — {caption[:100]}:
+    # {caption}."), and a figure whose recorded caption is one of this
+    # codebase's own placeholder defaults shipped as "Figure — Source
+    # visual: Source visual." with alt "Source visual" — verbatim in the
+    # audited English Concept file and struck by the reviewers on two
+    # chapters (13 September 2026). Recognising the code's own placeholder
+    # strings is mechanics; what the figure shows stays the placement
+    # pass's recorded verdict.
+    if caption and not _PLACEHOLDER_FIGURE_CAPTION_RE.fullmatch(caption):
+        note = f"Figure — {caption.rstrip(' .:-')}"
+        alt = caption
+    else:
+        marker = block_id or "source figure"
+        note = f"Figure — {marker}"
+        alt = f"Figure {block_id}".strip() if block_id else "Figure"
     if not note.endswith((".", "!", "?")):
         note += "."
     if url:
         try:
-            alt = caption or "Source figure"
             note = f"{note} {kr.image(url, alt)}"
         except ValueError:
             # A non-https/malformed URL cannot ship as an embed; the
@@ -4977,9 +5044,31 @@ def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> 
     return re.sub(r"\s+", " ", text).strip(" \n\t")
 
 
-def _strip_leading_source_task_label(text: str) -> str:
-    """Remove a textbook source label while preserving the actual task."""
-    return _LEADING_SOURCE_TASK_LABEL_RE.sub("", str(text or ""), count=1).strip()
+_LEADING_BARE_ORDINAL_RE = re.compile(
+    r"^\s*\(?(?P<token>\d{1,3}|[a-z]|[ivx]{1,4})[.)]\s+", re.IGNORECASE,
+)
+
+
+def _strip_leading_source_task_label(text: str, *, source_label: str = "") -> str:
+    """Remove a textbook source label while preserving the actual task.
+
+    A bare ordinal or list letter ("5.", "(b)") is removed ONLY when the
+    inventory's own provenance field records that same number or letter:
+    the label is then provenance the row already keeps, not wording. Without
+    that match nothing is touched, so a number that is part of the question
+    ("2. is the smallest prime" would never carry label Q2) survives. The
+    reviewer struck exactly these leftovers from four Bholi concepts, where
+    the exact-source override had put them back (13 September 2026).
+    """
+    cleaned = _LEADING_SOURCE_TASK_LABEL_RE.sub("", str(text or ""), count=1).strip()
+    match = _LEADING_BARE_ORDINAL_RE.match(cleaned)
+    if not match:
+        return cleaned
+    token = match.group("token").lower()
+    recorded = re.search(r"([0-9]+|[a-z]|[ivx]{1,4})[.)\]:]*\s*$", str(source_label or "").strip().lower())
+    if recorded and recorded.group(1) == token:
+        return cleaned[match.end():].strip()
+    return cleaned
 
 
 def _mask_non_task_numbered_blocks(text: str) -> str:
@@ -8982,8 +9071,15 @@ def _inventory_task_text(item: dict) -> str:
         str(task),
         aggressive=source_kind in {"worked_example", "solved_example"},
     )
-    task = _strip_leading_source_task_label(task)
+    task = _strip_leading_source_task_label(
+        task,
+        source_label=str(item.get("subpart_label") or item.get("source_label") or ""),
+    )
     task = _strip_source_visual_markup(task)
+    # An inline image replaced by a space leaves the punctuation that
+    # followed it stranded (" ."): let it close the sentence it belongs to.
+    # Idempotent whitespace mechanics; a source-exact spaced ellipsis stays.
+    task = re.sub(r"\s+(\.(?!\.))", r"\1", task)
     task = _public_task_without_latex_layout(task)
     task = kr.legacy_export_rich_text(
         kr.canonicalize_rich_text(str(task))
@@ -11471,9 +11567,15 @@ def _consolidate_semantic_types_via_api(
         for qid in set(original_semantics) | set(candidate_semantics)
         if original_semantics.get(qid) != candidate_semantics.get(qid)
     }
+    # ``len(candidate) > len(original)`` used to sit in this condition: a
+    # count comparison that threw away the model's semantic answer whenever
+    # it returned MORE Types — i.e. whenever it split an over-broad Type —
+    # regardless of meaning. That is a numeric threshold deciding acceptance
+    # (Rule 1), and it was one of the one-way gates that kept the reviewer's
+    # chapters at a handful of form-buckets (13 September 2026). The gates
+    # that remain are exact-once accounting and immutable-semantics drift.
     if (
         not candidate
-        or len(candidate) > len(original)
         or missed
         or duplicates
         or contract_drift
@@ -11492,7 +11594,11 @@ def _consolidate_semantic_types_via_api(
     merged = len(original) - len(candidate)
     progress.log(
         f"Semantic Type consolidation accepted: {len(candidate)} Type(s)"
-        + (f" ({merged} paraphrased duplicate(s) merged)." if merged else "."),
+        + (
+            f" ({merged} paraphrased duplicate(s) merged)." if merged > 0
+            else f" ({-merged} over-broad Type(s) split)." if merged < 0
+            else "."
+        ),
         level="success",
     )
     return {"types": candidate}

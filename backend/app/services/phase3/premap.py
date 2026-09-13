@@ -1128,7 +1128,8 @@ def _map_rules(rules_suffix: str, *, atomic: bool = False) -> str:
         "knowledge and belongs here); achieving_mastery is one sentence "
         "naming what a learner "
         "can do once that fundamental is held, distinct for every "
-        "concept. Carry no 'Description:' or 'Achieving Mastery:' label "
+        "concept. " + "Write it in the imperative register — the capability itself, verb first, addressed to the learner (e.g. 'Identify the parts of a flower and state the role of each'); never open with 'A learner can', 'The learner can', 'The student…' or 'Students will', and never restate the Description. " + "Write every learner-facing sentence in the voice of a teacher speaking to the learner and state facts directly: never refer to 'the source', 'the text', 'the chapter states', the evidence packet or these instructions, and never include a note meant for the author, reviewer or evaluator (for example 'observations should be recorded rather than assumed in advance'); an activity is taught by saying what the learner does and what is observed. Do not transcribe a figure's caption, its alt text or a 'Source visual'/'Fig. N –' label into the Description; figures are attached by the placement pass with their own captions — teach what the figure shows in your own words, in a complete sentence. " + "Write every topic title and concept_title in Title Case — capitalise each principal word, keep connector words (of, and, the, to) lowercase, and keep acronyms, symbols and units exactly as the source spells them (DNA, pH, NaCl); keep connector words lowercase except as the first word. " +
+        "Carry no 'Description:' or 'Achieving Mastery:' label "
         "inside either field, and no other section: this map has no "
         "Types, no Cases and no Examples, and no question from this "
         "chapter may appear anywhere in it. Wrap every mathematical "

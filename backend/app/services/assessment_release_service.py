@@ -216,7 +216,9 @@ def snapshot_from_chapter(
     snapshot = {
         "chapter": {
             "chapter_title": chapter.chapter_title,
-            "chapter_display_name": chapter.chapter_display_name,
+            "chapter_display_name": bi.chapter_display_cell(
+                chapter.chapter_title, chapter.chapter_display_name
+            ),
             # Carried, not omitted (spec-step8 T12/M4): the profile's
             # ``forced_blank_fields`` is what decides whether it ships, and
             # a key the snapshot never carries leaves that lever with

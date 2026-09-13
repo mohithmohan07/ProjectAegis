@@ -19,6 +19,7 @@ from zipfile import ZipFile
 import openpyxl
 from pydantic import BaseModel, ConfigDict
 
+from .. import bulk_import as bi
 from .. import models
 from . import build_concepts_release as release
 from . import generation, generation_quality_policy as quality
@@ -273,6 +274,10 @@ class Concept(Strict):
     parent_concept: str
     concept_details: str
     keywords: str
+    # The reviewed row's own topic-band cell, quoted, when the file carries
+    # one (an Aegis export does). It feeds the Master's topic band; the
+    # reviewed file is the only Step 02 evidence for it (Q49/Q51).
+    topic_description: str
     source_refs: list[str]
 
 
@@ -310,6 +315,8 @@ class Extracted(Strict):
     questions: list[Question]
     dispositions: list[Disposition]
     empty_reason: str
+    # The file's chapter-band description cell, quoted, or empty.
+    chapter_description: str
 
 
 RULES = """Read the REVIEWED FILE as the complete authority for this Master step.
@@ -341,8 +348,11 @@ images. Table headers/rows describe the actual grid. image_refs identify supplie
 images, never guessed URLs. Do not copy broad chapter excerpts into descriptions.
 Normalize Concept prose into Description, Achieving Mastery, Misconception/Error
 Analysis, Types/Cases sections only where supported by the reviewed file; preserve
-the author's meaning and text. Existing display IDs are optional and need not be
-retained. Do not infer equivalence to any prior generated concepts. Concept source
+the author's meaning and text. Return the file's chapter_description and each
+concept row's topic_description exactly as their cells read when the file carries
+them (an Aegis export's chapter and topic bands); leave them empty when it does
+not — never compose one. Write keywords as ONE string separated by exactly " | "
+(space, pipe, space). Existing display IDs are optional and need not be retained. Do not infer equivalence to any prior generated concepts. Concept source
 refs and the disposition of EVERY supplied block make complete coverage reviewable.
 Blank concepts/questions are valid only with an explicit source-grounded empty_reason.
 pre_scope_verdict is retained for nonempty concepts and Post files. For an empty
@@ -430,11 +440,21 @@ def _checker(document, lane="post"):
             defects.append("An empty Pre scope needs its explicit semantic verdict.")
         if (not parsed.concepts or not parsed.questions) and not parsed.empty_reason.strip():
             defects.append("An empty concept or question set needs an explicit empty_reason.")
+        # The chapter and topic band cells are quoted from the file like every
+        # other quote: anywhere in it (a band cell sits on rows a concept need
+        # not cite), through the same paired-break transport, never composed.
+        whole = "\n".join(str(b.get("text") or "") for b in document["blocks"])
+        band = parsed.chapter_description.strip()
+        if band and band not in whole and not _locatable(whole, band):
+            defects.append("chapter_description must be quoted from the reviewed file or left empty.")
         for concept in parsed.concepts:
             if not concept.topic.strip() or not concept.concept_title.strip() or not concept.source_refs:
                 defects.append("Each concept needs a topic, title and reviewed-file source refs.")
             if set(concept.source_refs) - set(blocks):
                 defects.append("Concept source refs must belong to the reviewed file.")
+            band = concept.topic_description.strip()
+            if band and band not in whole and not _locatable(whole, band):
+                defects.append("topic_description must be quoted from the reviewed file or left empty.")
         for q in parsed.questions:
             if lane == "pre" and not any(s.strip() for s in [*q.answer_spans, q.pre_answer]):
                 defects.append("Each supplied Pre question needs an explicit or independently verified answer.")
@@ -505,6 +525,57 @@ def metadata(db, payload):
             ("subject", "board", "grade", "unit", "chapter_title", "chapter_code")}
 
 
+def _chapter_meta_from_reviewed(db, job, previous, result) -> dict:
+    """The Master's chapter band: the run's frozen duration and the file's own cells.
+
+    The reviewed candidate copies none of Step 01's ``chapter_meta`` — right for
+    the API-authored prose, which the reviewer may have rewritten, but the
+    chapter duration is a run VARIABLE (contract §32.1: the registry row, else
+    the explicit upload value, never an estimate), and dropping it left the
+    Master's chapter_duration blank and earned a BLOCKING
+    ``chapter_duration_unregistered`` finding for a chapter the registry does
+    list (the reviewer's Bholi run: 126 minutes, hand-filled). The chapter
+    description and the per-topic descriptions come from the reviewed file's
+    own band cells, quoted by the extraction and gated as quotes; without them
+    the transient hierarchy used to fill every topic with the code-composed
+    "Covers X, Y, Z." name list that contract §9.1 declares invalid. The file is
+    the only Step 02 evidence (Q49/Q51); nothing here composes prose.
+    """
+    from . import build_concepts, chapter_durations
+
+    meta = metadata(db, previous)
+    # Frozen once per chapter and repeated identically across all four
+    # outputs (§32.1): the value Step 01 already froze comes first, then the
+    # registry, then the explicit upload variable — never an estimate.
+    try:
+        expected = int(((previous or {}).get("chapter_meta") or {}).get("chapter_duration_minutes") or 0)
+    except (TypeError, ValueError):
+        expected = 0
+    if not expected:
+        expected = chapter_durations.lookup_duration_minutes(
+            board=meta["board"], grade=meta["grade"], subject=meta["subject"],
+            chapter_title=meta["chapter_title"])
+    if not expected:
+        try:
+            explicit = int(getattr(job, "chapter_duration_minutes", 0) or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        expected = explicit if explicit > 0 else None
+    authored: dict = {}
+    description = str(result.get("chapter_description") or "").strip()
+    if description:
+        authored["chapter_description"] = description
+    topics: dict[str, str] = {}
+    for concept in result.get("concepts") or []:
+        text = str(concept.get("topic_description") or "").strip()
+        key = bi.normalize_question_text(str(concept.get("topic") or ""))
+        if text and key and key not in topics:
+            topics[key] = text
+    if topics:
+        authored["topic_descriptions"] = topics
+    return build_concepts._with_frozen_duration(authored, expected)
+
+
 def _policies():
     return {repair.KEY: repair.VERSION, quality.KEY: quality.VERSION,
             foundation.KEY: foundation.VERSION, model_provider.PROFILE_KEY: model_provider.new_profile(),
@@ -559,6 +630,7 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
     # The reviewed payload records exactly the workflow version its Step 1
     # payload recorded (V1 or V2); it never mints the current version, so a
     # historical run's Step 2 keeps that run's polishing placement.
+    candidate["chapter_meta"] = _chapter_meta_from_reviewed(db, job, previous, result)
     candidate.update({**_policies(), **workflow.fields(previous), "learning_kind": lane, "filename": document["filename"],
         "terminal_generation_complete": True, release.RELEASE_LANE_FIELD: lane,
         "source_document_hash": "sha256:" + document["sha256"],
@@ -611,7 +683,9 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
                 if ref in manifest]
 
     for index, concept in enumerate(result["concepts"]):
-        row = {k: copy.deepcopy(v) for k, v in concept.items() if k != "source_refs"}
+        # ``topic_description`` is a topic-band cell, projected through
+        # ``chapter_meta`` above; it is not a field of the concept row.
+        row = {k: copy.deepcopy(v) for k, v in concept.items() if k not in ("source_refs", "topic_description")}
         row.update({release.RELEASE_ROW_LANE_FIELD: lane, release.RELEASE_ROW_STATUS_FIELD: "ready",
                     release.RELEASE_ROW_ERRORS_FIELD: [], "review_flags": list(decision["review_flags"]),
                     "_aegis_source_evidence": {"reviewed_file_blocks": [blocks[r] for r in concept["source_refs"]],

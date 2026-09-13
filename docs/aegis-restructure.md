@@ -4097,3 +4097,240 @@ routes with `curl` examples; what the console guarantees and what it does not.
 
 Tests: `tests/test_chapter_batch_unattended.py`;
 `frontend/src/pages/ChapterBatch.rows.test.tsx` (the two cross-page cases).
+
+## Q67 — decided — the reviewers' corrections catalogue: the mechanical half fixed, the rules improved, the contract questions named
+
+The owner: *"I can share some errors which I have found in the previous runs
+which needs to be fixed. So go through all of these properly … Make sure you
+dont lose the technical details of writing the columns/rows, the rules that are
+to be followed/ the prompting (you can make it better; but dont lose the
+existing ones)."* The attached `Corrections.docx` is the reviewers' log of
+every hand correction on four chapters — Bholi (10 CBSE English), Print Culture
+and the Modern World (10 CBSE Social Science), How Do Organisms Reproduce (10
+CBSE Science) and Triangles (10 CBSE Maths).
+
+Every correction was traced to its origin on the current tree by six
+independent readers (concept prose, format fields, topology, Types/Cases,
+Examples/activities, Master fields), each origin reproduced offline where it is
+mechanical, and every claim then adversarially verified by a second reader
+(workflow `wf_d6ae7915-77a`). This entry records what was done with each
+class. No existing rule was removed; every prompt change is additive, and each
+place where a rule's FORM changed is named below.
+
+### Fixed — code (mechanics, each reproduced first)
+
+1. **Step 02 dropped the chapter band.** The reviewed candidate copied none of
+   Step 01's `chapter_meta`, so the Master's `chapter_duration` shipped blank
+   (Bholi is registered at 126 minutes), release QC raised a BLOCKING
+   `chapter_duration_unregistered` that falsely named the registry as empty
+   (Step 03's write would have been refused), `chapter_description` shipped
+   blank, and every `topic_description` fell to the code-composed "Covers X,
+   Y, Z." list contract §9.1 declares invalid. Now: the duration is a run
+   variable (§32.1 — registry, else the explicit upload value, never an
+   estimate) and rides the reviewed candidate exactly as it rides Step 01;
+   the chapter and topic descriptions are read from the **reviewed file's own
+   band cells** — the extraction schema carries `chapter_description` and
+   per-concept `topic_description`, both gated as quotes from the file
+   (`reviewed_file_input._chapter_meta_from_reviewed`). The file is the only
+   Step 02 evidence (Q49/Q51); nothing composes prose.
+2. **The "Covers X, Y, Z." fallback is purged** (`build_concepts.
+   _sync_chapter_topic_summary`), alongside the two fallbacks purged before it.
+   An unauthored topic ships BLANK and release QC names it
+   (`topic_description_unauthored`, and `chapter_description_unauthored`) —
+   visibly, **not blocking**, so a reviewed Master whose file carries no band
+   cell still publishes with an honest cell instead of stranding the team
+   behind a Concept re-upload the route refuses (Q66). §9.1 would support
+   making the topic finding blocking; that is the owner's call.
+3. **`chapter_duration_unregistered` says what it measured**: that no
+   registry value or explicit upload variable was frozen onto the payload —
+   it no longer asserts that the registry has no row (Bholi is registered
+   and still fired it). The audit stays a pure function of the payload; it
+   does not consult the registry (verified against
+   `build_concepts_release.py`'s recorded-key contract).
+4. **`chapter_display_name` has one composer** (`bulk_import.
+   chapter_display_cell`): the human title, tag-stripped, in both the Concept
+   writer and the Master snapshot (contract §15). The Master used the stored
+   display name, which pre-fix imports still carry as "Bholi (10_English_CBSE)".
+5. **Keyword cells never mix delimiters in one file.** `column_spec.
+   keyword_cell` re-tokenises a declared pipe list of ANY spacing
+   (`"a |b| c"`, `"a|b|c"`) before projecting; before, only the exact `" | "`
+   spelling was re-delimited and every other spelling shipped verbatim with
+   pipes beside comma-space rows. The delimiter the cell should carry is a
+   three-way conflict recorded below.
+6. **Activity/Info Hub figure notes** carry their caption once
+   (`_figure_hub_note` rendered `Figure — {caption}: {caption}.`), and a
+   figure whose recorded caption is one of the code's own placeholder
+   defaults ("Source visual", "Source visual 3", "Source figure") renders
+   `Figure — {block id}.` with a neutral alt — never "Source visual: Source
+   visual." in prose or alt.
+7. **A bare number label renders as an Activity label** (`Activity — 7.1:` →
+   `Activity — Activity 7.1:`), and a hub note is punctuated on its text,
+   never after a trailing `[img]` tag (the stray " . " before a trailing
+   figure); the public task text closes the sentence an inline image
+   interrupted.
+8. **Leading source ordinals** ("5.", "(b)") are removed from the public
+   Example text ONLY when the item's own `source_label`/`subpart_label`
+   records that same number or letter — provenance the row already keeps;
+   without the match nothing is touched. The exact-source override had been
+   putting them back on four Bholi concepts.
+9. **The Detailed Analysis topic stays last.** `_language_plan_topics`
+   re-sorted the sealed language plan by earliest cited block, so a
+   whole-work lens that cites the opening block moved to the front — the
+   Bholi one-position shift the reviewer undid across 27 rows. The plan's own
+   recorded order (author-decided, `plan_defects`-validated) is now the order.
+   Sealed envelopes of already-run English chapters replay their recorded
+   order (identity-bound) and do not self-heal — a data question, same class
+   as Q64's stranded chapters.
+10. **A lettered/roman enumerator printed with a section number** ("7.3.3 (a)
+    Male Reproductive System") is structural apparatus like the number:
+    `_NUMBER_PREFIX_RE` no longer leaves "(a)" at the head of the title.
+11. **Type consolidation no longer rejects a split by count.**
+    `len(candidate) > len(original)` sat in the acceptance condition — a
+    numeric threshold that threw away the model's semantic answer whenever
+    it returned MORE Types, whatever their meaning (Rule 1). The exact-once
+    and immutable-semantics gates remain; a split is logged as accepted.
+12. **Host receives the miner's recorded hints** (`difficulty_hint`,
+    `placement_scope`, `topic_match_hint`, `cognitive_skill_hint`) on every
+    unit; they were dropped on the way, so the printed-position rule pulled
+    advanced in-text tasks onto the early concept they sit beside (Triangles).
+    Transport only; the placement stays the Host model's verdict.
+
+### Improved — prompts (all additive; the sentence each sat beside is kept)
+
+* **Mastery in the imperative register** (Settle, ANALYSIS, PREMAP, premap
+  rules, Polish guidance, Refiner, critics): "Identify …", never "A learner
+  can …" — 30 of 41 Organisms concepts were rewritten by hand.
+* **Teacher's voice, no author notes, no evidence narration** (Settle,
+  ANALYSIS, PREMAP): never "the source states …", never a note to the
+  author ("observations should be recorded rather than assumed"), and never a
+  transcribed figure caption or "Source visual" label in a Description.
+* **Grammar in the Refiner's remit** (Refiner rules and system, critics):
+  pronoun reference, subjectless or dangling sentences, definitions that do
+  not parse, "this change" naming what changes.
+* **Title Case for topic and concept names** (PREMAP, premap rules, the
+  `concepts.system` quality rules, the hierarchy topic instruction) with
+  acronyms and symbols as printed — the model, not a casing heuristic,
+  decides what is an acronym; a name an accepted roster or sealed plan
+  supplies is kept as given. Deliberately NOT in the reviewed-file RULES:
+  the reviewer's own names are the authority there (Q49).
+* **Keywords as ONE `" | "` string** in the two prompts that gave no
+  delimiter (`concepts.opening_recovery.system`, the reviewed-file RULES).
+* **No two Cases share a title; the source ordinal is provenance, not
+  wording; an Example never begins with it** (type mining and inventory
+  prompts).
+* **Host placement**: advanced work and later-taught methods belong with the
+  later concept; prefer the most granular method/application concept; an
+  Activity/experiment unit goes to the related NORMAL concept, never a
+  Culmination; major concepts assessed by exercises get their own Types —
+  the four rules that survived only in two DEAD prompts
+  (`concepts.type_embedding.system`, `concepts.type_host_review.system`, no
+  callers) are carried live again. The dead registrations are left in place.
+* **Culmination names are synthesis names.** The instruction
+  `Name: "Culmination - <A>, <B> and <C>"` (both `concepts.culmination.system`
+  and `concepts.system`) produced a 368-character title on an eight-concept
+  topic by construction; it now asks for a short learner-facing synthesis
+  name with the exact "Culmination - " prefix, never the member list, never
+  a concept outside the topic. **This is the one place a rule's form
+  changed**; the "never leak a concept from another topic" sentence and
+  owner decision D8 (no culmination for a single-concept topic) stand. No
+  length gate was added — "under 80 characters" is the reviewer's norm and a
+  length threshold would be Rule 1's forbidden kind.
+* **Section enumerators** ((a), (b), (i)) named beside the decimal-number
+  rule in the hierarchy instruction, `concepts.consolidate` and
+  `concepts.system`.
+* **What the Subjective lane MEANS** (assessment cells, versioned
+  `assessment-cell-5-lane-mechanics-2026-09-13` /
+  `assessment-generated-cell-5-…`): a Subjective verdict projects the answer
+  into `$$a$$` blanks matched against a bounded set, so a sentence of
+  explanation is Descriptive even when short and bounded (boundedness is
+  `answer_restriction = Specific`, not the Subjective lane), and a category's
+  presence under `formats_by_sheet.subjective` is availability, not evidence.
+  The critics flag the reverse. Ten Bholi Pre questions had been filed
+  Subjective and moved by hand. The Pre author is told to author each
+  question in the response form it intends (a fill-in shows its blank, a
+  selection question lists its options).
+
+### Recorded for the owner — contract questions, with the exact change each would take
+
+* **Keyword delimiter, three ways**: contract §16/Appendix B say `" | "`,
+  register Q33 and `column_spec.keywords_separator` say comma-space, the
+  reviewer re-delimited three chapters to pipe. One line plus a versioned
+  policy bump once decided; the mixing defect is fixed regardless (above).
+* **Pre `concept_source`**: Q42/Q27/§18 make the publication the Concept
+  Source on every lane; the reviewer set Pre to `UpSchool DB` on three
+  chapters by the same logic Q33 applies to generated questions. A
+  lane-keyed policy key in three composers if the owner agrees.
+* **Types scoped to the concept they test** (Types/Cases family, the most
+  consequential): the mining doctrine makes a Type a chapter-wide answering
+  FORM and Q14 then moves every Case and QID of it onto ONE owner — hence 26
+  of 42 Organisms cases on a concept they did not test and 31 of 41 concepts
+  with no question, and all seven Activity blocks on Seed Germination. Both
+  reviewers are satisfied only if a Type is scoped to the one concept it
+  tests at mining time; that inverts the doctrine and Q14's two boundaries,
+  so it is the owner's ruling. The exact sentences to replace are in the
+  workflow record. Related: whether Q14 governs Container-02 hub notes at all
+  (register Phase 2.2 says hub items are placed by what they depict).
+* **Culminations hosting Cases**: Host rules (2)/(4) route multi-concept
+  questions to Culminations; the reviewer emptied every culmination
+  ("culminations are summaries"). Owner's call.
+* **Misconception coverage and form**: the reviewer wants a block on every
+  non-culmination concept and one numbered "(1) … Correction: …" component;
+  contract §10 and Q1 say entries are not mandatory and name two kinds. Two
+  parts: coverage (a prompt target under option B) and a paired `correction`
+  field (schema + render; planned below).
+* **Figure references in prose**: numbered ("Fig. 7.7", Science reviewer)
+  vs "the figure" beside an inline image (Print Culture reviewer); the
+  validator keys on the number. Either way prose must stay complete (below).
+* **Four options per generated MCQ** (§22 fixes no count); **a locator hint
+  printed in the book** (drop as apparatus, or keep per §7.3/§19.3);
+  **Descriptive answer_restriction** (the reviewer set 17 of 19 to Open — a
+  lane default §31/A-034 forbids; the real question is what the CMS
+  evaluator does with Specific on prose); **per-sheet category
+  compatibility** as a declared layer over the Q45 catalogue; **in-text
+  referent resolution** (Q47) vs "Step 02 reads nothing semantic from Step
+  01" (Q51) — the fragment questions ("How does this process work?") cannot
+  be resolved anywhere in the three-step workflow today; **one captioned hub
+  entry per figure** even when a question claims it (Q38 conflict).
+
+### Planned next, not in this change (each medium, each with its mechanism known)
+
+* **Culmination `achieving_mastery`** (§11.1 requires it; culminations ship
+  without one by construction) and **Settle re-authoring the culmination
+  title** from the FINAL member set (the Post title is minted before Settle,
+  Host and coherence change the members — hence phantom and cross-topic
+  members in names); the Pre lane's mechanical member-list join
+  (`prelearning_formation_contract.py`) becomes an authored title.
+* **Paired `correction` on every misconception/error item** with a numbered
+  render (schema, checker, inventory carry, both renders, legacy replay
+  branch).
+* **`strip_dangling_references` deleting "Fig. 7.7" from prose** and leaving
+  "as illustrated in." — reproduced byte for byte; the publication path
+  already removed this cleaner for the same reason, staging still runs it.
+  Needs version gating so a sealed run's deposit fixpoint replays
+  identically.
+* **Host `create_new` across blind parallel batches** (three same-meaning
+  Triangles concepts): a second sequential pass that sees every first-pass
+  creation; provenance sentence for the coherence merger.
+* **Settle and the tier author see the chapter's teaching order** (Topic 05
+  using flowers before Topic 06 introduces them; advanced tiers on opening
+  concepts).
+* **Declared `options` on generated Pre questions** so a dropped option is a
+  materializer defect instead of a silent loss.
+* **Duplicate case titles as a coverage defect** in the mining follow-up
+  (the prompt rule is in).
+* **Placeholder captions minted into source text** (`_markdown_image`,
+  `render_semantic_source`) and a per-row duplicate-image warning.
+* Ten remaining hub/figure/caption items: captions losing their printed
+  "Figure 7.2" (an extraction-prompt clarification), hub labels for bare
+  markers, a captioned entry for a claimed figure (owner).
+
+### Verification
+
+Offline only. Every mechanical origin above was reproduced on the current
+tree before it was changed; the new tests pin the reviewers' exact cases
+(`tests/test_reviewed_chapter_band.py`,
+`tests/test_corrections_catalogue_2026_09_13.py`,
+`tests/test_corrections_catalogue_topology_2026_09_13.py`). Three tests that
+pinned the old behaviour were updated with the reason in place ("Covers A."
+and the delivery-integrity name list; the cell policy version pins). No paid
+generation was run. Nothing here changes what a sealed run replays.

@@ -59,6 +59,7 @@ def _extraction(payload):
                 "Explain definition and uses."
             ),
             "keywords": "definition",
+            "topic_description": "",
             "source_refs": ["B1"],
         }],
         "questions": [
@@ -79,6 +80,7 @@ def _extraction(payload):
             "rationale": "Reviewed concept and both dependent questions.",
         }],
         "empty_reason": "",
+        "chapter_description": "",
     }
 
 

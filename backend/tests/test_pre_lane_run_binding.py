@@ -536,7 +536,8 @@ def test_release_qc_leaves_the_post_lane_and_assessed_pre_rows_alone():
     issues, blocking = release_qc.audit(_qc_payload(
         [_pre_row("PRC-0001", questions=["PRC-0001 PRQ-0001"])],
     ))
-    assert issues == []
+    # The fixture authors no band descriptions (advisory, Q67); nothing else.
+    assert [i for i in issues if i["code"] not in release_qc.BAND_DESCRIPTION_CODES] == []
     assert blocking == []
 
 

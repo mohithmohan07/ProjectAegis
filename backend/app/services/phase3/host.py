@@ -58,6 +58,7 @@ def derive_units(env: Mapping[str, Any]) -> list[dict[str, Any]]:
                     for value in mined.get("source_question_ids") or []
                     if str(value)
                 ],
+                **_mining_hints(mined),
             })
             continue
         for ordinal, case in enumerate(cases, start=1):
@@ -84,8 +85,25 @@ def derive_units(env: Mapping[str, Any]) -> list[dict[str, Any]]:
                     case.get("concept_match_hint")
                 ),
                 "qids": qids,
+                **_mining_hints(case),
             })
     return units
+
+
+#: The miner's per-Case judgments the mining prompt requires it to record.
+#: They were dropped on the way to Host, so its payload carried no difficulty
+#: or "latest topic" evidence and the printed-position rule pulled advanced
+#: in-text tasks onto the early concept they sit beside (the owner's
+#: Triangles report, 13 September 2026). Forwarding them is transport; the
+#: placement stays the Host model's verdict.
+_MINING_HINT_FIELDS = (
+    "difficulty_hint", "placement_scope", "topic_match_hint",
+    "cognitive_skill_hint",
+)
+
+
+def _mining_hints(row: Mapping[str, Any]) -> dict[str, str]:
+    return {field: _normal(row.get(field)) for field in _MINING_HINT_FIELDS}
 
 
 def _settled_index(
@@ -547,7 +565,19 @@ def host(
                 "material it is printed inside, so weigh that topic's "
                 "concepts first; an end-of-chapter exercise is printed "
                 "under the last section, so its printing position means "
-                "nothing — place it purely by what it asks. Surface "
+                "nothing — place it purely by what it asks. A question "
+                "whose difficulty_hint is Advanced, or whose method needs "
+                "a concept taught LATER in topics_in_teaching_order, "
+                "belongs with that later concept, never with an earlier "
+                "concept it is printed beside — a learner reaches it only "
+                "after the later teaching. Prefer the most granular "
+                "method/application/modeling concept; do not file a task "
+                "under a nearby definition, broad formula, or final "
+                "concept merely for convenience. A textbook Activity, "
+                "experiment or discussion unit goes to the related NORMAL "
+                "concept, never to a Culmination. Major concepts assessed "
+                "by exercises must receive their own Types; do not park "
+                "those Types only on a Culmination. Surface "
                 "similarity is NOT ownership: a question about a "
                 "picture, caricature, map, or table belongs to the "
                 "concept that teaches THAT content, never to another "
@@ -585,6 +615,10 @@ def host(
                     "task": row["task"],
                     "pattern": row["pattern"],
                     "concept_match_hint": row["concept_match_hint"],
+                    **{
+                        field: row.get(field, "")
+                        for field in _MINING_HINT_FIELDS
+                    },
                     "qids": row["qids"],
                     "questions": [
                         question_info[qid]

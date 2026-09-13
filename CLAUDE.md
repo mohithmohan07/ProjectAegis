@@ -1,6 +1,42 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q66 (batch console unattended-ready, 13 September 2026).**
+**Latest owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
+The owner: "go through all of these properly … dont lose the technical details
+of writing the columns/rows, the rules … the prompting (you can make it better;
+but dont lose the existing ones)." Every hand correction in `Corrections.docx`
+(Bholi, Print Culture, How Do Organisms Reproduce, Triangles) was traced to its
+origin and adversarially verified. FIXED (code, each reproduced first): Step 02
+dropped the chapter band — the frozen duration (§32.1) now rides the reviewed
+candidate and the chapter/topic descriptions are quoted from the reviewed
+file's own band cells; the code-composed "Covers X, Y, Z." topic description
+is purged (§9.1: a name list is invalid) and an unauthored band is a visible,
+non-blocking QC finding; `chapter_duration_unregistered` no longer blames the
+registry for a value the payload dropped; one `chapter_display_cell` composer
+for both workbooks; keyword cells never mix delimiters; hub figure notes
+carry the caption once and never "Source visual"; bare-number activity labels
+and the stray " . " before a trailing image; leading source ordinals removed
+only when the item's own label records them; the Detailed Analysis topic
+stays LAST (the plan's order, not the earliest cited block); "(a)" enumerators
+are apparatus; Type consolidation no longer rejects a split by count (Rule 1);
+Host receives the miner's difficulty/scope hints. IMPROVED (prompts,
+additive): imperative mastery register; teacher's voice with no author notes
+or evidence narration; grammar in the Refiner's remit; Title Case for names;
+keywords as one `" | "` string; no duplicate case titles; the four Host rules
+that survived only in dead prompts; culmination names as short synthesis
+names (the one rule whose FORM changed — the list template made 368-character
+titles); what the Subjective lane MEANS (versioned cell policy). RECORDED for
+the owner with exact options: the keyword delimiter (contract vs Q33 vs
+reviewer), Pre `concept_source`, Types scoped to the concept they test (the
+Q14 doctrine — the most consequential), culminations hosting Cases,
+misconception coverage/form, figure-reference wording, four-option MCQs,
+locator hints, Descriptive answer_restriction, per-sheet categories, Q47
+referent resolution vs Q51. PLANNED NEXT: culmination mastery and re-authored
+titles, paired misconception corrections, the figure-reference stripper,
+blind Host batches, teaching-order evidence for Settle and tiers, declared
+Pre options. Q67 in `docs/aegis-restructure.md`. PR #318 is not merged:
+"dont deploy yet."
+
+**Previous owner amendment: Q66 (batch console unattended-ready, 13 September 2026).**
 The owner: "go with the best suitable option for all, dont deploy yet … get it
 done with the BATCH API inculcation. Give instructions how to use the BATCH
 API." The batch API is the chapter console (Q53). **Q65** takes the seven open

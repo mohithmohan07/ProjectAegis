@@ -190,6 +190,24 @@ def strip_title_tag(text: str) -> str:
     return _TITLE_TAG_RE.sub("", text or "").strip()
 
 
+def chapter_display_cell(chapter_title: object, chapter_display_name: object = "") -> str:
+    """The one ``chapter_display_name`` cell both workbook writers emit.
+
+    Contract §15: the display-name pair matches the human title. The Concept
+    writer wrote ``chapter_title`` while the Master snapshot wrote the stored
+    ``chapter_display_name`` — which rows imported before the syllabus fix
+    still carry in the tagged form ("Bholi (10_English_CBSE)"), so the two
+    outputs of one run disagreed and the reviewer shortened every Master's
+    cell by hand (13 September 2026). The human title, tag-stripped, wins;
+    the stored display name is only a fallback for a chapter with no title.
+    Parsing this codebase's own identity-tag grammar is mechanics.
+    """
+    title = strip_title_tag(str(chapter_title or ""))
+    if title:
+        return title
+    return strip_title_tag(str(chapter_display_name or ""))
+
+
 def strip_topic_number(text: str) -> str:
     """Remove only a leading ``Topic NN:`` prefix from a topic cell.
 
