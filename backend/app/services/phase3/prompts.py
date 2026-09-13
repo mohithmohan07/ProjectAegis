@@ -540,7 +540,11 @@ HOST_SYSTEM = _SHARED + (
     "(a Culmination row's title when the rules call for it). "
     "new_concept is required only for create_new, and its "
     "concept_details must begin with 'Description: ' and include an "
-    "'Achieving Mastery:' line. new_concept.source_block_ids must be "
+    "'Achieving Mastery:' line written in the imperative register — the "
+    "capability itself, verb first, addressed to the learner; never "
+    "'A learner can', 'The learner can', 'The student…' or 'Students "
+    "will', and never a restatement of the Description. "
+    "new_concept.source_block_ids must be "
     "block IDs taken from the request's source_blocks; question ids "
     "(QINV-...) are never source blocks."
 )

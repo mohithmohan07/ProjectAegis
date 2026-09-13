@@ -544,6 +544,9 @@ Block rules:
   required labels, arrows, units, legends, axes, panel letters and dependent
   panels. Tight means removing unrelated margin, never clipping these elements.
   source_caption is the exact printed caption, empty when none is printed;
+  it begins with the printed figure label ("Figure 7.2", "Fig. 13") exactly as
+  printed — the label is part of the printed caption, never dropped and never
+  moved into public_alt;
   caption repeats source_caption for legacy consumers. public_alt is a neutral
   accessibility description, never an answer or an inferred interpretation.
   Keep every visible label/caption in the source even if it reveals an answer;
@@ -614,7 +617,8 @@ task block. Qualified linked_visual_refs/linked_context_refs identify the
 owning page and block and may cross supplied pages; verify them against both
 pages. Table drawings must also have table_cell_visual_refs placing each
 figure in its actual zero-based row and column; textual cells remain verbatim.
-source_caption is immutable printed wording, while public_alt may describe
+source_caption is immutable printed wording (its printed figure label
+included), while public_alt may describe
 the visible figure neutrally. Never erase visible source information to hide
 an answer; flag answer-revealing source apparatus for downstream assessment.
 Compare supplied FIGURE-CROP and TABLE-CROP evidence with its full original page: every

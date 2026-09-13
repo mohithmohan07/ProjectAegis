@@ -155,3 +155,17 @@ def test_the_topic_summary_never_composes_a_name_list():
     assert topic.topic_description == "How DNA is read, base by base."
     assert chapter.chapter_description == "Bholi's story."
     assert chapter.chapter_duration == "126 minutes"
+
+
+def test_a_band_cell_quoted_in_its_display_view_maps_back_to_the_raw_cell():
+    # The cell carries the paired form (marker beside the break); the model
+    # copies what it displays. Same transport as a question span (Q60/Q62).
+    doc = {"blocks": [{"ref": "B1", "text": "Reading DNA covers bases.<br>\nThen the helix."}],
+           "images": [], "filename": "r.txt", "sha256": "0" * 64}
+    payload = _band_result("Reading DNA covers bases.\nThen the helix.", "Reading DNA covers bases.\nThen the helix.")
+    repaired = reviewed.repair_quote_transport(payload, doc)
+    assert repaired["chapter_description"] == "Reading DNA covers bases.<br>\nThen the helix."
+    assert repaired["concepts"][0]["topic_description"] == "Reading DNA covers bases.<br>\nThen the helix."
+    # And the gate then accepts the raw band form as-is (the fixture's
+    # question quotes another block; only the band findings are asserted).
+    assert not [d for d in reviewed._checker(doc)(repaired) if "description" in d]

@@ -420,6 +420,23 @@ def repair_quote_transport(candidate, document):
                  and locate(source, span) is not None else span)
                 for span in spans
             ]
+    # The chapter and topic band cells are quotes too (Q67): a display-view
+    # copy of a band cell maps back to the raw cell so its ``<br>`` markers
+    # reach the Master band exactly as they reach a question.
+    whole = "\n".join(str(b.get("text") or "") for b in document.get("blocks") or [])
+
+    def band(value):
+        if isinstance(value, str) and value and value not in whole:
+            hit = locate(whole, value)
+            if hit is not None:
+                return hit.raw
+        return value
+
+    if "chapter_description" in candidate:
+        candidate["chapter_description"] = band(candidate["chapter_description"])
+    for concept in candidate.get("concepts") or []:
+        if isinstance(concept, dict) and "topic_description" in concept:
+            concept["topic_description"] = band(concept["topic_description"])
     return candidate
 
 

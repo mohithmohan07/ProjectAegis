@@ -200,7 +200,19 @@ def _semantic_title_key(value: object) -> str:
         text = title
     else:
         text = re.sub(r"^\s*\d+(?:[.．]\d+)*\s+", "", text)
+        text = _without_leading_enumerator(text)
     return _normal(text)
+
+
+def _without_leading_enumerator(text: str) -> str:
+    """Drop a leading "(a)"/"(iv)" enumerator when a title remains (Q67).
+
+    The same structural apparatus ``_NUMBER_PREFIX_RE`` already skips when it
+    follows a section number; a bare enumerator with no number reaches the
+    fallbacks here. Never empties a title.
+    """
+    stripped = re.sub(r"^\s*\(?(?:[a-z]|[ivx]{1,4})\)\s+", "", text, flags=re.IGNORECASE)
+    return stripped if stripped.strip() else text
 
 
 def _plain_title(
@@ -231,6 +243,7 @@ def _plain_title(
         text = title
     else:
         text = re.sub(r"^\s*(?:chapter\s+)?\d+(?:[.．]\d+)*\s+", "", text, flags=re.I)
+        text = _without_leading_enumerator(text)
     return _SPACE_RE.sub(" ", text).strip(" -:–—\t\n")
 
 
@@ -1755,15 +1768,28 @@ def compile_semantic_graph(
         for topic in topics:
             for sid in topic.pop("_plan_section_ids", []):
                 topic_by_section.setdefault(sid, topic)
-        for index, topic in enumerate(topics):
+        # The plan's own order decides ids, ``order`` and the export (Q67),
+        # but "which topic owns this position" is a question about the
+        # TEXT, so the span chain and the positional fallback read a
+        # source-ordered VIEW of the same rows. Chaining in plan order gave
+        # a whole-work Detailed Analysis topic — last in the plan, citing the
+        # opening block — the whole text and its predecessor a negative span,
+        # and made the fallback return it for every position.
+        positional = sorted(
+            topics, key=lambda row: (int(row["source_start"]), int(row["order"]))
+        )
+        for index, topic in enumerate(positional):
             topic["source_end"] = (
-                topics[index + 1]["source_start"] if index + 1 < len(topics)
+                positional[index + 1]["source_start"]
+                if index + 1 < len(positional)
                 else len(str(source_text or ""))
             )
+    else:
+        positional = topics
 
     def topic_for_position(position: int) -> dict[str, Any]:
-        prior = [row for row in topics if int(row["source_start"]) <= position]
-        return prior[-1] if prior else topics[0]
+        prior = [row for row in positional if int(row["source_start"]) <= position]
+        return prior[-1] if prior else positional[0]
 
     def topic_for_declared_ancestry(section_id: str) -> dict[str, Any] | None:
         """Follow only recorded parent IDs, never heading text or proximity."""

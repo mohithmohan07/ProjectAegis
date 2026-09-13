@@ -5065,8 +5065,16 @@ def _strip_leading_source_task_label(text: str, *, source_label: str = "") -> st
     if not match:
         return cleaned
     token = match.group("token").lower()
-    recorded = re.search(r"([0-9]+|[a-z]|[ivx]{1,4})[.)\]:]*\s*$", str(source_label or "").strip().lower())
-    if recorded and recorded.group(1) == token:
+    # The recorded token must stand alone — after the start, whitespace, an
+    # opening bracket, or a Q/Question prefix followed by digits — so a label
+    # such as "Questions" never yields "s" nor "Exercise" "e" (verification
+    # note 16, 13 September 2026).
+    recorded = re.search(
+        r"(?:^|[\s(\[]|\bq(?:uestion)?\s*\.?\s*(?=[0-9]))"
+        r"(?P<tok>[0-9]+|[a-z]|[ivx]{1,4})[.)\]:]*\s*$",
+        str(source_label or "").strip().lower(),
+    )
+    if recorded and recorded.group("tok") == token:
         return cleaned[match.end():].strip()
     return cleaned
 

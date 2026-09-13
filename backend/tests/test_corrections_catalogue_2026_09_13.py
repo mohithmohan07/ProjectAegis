@@ -79,6 +79,12 @@ def test_a_bare_ordinal_is_removed_only_when_the_provenance_records_it():
     assert strip("2 is the smallest prime. Explain.", source_label="Q2") == "2 is the smallest prime. Explain."
     # The textbook labels the old regex already removed still are.
     assert strip("Example 3: Solve for x.", source_label="Example 3") == "Solve for x."
+    # Only a standalone label token counts (verification note 16): a label
+    # ending in a letter that is not an enumerator never matches a stem.
+    assert strip("s. Name the parts.", source_label="Questions") == "s. Name the parts."
+    assert strip("e. Name the parts.", source_label="Exercise") == "e. Name the parts."
+    assert strip("1. Name the parts.", source_label="Exercise 1.1") == "1. Name the parts."
+    assert strip("5. Name the parts.", source_label="Question 5") == "Name the parts."
 
 
 def test_the_public_example_text_drops_the_recorded_ordinal():
@@ -177,6 +183,9 @@ def test_the_host_prompt_places_advanced_work_with_the_later_concept():
         assert "difficulty_hint is Advanced" in text
         assert "never to a Culmination" in text
         assert "most granular" in text
+        # A concept the Host creates carries its mastery line in the same
+        # register as every other author's (verification note 8).
+        assert "'Achieving Mastery:' line written in the imperative register" in text
 
 
 # --------------------------------------------------------------------------- #

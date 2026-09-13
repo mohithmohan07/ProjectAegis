@@ -49,6 +49,10 @@ def test_a_lettered_enumerator_printed_with_the_section_number_is_not_the_title(
     assert match.group("title") == "Male Reproductive System"
     match = csp._NUMBER_PREFIX_RE.match("7.3 Asexual Reproduction")
     assert (match.group("number"), match.group("title")) == ("7.3", "Asexual Reproduction")
+    # The bare-number fallbacks agree with the parser (verification note 20).
+    assert csp._plain_title("(a) Male Reproductive System") == "Male Reproductive System"
+    assert csp._semantic_title_key("(iv) Male Reproductive System") == csp._semantic_title_key("Male Reproductive System")
+    assert csp._plain_title("(a)") == "(a)"          # never emptied
     assert "lettered/roman enumerator" in source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     assert "Title Case" in source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     # The rule the instruction carried before is still there.
@@ -126,3 +130,45 @@ def test_the_cell_prompts_say_what_the_subjective_lane_means():
 def test_the_pre_author_is_told_to_author_the_response_form():
     assert "response form you intend" in prompts.PREQUESTIONS_AUTHOR_SYSTEM
     assert "response form" in inspect.getsource(prequestions._author_system)
+
+
+def test_plan_order_ids_do_not_change_which_topic_owns_a_position():
+    """Q67 follow-up (verification #19): the plan's order decides ids, the
+    text decides positions. A whole-work Detailed Analysis topic that cites
+    the opening block is TOPIC-last, and the span chain and positional
+    fallback still read the rows in source order — never a negative span,
+    never the analysis topic claiming every position."""
+    from app.services import canonical_source_phase3 as phase3
+    from app.services import language_topology
+    from tests import test_language_topology as lt
+
+    canonical = lt._canonical()
+    plan = lt._valid_plan(canonical)
+    first_block = str(canonical["blocks"][0]["block_id"])
+    last = plan["topics"][-1]
+    last["evidence_block_ids"] = [first_block, *(last.get("evidence_block_ids") or [])]
+
+    graph, _report = phase3.compile_semantic_graph(
+        canonical, source_text=lt.POEM, metadata=lt._plan_metadata(plan),
+        hierarchy_provider=lambda _payload: (_ for _ in ()).throw(AssertionError("double spend")),
+    )
+    topics = graph["topics"]
+    assert [row["topic_id"] for row in topics] == ["TOPIC-0001", "TOPIC-0002"]
+    assert topics[-1]["title"] == language_topology.detailed_analysis_title(lt.WORK)
+    assert topics[-1]["source_start"] == int(canonical["blocks"][0]["source_start"] or 0)
+    for row in topics:
+        assert int(row["source_end"]) >= int(row["source_start"]), row["title"]
+    positional = sorted(topics, key=lambda row: (int(row["source_start"]), int(row["order"])))
+    for index, row in enumerate(positional[:-1]):
+        assert int(row["source_end"]) == int(positional[index + 1]["source_start"])
+    assert int(positional[-1]["source_end"]) == len(lt.POEM)
+
+
+def test_the_extraction_prompt_keeps_the_printed_figure_label_in_the_caption():
+    from app.services import canonical_source_phase221_fallback as phase221
+    import inspect
+    source = inspect.getsource(phase221)
+    assert 'it begins with the printed figure label ("Figure 7.2", "Fig. 13")' in source
+    assert "(its printed figure label\nincluded)" in source
+    # The sentence it extends is still there.
+    assert "source_caption is the exact printed caption, empty when none is printed;" in source

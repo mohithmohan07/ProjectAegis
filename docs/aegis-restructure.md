@@ -4324,6 +4324,38 @@ place where a rule's FORM changed is named below.
   "Figure 7.2" (an extraction-prompt clarification), hub labels for bare
   markers, a captioned entry for a claimed figure (owner).
 
+### Verification follow-up (same day)
+
+The workflow's own adversarial verification finished 22 of 58 verdicts before
+the session limit; each was read against what shipped. Six residual points
+were real and are fixed here, same commit series:
+
+* **A regression in item 9.** With the plan topics kept in the plan's own
+  order, `compile_semantic_graph`'s span chain and positional fallback still
+  read the list as if it were source-sorted — a whole-work Detailed Analysis
+  topic (last, citing the opening block) got the whole text, its predecessor
+  a negative span, and the fallback returned it for every position. Both now
+  read a source-ordered VIEW of the same rows; ids and export keep the plan's
+  order. Pinned on the existing plan fixture.
+* The recorded-label match for a leading ordinal counts only a standalone
+  token: "Questions" no longer yields "s", "Exercise" no longer "e".
+* The Host's `new_concept` mastery line is written in the same imperative
+  register as every other author's.
+* The reviewed file's band cells (`chapter_description`, `topic_description`)
+  travel through the same `<br>` transport as every quote, so the Master band
+  keeps its markers.
+* The page-extraction prompt states that the printed figure label ("Figure
+  7.2") is the first words of `source_caption`, never dropped or moved into
+  `public_alt` — the five Organisms captions that lost their numbers.
+* The bare-number title fallbacks (`_plain_title`, `_semantic_title_key`)
+  drop a leading "(a)"/"(iv)" enumerator exactly as the parser does, and
+  agree with each other.
+
+Declined from the same verdicts, with the reason: the audit consults no
+registry (kept pure, above); the reviewed-file RULES do not recase the
+reviewer's names; the writer's topic_description read-back equality stays
+(it now certifies the authored-or-blank value).
+
 ### Verification
 
 Offline only. Every mechanical origin above was reproduced on the current
