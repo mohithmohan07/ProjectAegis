@@ -3538,3 +3538,121 @@ there and fails, streaming peaks at **0.8 MB**. An earlier version of this test
 passed on the old reader — its fixture declared 30 cells, not 201,580, and the
 threshold sat just above the real cost. It now asserts the fixture reproduces
 the condition before trusting the measurement.
+
+## Q58 — decided — the Fixer can satisfy a strict caller contract, and a Fixer failure still names the block
+
+Job 130's Step 2 died after the reviewed file had already been read and paid
+for. The console named it exactly, which is the Q56 work doing its job:
+
+> `reviewed_file.extract` decision for post failed its mechanical response
+> contract after 3 bounded correction attempt(s), and the Fixer could not
+> produce a contract-satisfying decision either: Invalid reviewed-file schema:
+> 1 validation error for Extracted `rationale` — Extra inputs are not permitted
+
+### The Fixer was instructed to emit a field its own checker had to reject
+
+`prompts.FIXER_SYSTEM` says: *"Return the corrected artifact in the SAME
+response schema the original provider was asked for … plus a `"rationale"`
+field."* `kernel.decide` then validates that candidate with the **caller's**
+checker — which for this stage is `reviewed_file_input.Extracted`, a pydantic
+model with `extra="forbid"` and no `rationale` field. Three attempts, three
+identical `extra_forbidden` defects, then `ContractError`.
+
+So the Fixer could never succeed on **any** strict-schema stage. Q13 leans on
+the Fixer to guarantee a run completes — *"nothing is guessed silently, nothing
+is lost, finished work always ships"* — and on every stage whose checker is a
+closed schema that safety net was structurally dead.
+
+The author side is not at fault and is not changed: its provider schema really
+is strict (`additionalProperties: false`, every field required) and really is
+sent for `gpt-5.6-luna`, so the author cannot produce extras. Only the Fixer
+can, because its prompt requires it.
+
+`_fixer_artifact` offers the checker the candidate **as-is** first, then — only
+when it carries a top-level `rationale` — the same candidate without that key.
+The **checker** decides which shape is valid, so a caller whose own contract
+carries a rationale is untouched and nothing here judges what the Fixer said.
+The raw candidate is retained so the recorded review flag still quotes what the
+Fixer actually decided.
+
+### A Fixer failure hid the defect that actually stopped the run
+
+The raise carried `fixer_defects or blocked`. When the Fixer's own artifact was
+malformed — exactly the case above — the message named the **Fixer's** protocol
+failure and dropped every trace of what blocked the extraction. There is no
+other durable record: a failed author produces no pending receipt, so the
+message is the whole account. Whoever reads the console cannot tell what to
+correct. It now names the original block first, then the Fixer's shortfall, and
+`defects` carries both.
+
+## Q59 — decided — every reviewed-file picture is uploaded to this server and carries its link
+
+The owner: *"I think it's because of the images. Images were not in the
+generated file, and then when images were added. I need all images extracted
+and uploaded to project aegis fly server and those links should be there."*
+
+The first half is right about what the reviewer sees. The generated Concept
+file is the canonical Bulk Import workbook, and a chapter figure reaches it as
+the canonical text tag `[img src="https://…" alt="…"]` inside the concept
+prose — a URL in a cell, not a picture on the sheet. A reviewer working in
+Excel pastes the real figures in.
+
+### What happened to a pasted picture
+
+`read_document` turned it into a base64 `data:` URI and stopped there.
+
+* It was stored **inline** in `job.question_inventory`, and `queue` appends a
+  second `deepcopy` of the whole document to `reviewed_file_history` on every
+  upload — so a re-upload doubled it again, in a JSON column that is read and
+  rewritten whole.
+* It was sent inline on **every** provider call: three bounded author attempts
+  plus the critic, each carrying the full base64 body.
+* It was hashed into the decision key, so two identical files differing only in
+  picture bytes were different decisions.
+* **A picture no question cited was lost outright.** Only
+  `prepare` published, and only the refs the extraction attached to a question
+  (`question_image_grid._publish`). Everything else had no `https` URL, and a
+  `data:` URI can never become a canonical `[img]` tag — `_CANONICAL_IMAGE_TAG_RE`
+  requires `https://`. There was no link for it to be.
+
+Measured on six pasted screenshots (a 6.99 MB workbook):
+
+| | inline | linked |
+| --- | --- | --- |
+| durable job document | 10.35 MB | **4.3 KB** |
+| after one re-upload | 20.69 MB | **8.6 KB** |
+| bytes on the volume | — | 2.76 MB of JPEG |
+
+### Decided
+
+Every picture is pinned to the content-addressed asset store as the file is
+read — cited or not — and the document carries the signed
+`/source-assets/{job_id}/{sha256}.jpg?sig=` URL that `/source-assets` already
+serves publicly and immutably. `pin_image` is mechanics: hash, convert, store,
+mint. Transparency composites onto **white**, the ground Excel shows behind a
+pasted picture, instead of the black a bare `RGB` conversion produces — which
+would erase a line drawing completely. Normalising to JPEG also fixes a quieter
+failure: a pasted BMP or TIFF used to go to the vision API as
+`data:image/bmp;…`, which it will not accept.
+
+`reviewed_file_images` on the release payload is the complete manifest — every
+picture, its link, its sheet, row and column. `_aegis_source_evidence` on a
+concept and `source_context` on a question carry the pictures that row itself
+cites. **None of this decides placement**: which picture belongs to which
+question is the extraction's judgment, projected mechanically (Rule 1).
+
+A file queued before this change still carries its bytes inline; those are
+uploaded on first use, so its links are durable too. Where a deployment has no
+public origin configured the bytes are still stored and the caller keeps the
+inline form — nothing is lost and no upload fails for want of a hostname.
+
+### A Q57 regression, found on the way
+
+Q57 moved the embedded-picture pass after the streaming cell pass, so image
+blocks were emitted **after every sheet's rows** instead of among their own
+sheet's — a figure pasted beside concept row 2 read as if it came after the
+last sheet. Q57 was verified on four real files that contain no `xl/media` at
+all, so nothing caught it. The media pass now runs **before** the cell pass and
+closes; each sheet's pictures take their place among that sheet's rows. Output
+is byte-identical to the pre-Q57 reader on a workbook with embedded pictures,
+and the test fails on the deployed reader.

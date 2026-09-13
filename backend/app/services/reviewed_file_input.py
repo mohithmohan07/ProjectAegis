@@ -37,7 +37,57 @@ def active(payload) -> bool:
     return isinstance(payload, dict) and (payload.get(KEY) or {}).get("version") == VERSION
 
 
-def read_document(path: Path, filename: str) -> dict:
+def store_jpeg(raw_image: bytes) -> bytes:
+    """The asset store's JPEG form of one picture, mechanically.
+
+    Transparency is composited onto white — the background Excel and Word
+    show behind a pasted picture — instead of the black a bare ``RGB``
+    conversion produces, which would erase a line drawing entirely.
+    """
+    from PIL import Image as PILImage
+
+    with PILImage.open(io.BytesIO(raw_image)) as picture:
+        picture.load()
+        if picture.mode in {"RGBA", "LA", "P"}:
+            translucent = picture.convert("RGBA")
+            flat = PILImage.new("RGB", translucent.size, (255, 255, 255))
+            flat.paste(translucent, mask=translucent.split()[-1])
+        else:
+            flat = picture.convert("RGB")
+    output = io.BytesIO()
+    flat.save(output, format="JPEG", quality=95)
+    return output.getvalue()
+
+
+def pin_image(raw_image: bytes, *, job_id: int) -> dict[str, str]:
+    """Upload one reviewed-file picture to this server's durable asset store.
+
+    EVERY picture a reviewer puts in the file is stored, not only the ones a
+    question ends up citing, and the durable job record then carries the link
+    instead of the bytes. Before this, an image lived as a base64 ``data:``
+    URI inside ``question_inventory`` — copied again into the upload history
+    on every re-upload, hashed into the decision key, and lost outright for
+    any picture the extraction did not attach to a question.
+
+    Returns the content hash and the signed public URL. The URL needs this
+    deployment's public origin; where none is configured (local runs) the
+    bytes are still pinned and the caller keeps the inline form, so nothing
+    is lost and no upload fails for want of a hostname.
+    """
+    from . import canonical_source_phase221_fallback as fallback
+    from . import source_asset_store
+
+    data = store_jpeg(raw_image)
+    filename = f"{hashlib.sha256(data).hexdigest()}.jpg"
+    try:
+        url = fallback.asset_url(int(job_id), filename)
+    except ValueError:
+        url = ""
+    source_asset_store.pin_asset(data, job_id=int(job_id), asset_url=url)
+    return {"sha256": filename.removesuffix(".jpg"), "asset_url": url}
+
+
+def read_document(path: Path, filename: str, *, job_id: int | None = None) -> dict:
     """Read file structures verbatim; never classify headings or learner tasks."""
     suffix = Path(filename).suffix.lower()
     if suffix not in EXTENSIONS:
@@ -50,7 +100,8 @@ def read_document(path: Path, filename: str) -> dict:
 
     def image(raw_image, mime, **extra):
         ref = f"I{len(images) + 1}"
-        images.append({"ref": ref, "url": f"data:{mime};base64," + base64.b64encode(raw_image).decode(), **extra})
+        images.append({"ref": ref, "url": f"data:{mime};base64," + base64.b64encode(raw_image).decode(),
+                       **extra, "_raw": raw_image})
         return ref
 
     try:
@@ -92,6 +143,28 @@ def read_document(path: Path, filename: str) -> dict:
                         values.close()
                 return cached
 
+            drawings: dict[str, list[dict[str, Any]]] = {}
+            if any(name.startswith("xl/media/")
+                   for name in ZipFile(io.BytesIO(raw)).namelist()):
+                # Embedded pictures need the anchored worksheet objects, which
+                # a read-only sheet does not carry. Pay the full load only for
+                # a workbook that actually holds media — and never for the
+                # cell pass, which is where the memory went. It runs BEFORE
+                # the cell pass and closes: the pictures then take their place
+                # among their own sheet's rows below, in reviewed order.
+                drawn = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
+                try:
+                    for sheet in drawn.worksheets:
+                        if sheet.sheet_state != "visible":
+                            continue
+                        for obj in sheet._images:
+                            anchor = getattr(obj.anchor, "_from", None)
+                            drawings.setdefault(sheet.title, []).append({
+                                "data": obj._data(), "format": obj.format,
+                                "row": getattr(anchor, "row", None),
+                                "column": getattr(anchor, "col", None)})
+                finally:
+                    drawn.close()
             for sheet in book.worksheets:
                 if sheet.sheet_state != "visible":
                     continue  # Hidden export receipts are not reviewed learner content.
@@ -108,25 +181,11 @@ def read_document(path: Path, filename: str) -> dict:
                             cells.append({"cell": cell.coordinate, "text": str(value if value is not None else cell.value)})
                     if cells:
                         block("\n".join(c["text"] for c in cells), sheet=sheet.title, cells=cells)
+                for drawing in drawings.get(sheet.title, []):
+                    ref = image(drawing["data"], "image/" + drawing["format"], sheet=sheet.title,
+                                row=drawing["row"], column=drawing["column"])
+                    block("Embedded image " + ref, sheet=sheet.title, image_refs=[ref])
             book.close()
-            if any(name.startswith("xl/media/")
-                   for name in ZipFile(io.BytesIO(raw)).namelist()):
-                # Embedded pictures need the anchored worksheet objects, which
-                # a read-only sheet does not carry. Pay the full load only for
-                # a workbook that actually holds media — and never for the
-                # cell pass, which is where the memory went.
-                drawn = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
-                try:
-                    for sheet in drawn.worksheets:
-                        if sheet.sheet_state != "visible":
-                            continue
-                        for obj in sheet._images:
-                            anchor = getattr(obj.anchor, "_from", None)
-                            ref = image(obj._data(), "image/" + obj.format, sheet=sheet.title,
-                                        row=getattr(anchor, "row", None), column=getattr(anchor, "col", None))
-                            block("Embedded image " + ref, sheet=sheet.title, image_refs=[ref])
-                finally:
-                    drawn.close()
         elif suffix in {".csv", ".tsv"}:
             text = raw.decode("utf-8-sig")
             reader = csv.reader(io.StringIO(text), delimiter="\t" if suffix == ".tsv" else ",")
@@ -159,6 +218,15 @@ def read_document(path: Path, filename: str) -> dict:
             block(raw.decode("utf-8-sig"))
     except Exception as exc:
         raise ValueError("The reviewed file could not be read. Check that it opens normally and upload it again.") from exc
+    # Upload the pictures AFTER the parse, outside its handler: a file that
+    # will not open and a store that will not accept bytes are different
+    # failures and must not report as each other.
+    for record in images:
+        raw_image = record.pop("_raw")
+        if job_id is not None:
+            pinned = pin_image(raw_image, job_id=int(job_id))
+            record.update(pinned)
+            record["url"] = pinned["asset_url"] or record["url"]
     if not images and not any(b["text"].strip() for b in blocks):
         raise ValueError("The reviewed file is empty. Include the concepts you want to use, or an explicit note that the lane is empty.")
     return {"sha256": hashlib.sha256(raw).hexdigest(), "filename": Path(filename).name,
@@ -174,7 +242,9 @@ def queue(db, job, *, lane, path, filename, owner_sub):
     lane = release.normalize_lane(lane)
     if release.release_payload(job, lane=lane) is None:
         raise ValueError("Generate the Concept files before uploading reviewed inputs.")
-    document = read_document(path, filename)
+    # Pictures are uploaded to this server's durable asset store as the file
+    # is read, so the durable record below carries links, not base64 bytes.
+    document = read_document(path, filename, job_id=job.id)
     durable = copy.deepcopy(job.question_inventory or {})
     inputs = durable.setdefault(INPUTS, {})
     previous = inputs.get(lane) or {}
@@ -326,10 +396,17 @@ def _checker(document, lane="post"):
     return check
 
 
+# Addresses, not evidence: the pictures themselves are attached to the
+# request, and the contract forbids guessing a URL, so no form of the link
+# belongs in the readable payload.
+_IMAGE_ADDRESS_FIELDS = ("url", "asset_url", "sha256")
+
+
 def _render(payload):
     readable = copy.deepcopy(payload)
-    readable["document"]["images"] = [{k: v for k, v in image.items() if k != "url"}
-                                       for image in payload["document"]["images"]]
+    readable["document"]["images"] = [
+        {k: v for k, v in image.items() if k not in _IMAGE_ADDRESS_FIELDS}
+        for image in payload["document"]["images"]]
     return json.dumps(readable, ensure_ascii=False)
 
 
@@ -409,24 +486,57 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
         KEY: {"version": VERSION, "sha256": document["sha256"], "filename": document["filename"], "status": "extracted"},
         "records": [], "issues": [], "type_case_rows": [], "mined_types": {},
         "generated_questions": [], "generated_question_plans": {}})
+    from . import question_image_grid
     images = {}
-    selected_images = {ref for q in result["questions"] for ref in q["image_refs"]}
+    cited = {ref for q in result["questions"] for ref in q["image_refs"]}
     for image in document["images"]:
-        if image["ref"] not in selected_images:
+        url = str(image.get("url") or "")
+        if url.startswith("http"):
+            # Uploaded and linked when the file was read. Every picture in the
+            # file has one, whether or not a question cites it.
+            images[image["ref"]] = url
             continue
-        from PIL import Image
-        from . import question_image_grid
-        raw = base64.b64decode(image["url"].split(",", 1)[1])
-        with Image.open(io.BytesIO(raw)) as source_image:
-            output = io.BytesIO()
-            source_image.convert("RGB").save(output, format="JPEG", quality=95)
-        images[image["ref"]] = question_image_grid._publish(output.getvalue(), job_id=job.id)
+        if not url.startswith("data:"):
+            continue
+        # A file queued before uploads pinned their pictures still carries the
+        # bytes inline. Upload them now so this run's links are durable too;
+        # a cited picture that still has no link goes through the publisher,
+        # whose refusal names the missing public origin rather than failing
+        # later as an empty image URL in a learner-facing row.
+        raw_image = base64.b64decode(url.split(",", 1)[1])
+        link = pin_image(raw_image, job_id=job.id)["asset_url"]
+        if not link and image["ref"] in cited:
+            link = question_image_grid._publish(store_jpeg(raw_image), job_id=job.id)
+        if link:
+            images[image["ref"]] = link
+    # The complete reviewed-file picture manifest: every image, its durable
+    # link and where it sat in the file. Nothing here decides placement — the
+    # extraction owns which question or concept an image belongs to.
+    candidate["reviewed_file_images"] = [
+        {**{k: v for k, v in image.items() if k != "url"},
+         "url": images.get(image["ref"], "")}
+        for image in document["images"]]
     blocks = {b["ref"]: b for b in document["blocks"]}
+    manifest = {image["ref"]: image for image in candidate["reviewed_file_images"]}
+
+    def cited_images(source_refs, image_refs=()):
+        """A row's own linked pictures: the ones it cites, in its order.
+
+        A question names its pictures directly; a concept's only signal is
+        the picture blocks among the blocks it cites. Neither is decided
+        here — both are the extraction's own choices, projected.
+        """
+        refs = [*image_refs, *(ref for source in source_refs
+                               for ref in (blocks[source].get("image_refs") or []))]
+        return [copy.deepcopy(manifest[ref]) for ref in dict.fromkeys(refs)
+                if ref in manifest]
+
     for index, concept in enumerate(result["concepts"]):
         row = {k: copy.deepcopy(v) for k, v in concept.items() if k != "source_refs"}
         row.update({release.RELEASE_ROW_LANE_FIELD: lane, release.RELEASE_ROW_STATUS_FIELD: "ready",
                     release.RELEASE_ROW_ERRORS_FIELD: [], "review_flags": list(decision["review_flags"]),
-                    "_aegis_source_evidence": {"reviewed_file_blocks": [blocks[r] for r in concept["source_refs"]]}})
+                    "_aegis_source_evidence": {"reviewed_file_blocks": [blocks[r] for r in concept["source_refs"]],
+                                               "reviewed_file_images": cited_images(concept["source_refs"])}})
         if lane == "pre":
             row.update({"_pre_concept_id": f"PRC-{index + 1:04d}", "_aegis_pre_prerequisites": [], "_aegis_needed_for": []})
         candidate["records"].append(row)
@@ -450,6 +560,8 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
                 wording.FIELD: wording.VERSION, repair.KEY: repair.VERSION, quality.KEY: quality.VERSION}
         item["source_context"] = {key: copy.deepcopy(item[key]) for key in ("shared_context", "options", "tables", "image_urls")}
         item["source_context"]["reviewed_file_blocks"] = [blocks[r] for r in question["source_refs"]]
+        item["source_context"]["reviewed_file_images"] = cited_images(
+            question["source_refs"], question["image_refs"])
         if lane == "pre":
             # These are human-supplied Pre questions, never the chapter bank.
             item.update({"pre_question_id": f"PRE-FILE-{number:04d}", "question_id": f"PRE-FILE-{number:04d}",

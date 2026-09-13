@@ -1,6 +1,44 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q57 (reviewed-file reader memory, 13 September 2026).**
+**Latest owner amendment: Q59 (reviewed-file images, 13 September 2026).**
+The owner: "I need all images extracted and uploaded to project aegis fly
+server and those links should be there." A generated Concept file shows a
+chapter figure as the canonical text tag `[img src="https://…"]` in a cell, not
+as a picture, so a reviewer pastes the real figures in — and a pasted picture
+became a base64 `data:` URI that was stored inline in `question_inventory`,
+copied again into the upload history on every re-upload, sent inline on all
+three author attempts and the critic, hashed into the decision key, and
+**dropped outright unless a question cited it** (a `data:` URI can never be a
+canonical `[img]` tag, which requires `https://`). Every picture is now pinned
+to the content-addressed asset store as the file is read — cited or not — and
+the document carries the signed `/source-assets` URL. Measured on six pasted
+screenshots: the durable document goes 10.35 MB -> 4.3 KB (20.69 MB -> 8.6 KB
+after one re-upload), with 2.76 MB of JPEG on the volume. Transparency
+composites onto WHITE, not the black a bare `RGB` conversion gives; JPEG
+normalisation also stops a pasted BMP/TIFF reaching the vision API in a format
+it refuses. `reviewed_file_images` is the complete manifest; concept and
+question rows carry the pictures they cite. Placement stays the extraction's
+judgment, projected mechanically (Rule 1). Q57 had moved image blocks out of
+their sheet's position — it was verified on four files with no `xl/media` —
+so the media pass now runs before the cell pass and each sheet's pictures sit
+among its rows; output is byte-identical to the pre-Q57 reader. Q59 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q58 (the Fixer and strict schemas, 13 September 2026).**
+Job 130's Step 2 died after the reviewed file was read and paid for.
+`prompts.FIXER_SYSTEM` instructs the Fixer to return the caller's schema "plus
+a `rationale` field", and `kernel.decide` validates that candidate with the
+CALLER's checker — `extra="forbid"` with no such field. The Fixer was told to
+emit a field its own checker had to reject, so it could never succeed on any
+strict-schema stage and Q13's safety net was structurally dead there.
+`_fixer_artifact` offers the checker the candidate as-is, then without the
+protocol field; the CHECKER decides, so a contract that wants a rationale keeps
+it and nothing judges what the Fixer said. A Fixer failure now names the
+ORIGINAL block first — the raise carried `fixer_defects or blocked`, which hid
+it completely, and a failed author leaves no other durable record. Q58 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q57 (reviewed-file reader memory, 13 September 2026).**
 Job 139's Step 2 failed with a bare 502 after ~1h39m. The files were fine — the
 importer reports zero issues on both. The server process had died: the
 "Step 2 stopped" badge needs `master_building` AND a false `generation_running`,

@@ -116,3 +116,37 @@ def test_a_genuinely_unfixable_block_still_raises(tmp_path):
             store=kernel.DecisionStore(tmp_path / "decisions"),
             policy_version="test-1",
         )
+
+
+def test_a_fixer_failure_still_names_what_blocked_the_run(tmp_path):
+    """The console must show the block, not only the Fixer's own shortfall.
+
+    Job 130's failure read as an ``extra_forbidden`` on ``rationale`` — the
+    Fixer's protocol field — with no trace of the defect that actually
+    stopped the extraction, because the message carried ``fixer_defects or
+    blocked``. Whoever reads it has to be able to tell what to correct.
+    """
+
+    def checker(value):
+        if value.get("marker") == "fixer":
+            return ["the Fixer's own artifact is malformed"]
+        return ["the reviewed file left block B7 undisposed"]
+
+    with pytest.raises(kernel.ContractError) as raised:
+        kernel.decide(
+            kind="reviewed_file.extract",
+            unit_id="post",
+            envelope_sha256="b" * 64,
+            payload={"stage": "reviewed_file.extract"},
+            provider=lambda _r: {"marker": "author"},
+            checker=checker,
+            critic=lambda request: {"verdict": "verified", "confidence": 1.0, "issues": []},
+            fixer=lambda _r: {"marker": "fixer"},
+            store=kernel.DecisionStore(tmp_path / "decisions"),
+            policy_version="test-1",
+        )
+
+    message = str(raised.value)
+    assert "block B7 undisposed" in message
+    assert "the Fixer's own artifact is malformed" in message
+    assert raised.value.defects[0] == "the reviewed file left block B7 undisposed"

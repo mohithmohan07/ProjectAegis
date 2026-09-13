@@ -638,13 +638,19 @@ def decide(
                     ]
                     break
             if not fixer_engaged:
+                # Name what BLOCKED the run, not only how the Fixer's own
+                # attempt fell short. Reporting the Fixer's defects alone
+                # hides the original block completely — the console then
+                # shows a Fixer protocol failure for a run that was stopped
+                # by something else entirely, and the person reading it
+                # cannot tell what to correct.
                 raise ContractError(
                     f"{kind} decision for {unit_id} failed its mechanical "
                     f"response contract after {attempts} bounded correction "
-                    "attempt(s), and the Fixer could not produce a "
-                    "contract-satisfying decision either: "
-                    + "; ".join((fixer_defects or blocked)[:8]),
-                    defects=fixer_defects or blocked,
+                    "attempt(s): " + "; ".join(blocked[:8])
+                    + ". The Fixer could not produce a contract-satisfying "
+                    "decision either: " + "; ".join((fixer_defects or blocked)[:8]),
+                    defects=[*blocked, *fixer_defects],
                 )
         elif defects:
             raise ContractError(
