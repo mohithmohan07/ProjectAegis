@@ -2769,8 +2769,9 @@ Cases and questions, and handle statistics tables correctly in KaTeX.
 
 New uploads freeze the current generation-quality stamp before source work
 (`owner-generation-quality-2026-09-11-v1` until 13 September 2026, then
-`owner-generation-quality-2026-09-13-v2`, which adds only the kept figure
-references of Q68); a run keeps the version it recorded.
+`owner-generation-quality-2026-09-13-v2` (kept figure references, Q68), `-v3`
+(Host creations resolved, Q68) and `-v4` (declared Pre options and duplicate
+Case titles, Q70/Q71)); a run keeps the version it recorded.
 The stamp travels through source semantics, polishing, the sealed Phase 3
 envelope, staged Pre/Post releases, assessment profiles, authors and reviewers.
 An existing upload's saved model record without this quality stamp retains its
@@ -4592,8 +4593,17 @@ as the advisory, never-blocking release-QC issue
 **Replay.** A sealed v1 run cleans exactly as before (pinned:
 `tests/test_figure_references_kept.py` runs the reviewers' sentences under
 v1, v2, legacy-unstamped and forced; every old-cleaned section is a fixpoint
-of the new cleaner; a v1-stamped bundle imports and keeps v1; the recorded
-version rides every key). New envelopes freeze V2.
+of the new cleaner — a FIXPOINT claim, measured at 0 counterexamples on
+30,000 token strings and 10,000 sections, where the single-pass form is false
+because the old cleaner is not idempotent; a v1-stamped bundle imports and
+keeps v1; the recorded version rides every key). New envelopes freeze the
+current version. Two residuals recorded, not changed: `reviewed_file_input.
+_policies()` mints the LATEST stamp into the paid `reviewed_file.extract`
+key, so a Step 02 interrupted under one stamp and reattached after a bump
+re-decides the extraction at cost (recording the Step 02 stamp once per job
+is the fix, an owner decision); `release_workbook_edits` upgrades an
+UNSTAMPED legacy payload to the latest stamp at a Step 03 edit, which flips
+the v2+ predicates for that job's later Master work (pre-existing pattern).
 
 ### Host re-decides its blind creations with every batch visible (policy v3)
 
@@ -4639,7 +4649,20 @@ creating units, only when the first pass created something.
 
 **Not addressed.** Settle authors each topic blind to its siblings
 (`settle.py`: "Topics are independent decision streams"); coherence, now told
-of the blindness, remains the merge point for that case.
+of the blindness, remains the merge point for that case. A same-titled
+creation in two DIFFERENT topics (legal today: Assemble keys on (topic,
+title)) cannot both be named on the resolution pass — the Host protocol names
+hosts by title and `_settled_index` is first-wins — so the later unit's
+`existing` verdict resolves to the first topic's row and its own row retires;
+the unit and its QIDs now carry a flag naming the clash (identity
+accounting, never a decision about which is meant). The pre-existing
+near-match tolerance in `_resolve_host_title` (prefix or difflib >= 0.90) now
+also indexes created titles: measured 0.925 between two of the reviewer's
+three Triangles spellings, so a unique paraphrase resolves and an ambiguous
+one fails closed to a correction. The coherence prompt digest changed, so
+`post.concept_coherence` re-keys for every run resumed inside Phase 3 before
+coherence, whatever its stamp — the Q67 precedent; the stamp bump itself
+re-keys nothing.
 
 ### Verification
 

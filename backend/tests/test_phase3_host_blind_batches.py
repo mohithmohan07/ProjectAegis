@@ -300,3 +300,96 @@ def test_a_resolution_that_keeps_both_creations_retires_nothing(
     assert result["host_map"][U1]["host_resolution"]["first_pass_retained"] is True
     assert result["host_map"][U2]["host_resolution"]["first_pass_retained"] is True
     assert result["host_map"][U2]["concept_title"] == T2
+
+
+def test_two_batches_minting_the_identical_title_leave_one_row(env, settled_rows, golden_hosts):
+    """Both batches create T1 verbatim; the resolution names T1 for both and
+    exactly one row ships — no duplicate host identity reaches Assemble."""
+    from app.services.phase3 import assemble
+
+    base = _creating_provider(golden_hosts, settled_rows)
+
+    def same_title(request: dict) -> dict:
+        response = base(request)
+        if request.get("stage") == "host" and "resolved_units" not in request:
+            for assignment in response["assignments"]:
+                if assignment["unit_id"] == U2:
+                    assignment["new_concept"] = _creation(T1)
+                    for placement in assignment["qid_placements"].values():
+                        placement["falls_under"] = [T1]
+                        placement["destination_concept_title"] = T1
+        return response
+
+    result = host_mod.host(
+        _stamped(env, quality.V3), settled_rows,
+        provider=same_title, critic=golden._verified_critic, store=kernel.DecisionStore(),
+    )
+    assert [row["concept_title"] for row in result["new_concepts"]] == [T1]
+    assert result["host_map"][U2]["host_resolution"]["first_pass_retained"] is False
+    keys = [assemble._host_key(row) for row in [*settled_rows, *result["new_concepts"]]]
+    assert len(keys) == len(set(keys))
+    assert not any("in more than one topic" in f for f in result["host_map"][U2]["review_flags"])
+
+
+def test_a_same_titled_creation_in_another_topic_is_flagged_on_its_unit(env, settled_rows, golden_hosts):
+    base = _creating_provider(golden_hosts, settled_rows)
+
+    def other_topic(request: dict) -> dict:
+        response = base(request)
+        if request.get("stage") == "host" and "resolved_units" not in request:
+            for assignment in response["assignments"]:
+                if assignment["unit_id"] == U2:
+                    creation = _creation(T1)
+                    creation["_semantic_topic_id"] = "TOPIC-0002"
+                    assignment["new_concept"] = creation
+                    for placement in assignment["qid_placements"].values():
+                        placement["falls_under"] = [T1]
+                        placement["destination_concept_title"] = T1
+        return response
+
+    result = host_mod.host(
+        _stamped(env, quality.V3), settled_rows,
+        provider=other_topic, critic=golden._verified_critic, store=kernel.DecisionStore(),
+    )
+    entry = result["host_map"][U2]
+    assert entry["topic_id"] == "TOPIC-0001"
+    assert entry["host_resolution"]["first_pass_retained"] is False
+    assert any("in more than one topic" in f for f in entry["review_flags"])
+
+
+def test_the_resolution_audit_survives_type_ownership(env, settled_rows, golden_hosts):
+    v3 = _stamped(env, quality.V3)
+    store = kernel.DecisionStore()
+    result = host_mod.host(
+        v3, settled_rows,
+        provider=_creating_provider(golden_hosts, settled_rows),
+        critic=golden._verified_critic, store=store,
+    )
+    out = host_mod.consolidate_type_ownership(
+        v3, result, provider=golden._replay_provider(golden_hosts, settled_rows),
+        critic=golden._verified_critic, store=store,
+    )
+    assert out["new_concepts"] == result["new_concepts"]
+    assert "host_resolution" in out["host_map"][U1]
+    assert "host_resolution" in out["host_map"][U2]
+
+
+def test_the_coherence_prompts_name_blind_host_creations_beside_the_rules_they_extend():
+    from app.services.phase3 import coherence
+
+    system = " ".join(coherence.SYSTEM.split())
+    critic = " ".join(coherence.CRITIC_SYSTEM.split())
+    assert (
+        "preserve distinct capabilities despite similar labels. Candidate rows "
+        "whose _source_grounding_contract is api-created-missing-type-host"
+    ) in system
+    assert (
+        "Repeated examples, practice, facts and representations do not themselves "
+        "create new concepts. Do not impose a count."
+    ) in system
+    assert (
+        "Do not approve two differently worded copies of one concept merely "
+        "because titles differ. Rows whose _source_grounding_contract is "
+        "api-created-missing-type-host"
+    ) in critic
+    assert "Preserve recorded literary plans and culminations." in critic

@@ -498,6 +498,19 @@ def _resolve_blind_creations(
         )
         visible_rows.append(row)
         projected.append(first_pass[unit_id])
+    # Identity accounting only: the Host protocol names a host by TITLE and
+    # ``_settled_index`` is first-wins by casefold title, so two first-pass
+    # creations sharing a title in DIFFERENT topics cannot both be named on
+    # the resolution pass — an ``existing`` answer lands on the first topic's
+    # row. Say so on the affected units, visibly; never decide which is meant.
+    topics_by_title: dict[str, set[str]] = {}
+    for _, row in created_by.values():
+        topics_by_title.setdefault(
+            _normal(row.get("concept_title")).casefold(), set()
+        ).add(str(row.get("_semantic_topic_id") or ""))
+    clashing_titles = {
+        title for title, topics in topics_by_title.items() if len(topics) > 1
+    }
     progress.log(
         f"Host: {len(creating)} unit(s) created a concept in parallel "
         "batches that could not see one another; re-deciding each once "
@@ -580,6 +593,14 @@ def _resolve_blind_creations(
             + ("retained" if retained else "retired into this unit's audit")
         )
         entry["review_flags"] = [*(entry.get("review_flags") or []), flag]
+        if _normal(first_row.get("concept_title")).casefold() in clashing_titles:
+            entry["review_flags"].append(
+                f"{unit_id}: first-pass batches created "
+                f"'{_normal(first_row.get('concept_title'))[:60]}' in more "
+                "than one topic; the resolution pass names hosts by title, so "
+                "this unit's verdict resolved to the first such row "
+                f"(topic {entry.get('topic_id')}) — confirm the topic."
+            )
         host_map[unit_id] = entry
         for qid in unit["qids"]:
             if qid in qid_map:
