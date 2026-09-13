@@ -3457,3 +3457,80 @@ burns three author and three Fixer calls and raises. That is the Pre lane's six
 blocked questions, and the likely trigger of the Post lane's death.
 
 The owner chose the reliability set first; the gate repair is a separate piece.
+
+
+## Q57 — decided — the reviewed-file reader streams, and the machine has headroom
+
+Job 139's Step 2 died about 1h39m in and the console showed one line:
+*"Master generation could not continue: 502"*.
+
+**The files were fine.** Both reviewed workbooks were accepted minutes apart,
+and the repo's own importer reports **zero issues** on each under the strict
+public-upload contract.
+
+**The 502 came from the edge because the server process stopped existing.** The
+badge is the proof: *"Step 2 stopped · retry available"* renders only when the
+durable marker still says `master_building` AND `generation_running` is false —
+and `generation_running` is a process-local `threading.Lock`. Those are true
+together only when the process holding that lock is gone. It was not OpenAI
+either: the SDK maps 5xx to `InternalServerError`, which is already in the retry
+set. Proxy idle-timeout is ruled out by the 15s heartbeat and
+`X-Accel-Buffering: no`.
+
+### Measured, on the owner's actual file
+
+`reviewed_file_input.read_document` opened the workbook **twice**, both fully
+materialised — once for formulas, once for cached values:
+
+```
+load #1 (data_only=False)   27 MB ->  99 MB
+load #2 (data_only=True)    99 MB -> 172 MB
+```
+
+The sheets declare every formatted row Excel saved:
+
+| sheet | declared cells |
+| --- | --- |
+| Objective | 1000 x 72 = 72,000 |
+| Descriptive | 220 x 440 = 96,800 |
+| Subjective | 220 x 149 = 32,780 |
+| **total** | **201,580 -> x2 loads = 403,160 `Cell` objects** |
+
+Non-empty cells actually present: **1,416**. So **306 MB of RSS for a 0.48 MB
+file**, to produce 0.43 MB of content. Step 2 runs two lanes, each reading its
+reviewed file, on a 2048 MB machine with no swap — before the first provider
+call, and alongside 16 decision workers per lane holding responses with a
+128,000-token ceiling.
+
+### Decided
+
+The cell pass **streams** (`read_only=True`), so cost tracks real content
+instead of declared extent. The cached-value workbook is loaded **once and only
+when a formula cell is actually seen** — these files contain none. A full load
+still happens for embedded pictures, which a read-only sheet cannot carry, but
+only for a workbook whose zip really holds `xl/media`, and never for the cell
+pass.
+
+| | old | new |
+| --- | --- | --- |
+| job 139 Post file | +140 MB | **+2 MB** |
+| all four real files | 94 -> 245 MB | **93 -> 97 MB** |
+
+Output is **byte-identical** on all four; the serialised documents were diffed.
+
+`fly.toml` `memory_mb` 2048 -> **10240** is the second half, so an OOM is not one
+large upload away. That block only applies to machines a deploy CREATES; the
+existing machine still needs, out of band:
+
+```
+fly scale vm shared-cpu-2x --memory 10240 -a projectaegis
+```
+
+### On the test
+
+The regression test builds job 139's exact shape (201,580 declared cells) and
+caps the traced peak at 10 MB: measured, the old reader peaks at **43.6 MB**
+there and fails, streaming peaks at **0.8 MB**. An earlier version of this test
+passed on the old reader — its fixture declared 30 cells, not 201,580, and the
+threshold sat just above the real cost. It now asserts the fixture reproduces
+the condition before trusting the measurement.

@@ -86,8 +86,13 @@ primary_region = 'ams'
 [[vm]]
   cpu_kind = 'shared'
   # 48 in-flight provider calls are 48 worker threads holding response
-  # payloads; one shared core and 1GB was sized for a gate of 9. Applies
-  # to machines a deploy creates — an existing machine is resized once,
-  # out of band: fly scale vm shared-cpu-2x --memory 2048 -a projectaegis
+  # payloads, and Step 2 runs TWO lanes that each read a reviewed workbook
+  # before the first call. Measured on job 139 (Q57): the old reader spent
+  # 306MB on a 0.48MB file, and two lanes doing that on 2048MB killed the
+  # process mid-run — the machine restarted and the console got a bare 502.
+  # The reader now streams (a few MB), and this headroom is the second half:
+  # an OOM must not be one large upload away. Applies to machines a deploy
+  # CREATES — an existing machine is resized once, out of band:
+  #   fly scale vm shared-cpu-2x --memory 10240 -a projectaegis
   cpus = 2
-  memory_mb = 2048
+  memory_mb = 10240

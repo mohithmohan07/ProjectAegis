@@ -55,8 +55,43 @@ def read_document(path: Path, filename: str) -> dict:
 
     try:
         if suffix == ".xlsx":
-            book = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
-            values = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+            # STREAM the cells. A reviewed workbook declares every formatted
+            # row Excel saved, empty or not, and openpyxl's default loader
+            # instantiates a Cell object for each one — then this function
+            # loaded the same file a SECOND time for cached formula values.
+            # Measured on the owner's job 139 Post file: 0.48 MB on disk,
+            # 201,580 declared cells, 403,160 Cell objects, 306 MB of RSS —
+            # to read 1,416 non-empty cells worth 0.43 MB. Two lanes doing
+            # that at once on a 2 GB machine is what killed the process
+            # mid-run and returned a bare 502 to the console (Q57).
+            # ``read_only`` yields rows as it parses them, so the cost tracks
+            # real content instead of declared extent.
+            book = openpyxl.load_workbook(
+                io.BytesIO(raw), data_only=False, read_only=True)
+            cached: dict[str, dict[str, object]] = {}
+
+            def cached_values() -> dict[str, dict[str, object]]:
+                """Cached formula results, loaded ONCE and only if needed.
+
+                A read-only sheet cannot be indexed by coordinate, and most
+                reviewed workbooks carry no formulas at all, so this second
+                pass is deferred until a formula cell is actually seen.
+                """
+                if not cached:
+                    values = openpyxl.load_workbook(
+                        io.BytesIO(raw), data_only=True, read_only=True)
+                    try:
+                        for value_sheet in values.worksheets:
+                            cached[value_sheet.title] = {
+                                value_cell.coordinate: value_cell.value
+                                for value_row in value_sheet.iter_rows()
+                                for value_cell in value_row
+                                if value_cell.value is not None
+                            }
+                    finally:
+                        values.close()
+                return cached
+
             for sheet in book.worksheets:
                 if sheet.sheet_state != "visible":
                     continue  # Hidden export receipts are not reviewed learner content.
@@ -64,17 +99,34 @@ def read_document(path: Path, filename: str) -> dict:
                     cells = []
                     for cell in row:
                         if cell.value is not None:
-                            value = values[sheet.title][cell.coordinate].value if cell.data_type == "f" else cell.value
+                            value = (
+                                cached_values().get(sheet.title, {}).get(
+                                    cell.coordinate)
+                                if getattr(cell, "data_type", "") == "f"
+                                else cell.value
+                            )
                             cells.append({"cell": cell.coordinate, "text": str(value if value is not None else cell.value)})
                     if cells:
                         block("\n".join(c["text"] for c in cells), sheet=sheet.title, cells=cells)
-                for obj in sheet._images:
-                    anchor = getattr(obj.anchor, "_from", None)
-                    ref = image(obj._data(), "image/" + obj.format, sheet=sheet.title,
-                                row=getattr(anchor, "row", None), column=getattr(anchor, "col", None))
-                    block("Embedded image " + ref, sheet=sheet.title, image_refs=[ref])
             book.close()
-            values.close()
+            if any(name.startswith("xl/media/")
+                   for name in ZipFile(io.BytesIO(raw)).namelist()):
+                # Embedded pictures need the anchored worksheet objects, which
+                # a read-only sheet does not carry. Pay the full load only for
+                # a workbook that actually holds media — and never for the
+                # cell pass, which is where the memory went.
+                drawn = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
+                try:
+                    for sheet in drawn.worksheets:
+                        if sheet.sheet_state != "visible":
+                            continue
+                        for obj in sheet._images:
+                            anchor = getattr(obj.anchor, "_from", None)
+                            ref = image(obj._data(), "image/" + obj.format, sheet=sheet.title,
+                                        row=getattr(anchor, "row", None), column=getattr(anchor, "col", None))
+                            block("Embedded image " + ref, sheet=sheet.title, image_refs=[ref])
+                finally:
+                    drawn.close()
         elif suffix in {".csv", ".tsv"}:
             text = raw.decode("utf-8-sig")
             reader = csv.reader(io.StringIO(text), delimiter="\t" if suffix == ".tsv" else ",")
