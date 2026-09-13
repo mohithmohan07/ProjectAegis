@@ -1,6 +1,30 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q62 (paired-break quote view, 13 September 2026).**
+**Latest owner amendment: Q63 (marking containment, 13 September 2026).**
+**A regression Q56 introduced, found in the owner's Triangles run.** Q56 gave
+marking the containment materialization already had — an impossible question
+becomes a BLOCKED row and the lane carries on — then undid it two lines later.
+`assessment_release_run` snapshots the learner-facing text ONCE, above the
+containment; the marking containment removes blocked candidates AFTER that
+snapshot, so each is in the baseline and absent from the candidates, and
+`_assert_learner_text_unchanged` reads the deliberate removal as an altered text
+and RAISES. Materialization's older containment runs BEFORE the snapshot, which
+is why the owner's Pre lane published (5 blocked, `released_with_warnings`) while
+Post died on "assessment grouping altered immutable learner-facing question text"
+naming exactly the 4 candidates marking had blocked. The baseline is now rebased
+onto the survivors, keeping the ORIGINAL snapshot rows — a fresh snapshot there
+would erase a genuine rewrite in that same stage, the one thing the assertion is
+for. The error also names its stage: five stages share it and it said "grouping"
+for all of them. **Reported and NOT fixed, awaiting the owner:** keyword weights
+can be unsatisfiable — each must be a positive multiple of 0.5 AND they must sum
+to the subquestion's marks, so a solution exists only when marks >= 0.5 x
+keywords; the run shows 0.25 x 2 and 0.375 x 4, both impossible, and the defect
+text never names the coupling (the Q58/Q61 family). And the KaTeX explanation
+cycle recorded under Q56 has now cost a real question (`PRC-0021-PRQ-0001`),
+refused both for not beginning with the exact LaTeX answer and for raw_latex.
+Q63 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q62 (paired-break quote view, 13 September 2026).**
 **This CORRECTS Q60.** Q60 claimed `concept_question_quote.locate` "recovers 100
 of the 100 failing quotes"; that measurement fed `locate` the output of
 `view(raw_slice)` — by construction the one form `view(source)` already contains.

@@ -3876,3 +3876,63 @@ lane and every finished, paid-for question in it — so the safe order is Q56's
 contained BLOCKED row first, and that is a pipeline change for the owner to
 decide.
 
+## Q63 — decided — a question blocked at marking no longer takes the lane with it
+
+**This is a regression Q56 introduced, found in the owner's Triangles run.**
+
+Q56 gave marking the same containment materialization already had: an
+impossible question becomes a recorded BLOCKED row and the lane carries on,
+"so one impossible question can no longer take a whole lane and every other
+finished, paid-for question with it". Two lines later, it did exactly that.
+
+### The mechanism
+
+`assessment_release_run` snapshots the learner-facing text **once**, above the
+containment, and five later stages assert it is unchanged. The marking
+containment removes the blocked candidates *after* that snapshot, so each one
+is present in the baseline and absent from the candidates —
+`_assert_learner_text_unchanged` reads the deliberate removal as an altered
+text and **raises**, killing the lane.
+
+Materialization's older containment runs *before* the snapshot is taken, which
+is why it never showed this and why the owner's Pre lane published normally.
+
+### Measured on the owner's run
+
+| lane | blocked at | outcome |
+| --- | --- | --- |
+| Output 02 (Pre) | materialization — 5 questions | published, `released_with_warnings` |
+| Output 04 (Post) | **marking — 4 questions** | **dead:** *"assessment grouping altered immutable learner-facing question text: ['CAND-0f36286bc75c02d0', 'CAND-6a28bd47f57e2604', 'CAND-d2b8e2ec5e0e12dd', 'CAND-d8789f09bbc7589c']"* |
+
+Four blocked, four "altered" ids — the same four.
+
+### Decided
+
+After the containment, the baseline is rebased onto the survivors. The rows
+kept are the **original** snapshot rows, never a fresh snapshot: re-reading the
+candidates there would also erase a genuine rewrite made in that same stage,
+which is the one thing the assertion exists for. The removal itself is already
+recorded as a BLOCKED row and in the "continues with N of M" log line, so
+nothing becomes silent.
+
+The error also names its stage. Five stages share that assertion and the
+message said "grouping" for every one of them, so the owner's log blamed
+grouping for something marking did.
+
+### Two contract contradictions this run also surfaced — reported, NOT fixed
+
+* **Keyword weights can be unsatisfiable.** `assessment_release` requires each
+  keyword weight to be a positive multiple of 0.5 *and* the weights to sum to
+  the subquestion's marks. For K keywords a solution exists only when the
+  subquestion's marks are at least `0.5 × K`. The run shows 0.25 across two
+  keywords (0.5 marks) and 0.375 across four (1.5 marks) — both impossible.
+  The model oscillates between the two gates, exhausts its attempts and the
+  Fixer, and the question is dropped. The defect text never names the coupling,
+  so it is never told why it cannot win. The same family as Q58 and Q61.
+* **The KaTeX explanation cycle is biting.** `PRC-0021-PRQ-0001` was refused
+  for *"answer_explanation must begin with the option label and the exact
+  correct answer text `'\text{AB} \perp \text{CD}'`"* **and** for
+  *"rich-text: raw_latex"*. Beginning with the exact answer means emitting raw
+  LaTeX, which the rich-text gate forbids. This is the closed cycle already
+  recorded under Q56 as awaiting the owner; it has now cost a real question.
+

@@ -391,8 +391,15 @@ def _learner_text_snapshot(candidates: list[Mapping]) -> list[tuple]:
 
 
 def _assert_learner_text_unchanged(
-    before: list[tuple], candidates: list[Mapping],
+    before: list[tuple], candidates: list[Mapping], *, stage: str = "grouping",
 ) -> None:
+    """Refuse a stage that rewrote learner-facing text it may not touch.
+
+    ``stage`` names the caller. Five stages share this check and the message
+    said "grouping" for every one of them, so an operator reading the error
+    could not tell which stage had rewritten the text (owner report, the
+    Triangles run, 13 September 2026 — where the real one was marking).
+    """
     after = _learner_text_snapshot(candidates)
     if after == before:
         return
@@ -404,7 +411,7 @@ def _assert_learner_text_unchanged(
         if before_by_id.get(candidate_id) != after_by_id.get(candidate_id)
     )
     raise grouping.GroupingError(
-        "assessment grouping altered immutable learner-facing question text"
+        f"assessment {stage} altered immutable learner-facing question text"
         + (f": {changed}" if changed else "")
     )
 
@@ -2640,7 +2647,9 @@ def run_release_for_job(
         }
         if _needs_review(verdict):
             _append_warning(candidate, _ANSWER_RESTRICTION_WARNING)
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="answer restriction",
+    )
     _snapshot_answer_restrictions(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -2727,6 +2736,27 @@ def run_release_for_job(
         if not generate_lane:
             atoms = [atoms[index] for index in keep]
         blocked_candidates = blocked_candidates + marking_blocked
+        # Rebase the immutability baseline onto the survivors. It was taken
+        # ABOVE this containment, so a blocked candidate is absent from the
+        # snapshot's counterpart and `_assert_learner_text_unchanged` reads
+        # the deliberate removal as an altered text — and RAISES, killing the
+        # whole lane. That is exactly what Q56's containment exists to
+        # prevent, undone two lines later: measured on the owner's Triangles
+        # run, 4 questions blocked at marking produced
+        # "assessment grouping altered immutable learner-facing question
+        # text: [4 candidate ids]" and took Output 04 with them, while the
+        # Pre lane published because materialization's older containment runs
+        # BEFORE the snapshot is taken.
+        #
+        # The rows kept are the ORIGINAL snapshot rows, never a fresh
+        # snapshot: re-reading the candidates here would also erase a genuine
+        # rewrite made in this same stage, which is the one thing the
+        # assertion is for. Removal is recorded above as a BLOCKED row and in
+        # the log line below; it is never silent.
+        surviving = {str(candidate.get("candidate_id") or "") for candidate in candidates}
+        learner_text_before = [
+            row for row in learner_text_before if str(row[0]) in surviving
+        ]
         progress.log(
             f"Master file continues with {len(candidates)} of "
             f"{len(candidates) + len(marking_blocked)} marked question(s); "
@@ -2771,7 +2801,9 @@ def run_release_for_job(
         }
         if _needs_review(verdict):
             _append_warning(candidate, _MARKING_WARNING)
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="marking",
+    )
     _snapshot_markings(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -2834,7 +2866,9 @@ def run_release_for_job(
             }
             if review.get("review_flags"):
                 _append_warning(candidate, item_review.WARNING)
-        _assert_learner_text_unchanged(learner_text_before, candidates)
+        _assert_learner_text_unchanged(
+            learner_text_before, candidates, stage="item review",
+        )
 
     # Stage 7 — route only across the immutable staged concept-release
     # concepts (this run's own lane; OD4 numbers them 01 or 03).
@@ -3011,7 +3045,9 @@ def run_release_for_job(
         concept_key = str(candidate["concept_key"])
         buckets.setdefault((concept_key, tier), []).append(candidate)
 
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="levels",
+    )
     _snapshot_levels(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -3281,7 +3317,9 @@ def run_release_for_job(
             _append_warning(record, _QUALITY_WARNING)
         _observe_stage(stage_progress, "qa", group_index + 1, len(qa_groups))
 
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="grouping",
+    )
     _snapshot_groups(
         snapshot_directory,
         envelope_sha256=envelope_sha,
