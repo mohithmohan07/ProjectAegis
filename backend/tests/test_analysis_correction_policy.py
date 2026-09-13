@@ -448,3 +448,77 @@ def test_new_envelopes_freeze_the_policy_and_the_golden_one_does_not(golden_enve
 
     source = inspect.getsource(contract)
     assert "analysis_correction_policy.KEY: analysis_correction_policy.VERSION" in source
+
+
+# ---------------------------------------------------------------------------
+# verification follow-ups (Q68)
+
+
+def test_the_author_instruction_states_the_schema_and_forbids_inner_labels():
+    assert '"correction"' in policy.AUTHOR_INSTRUCTION
+    assert "stated response schema" in policy.AUTHOR_INSTRUCTION
+    assert "Do not number an item's text or correction yourself" in policy.AUTHOR_INSTRUCTION
+    assert "'Common mistake:'" in policy.AUTHOR_INSTRUCTION
+
+
+@pytest.mark.parametrize("checker, item_id", [
+    (analyse._inventory_checker, "LA-0001"),
+    (preanalyse._inventory_checker, "PLA-0001"),
+])
+def test_a_reserved_inline_label_inside_either_half_is_refused_under_the_policy(checker, item_id):
+    """A correction carrying "a common mistake:" would be torn by the section
+    normaliser at the deposit fixpoint; the gated checker refuses the shape."""
+    base = {"item_id": item_id, "kind": "misconception", "text": "a belief"}
+    strict = checker(require_correction=True)
+    torn = {**base, "correction": "They differ; a common mistake: treating transfer as fusion."}
+    assert any("reserved section label" in d and "correction" in d for d in strict({"items": [torn]}))
+    labelled_text = {**base, "text": "Misconceptions: light bends in air", "correction": "It does not."}
+    assert any("reserved section label" in d and "text" in d for d in strict({"items": [labelled_text]}))
+    assert strict({"items": [{**base, "correction": "They differ: transfer is not fusion."}]}) == []
+    # The historical checker is byte-identical in behaviour.
+    assert checker()({"items": [torn]}) == []
+
+
+def test_a_pair_closes_its_sentence_before_a_trailing_image_tag():
+    tag = '[img src="https://x.test/a.png" alt="A flower"]'
+    assert assemble._close_sentence("See the flower " + tag) == "See the flower. " + tag
+    assert assemble._close_sentence("Already closed. " + tag) == "Already closed. " + tag
+    assert assemble._close_sentence("No tag") == "No tag."
+    assert assemble._close_sentence("Closed!") == "Closed!"
+    rendered = assemble._join_analysis_pairs([("Light bends " + tag, "It travels straight")])
+    assert rendered == "(1) Light bends. " + tag + " Correction: It travels straight."
+
+
+def test_refine_release_discards_a_refinement_that_drops_a_correction_half(monkeypatch):
+    from app.services import release_refiner
+    from tests import test_release_refiner as fixtures
+
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "all")
+    paired = (
+        "Description: Learners see how ordinary citizens came to define political "
+        "belonging.\nAchieving Mastery: Explain who constitutes a nation. // "
+        "Misconception/ Error Analysis: Misconceptions: (1) Monarchs granted "
+        "nationhood as a favour. Correction: Nationhood came from popular "
+        "sovereignty. (2) Only the nobility were citizens. Correction: The "
+        "revolution made every Frenchman a citizen."
+    )
+    sibling = fixtures._rows()[0]
+    sibling["concept_title"] = "An Independent Concept"
+    original = [dict(fixtures._rows()[0], concept_details=paired), sibling]
+
+    def edit(details):
+        return details.replace(
+            " Correction: The revolution made every Frenchman a citizen.", ""
+        ).replace("Learners see how", "Learners discover how")
+
+    refined, diff, flags = release_refiner.refine_release(
+        original,
+        metadata=fixtures._METADATA,
+        provider=fixtures._Provider(details_override=edit),
+        store=kernel.DecisionStore(),
+    )
+    # The pair-dropping refinement is discarded; the sibling's wording polish lands.
+    assert refined[0] == original[0]
+    assert "Learners discover how" in refined[1]["concept_details"]
+    assert diff["changes"]
+    assert any("identity drift" in flag and "pairing changed" in flag for flag in flags)

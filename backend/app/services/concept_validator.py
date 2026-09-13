@@ -190,6 +190,23 @@ def _example_image_figure_ids(text: str) -> set[str]:
     return ids
 
 
+def _repeated_image_urls(text: str) -> list[str]:
+    """Image URLs embedded more than once in one row's details (mechanics).
+
+    Counts every canonical ``[img src=...]`` tag and every markdown
+    ``![alt](url)`` image by its exact URL. A repeat is recorded as a
+    warning for the reviewer and never dropped: whether a hub note and a
+    Type Example may both carry an activity's picture, and whether a claimed
+    figure also earns a captioned hub entry, are the owner's Q67 questions.
+    """
+    counts: Counter[str] = Counter()
+    for match in _CANONICAL_IMAGE_TAG_RE.finditer(text or ""):
+        counts[str(match.group("src") or "").strip()] += 1
+    for match in katex_rules._MARKDOWN_IMAGE_RE.finditer(text or ""):
+        counts[str(match.group("src") or "").strip()] += 1
+    return [url for url, count in counts.items() if url and count > 1]
+
+
 def _mask_allowed_source_examples(
     details: str, allowed_source_examples: Collection[str],
 ) -> str:
@@ -698,6 +715,15 @@ def validate_concept_rows(
                 _add(
                     errors, i, "concept_details", "empty_image_alt",
                     "Shipped images need a source-grounded figure caption/alt",
+                    "warning",
+                )
+            repeated_urls = _repeated_image_urls(details)
+            if repeated_urls:
+                _add(
+                    errors, i, "concept_details", "duplicate_image_url",
+                    "the same image is embedded more than once in this row "
+                    "(reviewer's rule: no image URL repeats within a concept): "
+                    + ", ".join(repeated_urls),
                     "warning",
                 )
         if not allow_types and _has_types(details):

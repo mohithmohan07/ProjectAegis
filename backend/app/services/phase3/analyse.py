@@ -221,6 +221,22 @@ def _inventory_checker(
                 defects.append(
                     f"{item_id or expected[position]} has empty correction"
                 )
+            if require_correction:
+                # A reserved section label inside either half is a shape the
+                # composer would split on (``normalize_analysis_sections``
+                # tears the pair at it); refusing it judges formatting, not
+                # meaning, and stays gated so historical checkers are
+                # byte-identical.
+                from .. import concept_refiner as cr
+
+                for field in ("text", "correction"):
+                    if cr._INLINE_ANALYSIS_RE.search(_normal(row.get(field))):
+                        defects.append(
+                            f"{item_id or expected[position]} {field} contains "
+                            "a reserved section label (Misconceptions:/Error "
+                            "Analysis:/Common|Possible Error|Mistake:) the "
+                            "composer would split on"
+                        )
         return defects
 
     return check

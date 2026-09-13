@@ -4325,7 +4325,9 @@ place where a rule's FORM changed is named below.
 * **Duplicate case titles as a coverage defect** in the mining follow-up
   (the prompt rule is in). — DONE, see Q71.
 * **Placeholder captions minted into source text** (`_markdown_image`,
-  `render_semantic_source`) and a per-row duplicate-image warning.
+  `render_semantic_source`) and a per-row duplicate-image warning. — DONE,
+  see Q72 (the reader stamp is deliberately not bumped — owner question
+  recorded there).
 * Ten remaining hub/figure/caption items: captions losing their printed
   "Figure 7.2" (an extraction-prompt clarification), hub labels for bare
   markers, a captioned entry for a claimed figure (owner).
@@ -4512,7 +4514,27 @@ checker runs without the requirement, the suffix is empty — the decision key
 is exactly the pre-change key, and a cache hit (served unchecked) carries no
 `correction`, so the section renders exactly as it always did. A run
 mid-flight at deployment keeps its sealed envelope, so it keeps the old
-prompt, checker and render with no re-spend and no mixed shapes.
+prompt, checker and render with no mixed shapes; one exception the
+verification measured: `kernel._callable_contract_hash` hashes the checker's
+bytecode into the PENDING-author receipt, so a run interrupted INSIDE the
+2.4 build authoring re-makes that one author call after deploy (stored
+decisions are served unchecked and are unaffected).
+
+**Verification follow-ups (same day).** The adversarial verification found:
+(a) a correction carrying a reserved inline label ("a common mistake: …")
+would be TORN by `normalize_analysis_sections` at the deposit fixpoint — the
+author instruction now states the six-field schema, forbids self-numbering
+and forbids a section label inside either half, and, under the policy only,
+both checkers refuse the shape (mechanics: formatting the composer would
+split on); (b) the frozen `*_SYSTEM` constants still state the five-field
+schema while `_SHARED` asks the model to match "the stated schema" — the
+instruction now restates the schema for this request, so the constants (and
+the prompt digests) stay untouched; (c) `_close_sentence` wrote "]." after a
+trailing image tag — it now punctuates before the tag, the Q67 hub-note
+principle; (d) the pair-token regex shipped as `\(\d+\)(?=\s)|Correction:`,
+narrower than the design's, and is kept; (e) the refiner discard is now
+pinned end to end. Known and left to the critic: a refinement that swaps the
+two texts between pairs while keeping the markers passes the mechanical gate.
 
 **Still with the owner (Q67's two sibling questions, untouched here):** a
 block on EVERY non-culmination concept (would remove "NOT every concept
@@ -4839,4 +4861,70 @@ run never asks; a title repair that drops a QID is rejected; the Fixer resort
 re-titles exactly the listed Cases, leaves every other field byte-identical,
 replays for free, refuses an answer that still repeats, and ships the Cases
 as mined when there is no Fixer). No paid generation.
+
+## Q72 — decided — no placeholder caption reaches the source the authors read; a repeated image in one row is named
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"); ONE owner question below.
+**Date:** 2026-09-13. **Amends:** Q67 (executes its last "planned next"
+item). **Contract:** none changed.
+
+**Reproduced.** `canonical_source_phase221_fallback._markdown_image(url, "")`
+returned `![Source visual](url)`; the flat parser records the first non-empty
+markdown alt as the figure's `caption_raw`, so the placeholder became the
+PRINTED CAPTION of every uncaptioned figure in every gpt-pdf-to-acsd
+conversion — the pool caption, the hub note (guarded since Q67), the
+`[Source image alt text]` evidence line and a visible caption line. And
+`canonical_source_phase3.render_semantic_source` printed `Source visual` as a
+standalone caption line whenever `caption_raw` was empty (the Mathpix
+`![](url)` shape) — that rendered text is exactly what the Settle and
+analysis authors read.
+
+**Decided.** An uncaptioned figure keeps an EMPTY markdown alt (`![](url)`,
+the Mathpix shape the parser already reads; "empty when none is printed" is
+the extraction contract's own meaning). The renderer prints no caption line
+for an empty printed caption — gated by a stamp on the GRAPH
+(`figure_caption_render = unprinted-caption-blank-2026-09-13-v1`, written
+only at compile, outside `semantic_context_hash`), so
+`render_semantic_source(graph, canonical)` stays a pure function of its
+arguments and every sealed graph renders the line it was sealed with: the
+resume path's byte-equality against the stored semantic source holds, the
+migration ladder and the cached-graph loader see nothing new, and no cached
+decision key moves. The `[img]` alt still falls back to the literal as a last
+resort (`kr.image` refuses an empty alt) — that residual is the 2026-09-06
+audit's model-authored-alt item, owner-visible, out of scope here. The hub
+guard `_PLACEHOLDER_FIGURE_CAPTION_RE` STAYS: sealed canonicals still carry
+the literal as `caption_raw`. Stored MMDs are never rewritten. The validator
+warning `duplicate_image_url` counts exact URL repeats across canonical
+`[img]` tags and markdown images in one row's `concept_details`; severity
+warning, outside every blocking set, ignored by the Refiner's error keys,
+counted in every "validation … N warning(s)" line — recorded, never a drop.
+
+**Owner question (recorded, Option A applied).** The comment above
+`RENDER_VERSION` prescribes a bump "when the renderer changes what the same
+page ACSD looks like as MMD". Changing `![Source visual](url)` to `![](url)`
+does change it — but a bump makes `phase2._load_or_refresh_for_job` refuse
+EVERY already-converted upload at its next generation ("Convert this PDF
+again as a new upload") until it is reconverted at cost. Option A (applied):
+no bump; the exclusion is recorded beside the constant (precedent: the
+decision-only identities excluded from the reader stamp); existing uploads
+keep their stored MMD and stay correct through the graph stamp and the hub
+guard; only new conversions get the empty alt. Option B: bump
+`RENDER_VERSION` to `…-3` so every existing upload must be reconverted before
+it generates again — Q64's stranded class at scale. Which do you want?
+
+**Replay.** The MMD is written once per job and read forever; no code
+re-renders a stored MMD. The paid page-ACSD bundle cache is untouched. Every
+sealed graph lacks the stamp and renders the sealed form. Place's input
+changes only for NEW conversions (pool caption `""` instead of the literal,
+already the Mathpix case). Warning noise: `duplicate_image_url` fires on
+every row where projection puts an activity's picture in both its hub note
+and its Type Example — the reviewer's own criterion made visible; per-row
+routing of warnings is a separate change if wanted.
+
+### Verification
+
+Offline only: `tests/test_placeholder_captions.py` (the empty alt, the
+stamped render without the line, the sealed render with it, the unchanged
+context hash, the warning and its non-blocking status). No paid generation.
 

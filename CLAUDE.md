@@ -65,12 +65,19 @@ whitespace-and-case folding — the exact key the merger already uses), a title
 repair can never buy its fix with exact-once coverage, and what survives goes
 to the Fixer (`fixer.type_mining_case_titles`) for one recorded decision —
 or ships as mined, named in the log, when there is no Fixer; never a new
-halt. **Still with the owner:** Q67's contract questions (a block on every
+halt. (8, **Q72**) **No placeholder caption in the source the authors
+read.** An uncaptioned figure keeps an empty markdown alt and a NEW graph's
+stamp (`figure_caption_render`) makes the renderer print no caption line for
+an empty printed caption; every sealed graph renders the line it was sealed
+with, so resume byte-equality holds. `duplicate_image_url` is a per-row
+validator warning, never a drop. `RENDER_VERSION` is deliberately NOT bumped
+(a bump refuses every already-converted upload) — **owner question** under
+Q72. **Still with the owner:** Q67's contract questions (a block on every
 non-culmination concept; folding Error Analysis into numbered Misconceptions;
 whether opening concepts should carry lower tiers; four options per MCQ; an
 empty declared set as a mechanical defect; a chapter-wide title gate) and the
-last planned item (placeholder captions and the duplicate-image warning).
-Q68–Q71 in `docs/aegis-restructure.md`.
+reader-stamp question. Every Q67 "planned next" item is now executed.
+Q68–Q72 in `docs/aegis-restructure.md`.
 
 **Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
 The owner: "go through all of these properly … dont lose the technical details

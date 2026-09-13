@@ -25,7 +25,14 @@ AUTHOR_INSTRUCTION = (
     "is actually true, or the correct step, grounded on the same evidence "
     "the item cites. Every item carries both halves, paired one to one; a "
     "correction is never a bare negation or restatement of its text, and "
-    "carries no 'Correction:' label of its own."
+    "carries no 'Correction:' label of its own. Under this policy the stated "
+    "response schema for this request is {\"items\": [{\"item_id\", \"kind\": "
+    "\"misconception|error_analysis\", \"text\", \"correction\", \"evidence\", "
+    "\"rationale\"}]}. Do not number an item's text or correction yourself — "
+    "the output numbers them — and do not write a section label such as "
+    "'Misconceptions:', 'Error Analysis:', 'Common mistake:' or 'Possible "
+    "error:' inside either half; state the belief, the step, or what is true "
+    "directly."
 )
 CRITIC_INSTRUCTION = (
     "CORRECTION POLICY (named in this request): also flag a correction that "

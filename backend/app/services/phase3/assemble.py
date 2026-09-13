@@ -177,7 +177,20 @@ def _join_analysis_texts(texts: list[str]) -> str:
 
 
 def _close_sentence(text: str) -> str:
-    return text if re.search(r"[.!?;]\s*$", text) else text + "."
+    """Add a terminal period where a half lacks one, BEFORE a trailing image
+    tag (the principle Q67 applied to hub notes: never "…]." after a tag)."""
+    from .. import katex_rules as kr
+
+    tail = ""
+    match = None
+    for match in kr._IMAGE_TAG_RE.finditer(text):
+        pass
+    if match is not None and not text[match.end():].strip():
+        tail = text[match.start():]
+        text = text[:match.start()].rstrip()
+    if text and not re.search(r"[.!?;]\s*$", text):
+        text += "."
+    return (text + " " + tail).strip() if tail else text
 
 
 def _join_analysis_pairs(pairs: list[tuple[str, str]]) -> str:
@@ -186,7 +199,9 @@ def _join_analysis_pairs(pairs: list[tuple[str, str]]) -> str:
     ``(n)`` is the pair's position within THIS component (the caller
     passes item-id order), never the LA-/PLA- item id, which rides only
     the row-private allotment marker. Each half gets a terminal period
-    where it lacks one — the same join ``_join_analysis_texts`` applies —
+    where it lacks one (``_join_analysis_texts`` closes only BETWEEN the
+    items it joins; a pair closes its last half too, so every pair ends its
+    sentence) —
     and one leading ``Correction:`` echo is dropped
     (``concept_refiner.strip_correction_label_echo``). A pair whose
     correction is empty renders its text alone, so nothing recorded is

@@ -13,7 +13,9 @@ decision by re-parsing the refined ``concept_details`` and requiring the
 section labels, every non-editable section (Types, Activity/Info Hub), the
 Type/Case/Example token structure, and every QID string to be byte-identical;
 image attachments also retain their exact tokens and order within each section
-or keyword field, including their source URLs and alt text;
+or keyword field, including their source URLs and alt text; a pair-rendered
+Misconception/ Error Analysis section keeps its '(n)' ordinals and
+'Correction:' markers in order (Q68);
 a violating refinement is DISCARDED with a review flag, never applied. Every
 refinement is recorded as a diff on the release, the terminal validator is
 re-run mechanically afterwards (a refinement that introduces a NEW error is

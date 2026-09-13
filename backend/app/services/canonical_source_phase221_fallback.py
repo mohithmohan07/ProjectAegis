@@ -1302,6 +1302,17 @@ PAGE_EXTRACTION_DECISION_VERSION = "page-extraction-decision-3"
 # when the renderer changes what the same page ACSD looks like as MMD (so
 # already-converted sources are recognized as stale) without invalidating
 # the paid page-transcription caches.
+# Deliberately NOT bumped for the figure-alt default (Q72): an uncaptioned
+# figure now renders ``![](url)`` instead of ``![Source visual](url)``. That
+# is data inside one figure block, not the topic/question structure the
+# staleness refusal protects; a bump would make
+# ``phase2._load_or_refresh_for_job`` refuse every already-converted upload
+# ("Convert this PDF again as a new upload") until it is reconverted at
+# cost. Stored MMDs keep their literal; the graph stamp
+# ``canonical_source_phase3.FIGURE_CAPTION_RENDER_KEY`` and the hub guard
+# ``generation._PLACEHOLDER_FIGURE_CAPTION_RE`` keep those jobs correct.
+# Whether to bump instead (refusing every existing upload) is the owner's
+# question, recorded under Q72.
 RENDER_VERSION = "task-cues-verbatim-full-table-assets-2"
 # Task cues render as a sub-level heading under an active outline: deep
 # enough not to be read as a chapter topic, still a heading so the
@@ -3511,7 +3522,15 @@ def _markdown_heading(level: int, text: str) -> str:
 
 
 def _markdown_image(url: str, caption: str) -> str:
-    safe = re.sub(r"\s+", " ", str(caption or "Source visual")).strip()
+    # An uncaptioned figure keeps an EMPTY alt (Q72). The flat parser records
+    # the first non-empty markdown alt as the figure's ``caption_raw``, so a
+    # minted "Source visual" became the printed caption of every uncaptioned
+    # figure: the pool caption, the hub note (guarded since Q67) and a visible
+    # caption line in the semantic source the authors read. ``![](url)`` is
+    # the Mathpix shape the parser already reads; an empty caption_raw is the
+    # extraction contract's own meaning ("empty when none is printed").
+    # Stored MMDs are never rewritten (see RENDER_VERSION).
+    safe = re.sub(r"\s+", " ", str(caption or "")).strip()
     safe = safe.replace("[", "(").replace("]", ")")
     return f"![{safe}]({url})"
 

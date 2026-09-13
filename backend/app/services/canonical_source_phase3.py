@@ -91,6 +91,16 @@ _SOURCE_REVIEW_KEY = "human_source_review"
 _DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
 _MACHINE_METADATA_MIGRATION_KEY = "machine_metadata_sanitization"
 _MACHINE_METADATA_MIGRATION_VERSION = 1
+
+# Q72: a figure with no printed caption renders NO caption line (the literal
+# "Source visual" used to be printed as one, and that rendered text is what
+# the concept authors read). The stamp lives on the GRAPH so
+# ``render_semantic_source(graph, canonical)`` stays a pure function of its
+# arguments: a graph sealed without it renders the line it was sealed with,
+# so the resume path's byte-equality against ``source.semantic.mmd`` holds
+# and no cached decision key moves. Not part of ``semantic_context_hash``.
+FIGURE_CAPTION_RENDER_KEY = "figure_caption_render"
+FIGURE_CAPTION_RENDER_VERSION = "unprinted-caption-blank-2026-09-13-v1"
 _ADJUDICATED_HEADING_MIGRATION_KEY = (
     "adjudicated_heading_validation_migration"
 )
@@ -1977,6 +1987,7 @@ def compile_semantic_graph(
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        FIGURE_CAPTION_RENDER_KEY: FIGURE_CAPTION_RENDER_VERSION,
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "phase": PHASE,
         "status": "ready" if not suspicious_blocks else "review_required",
@@ -2336,6 +2347,9 @@ def render_semantic_source(
     emitted_sections: set[str] = set()
     pieces: list[str] = []
     pending_text: list[str] = []
+    unprinted_caption_blank = (
+        graph.get(FIGURE_CAPTION_RENDER_KEY) == FIGURE_CAPTION_RENDER_VERSION
+    )
     virtual_sections = sorted(
         [
             row for row in graph.get("sections") or []
@@ -2426,8 +2440,14 @@ def render_semantic_source(
         if kind == "figure":
             flush_pending()
             figure = figure_by_id.get(str(block.get("figure_id") or ""), {})
+            # A stamped graph prints NO caption line for a figure whose
+            # printed caption is empty; an unstamped (sealed) graph keeps the
+            # "Source visual" line it was sealed with. The [img] alt in the
+            # loop below still falls back to the literal as a last resort:
+            # kr.image refuses an empty alt ("image alt text is required").
             caption = _clean_public_text(
-                figure.get("caption_raw") or "Source visual",
+                figure.get("caption_raw")
+                or ("" if unprinted_caption_blank else "Source visual"),
                 strip_machine_metadata=strip_machine_metadata,
                 preserve_markdown_code=preserve_markdown_code,
             )
