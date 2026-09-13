@@ -98,6 +98,25 @@ def bootstrap() -> None:
                 "complete Master publication reconciliation failed",
                 exc_info=True,
             )
+        # A Step 2 run lives on a worker thread inside THIS process, and its
+        # "running" flag is a process-local lock. Any job still marked
+        # master_building when a fresh process starts belongs to a worker that
+        # no longer exists, so retire it with a named reason instead of
+        # leaving it building forever.
+        try:
+            from .services import build_concepts_release as concept_release
+
+            interrupted = concept_release.sweep_interrupted_master_builds(db)
+            if interrupted:
+                logging.getLogger(__name__).warning(
+                    "retired %d interrupted Master build(s): %s",
+                    len(interrupted), interrupted,
+                )
+        except Exception:
+            db.rollback()
+            logging.getLogger(__name__).warning(
+                "interrupted Master build sweep failed", exc_info=True,
+            )
         syllabus_svc.bootstrap_syllabus(db)
     finally:
         db.close()

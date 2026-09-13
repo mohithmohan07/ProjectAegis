@@ -1,6 +1,27 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q55 (chapter-code de-collision, 12 September 2026).**
+**Latest owner amendment: Q56 (Step 2 failure reporting, 13 September 2026).**
+Two jobs failed Step 2 for three unrelated reasons behind one uninformative
+message. The owner chose the reliability set first. A Master lane now emits an
+error event naming its exception before the worker swallows it, plus a server
+traceback. `assessment_marking.decide_markings` contains an exhausted decision as
+a recorded BLOCKED row, exactly as `assessment_materialization` already does, so
+one impossible question can no longer take a whole lane and every other finished,
+paid-for question with it; a lane left with nothing refuses explicitly.
+`master_outputs[lane].reason` transcribes the recorded issue and the console
+renders the failing lane and reason instead of a fixed sentence. A startup sweep
+retires any job still marked `master_building`, since that marker is durable
+while the running flag is a process-local lock. 5xx/408/429 on the streaming POST
+are transport, so a gateway 502 reaches the reattach path instead of stranding
+the run. The batch queue records a refused Master lane as failed, not done.
+Nothing changes what a run produces. **Reported and NOT fixed, awaiting the
+owner:** `katex_rules._equation_has_loose_prose` is a `[A-Za-z]{2,}` regex that
+rejects valid KaTeX (`AC`, `\angle BAC`, `\triangle ABC \sim \triangle DEF`,
+`\frac{AB}{DE}`) as plain text — a Rule 1 violation — and forms a closed cycle
+with two sibling gates in which exactly one undocumented spelling passes. Q56 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q55 (chapter-code de-collision, 12 September 2026).**
 The owner asked to fix the colliding chapter codes. Measured: 74 base codes were
 claimed by more than one identity and hid 109 chapters — 42 because two titles
 truncate to the same 12-character slug, 32 because one title appears under two

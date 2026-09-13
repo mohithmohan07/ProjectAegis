@@ -358,3 +358,62 @@ test("an unreadable directory lookup raises the readable HTTP error", async () =
     "the directory could not be read",
   );
 });
+
+// --------------------------------------------------------------------------- //
+// A gateway failure on the streaming POST is transport, not an answer (Q56)
+// --------------------------------------------------------------------------- //
+// A generation run lives on a worker thread and keeps going when the edge drops
+// the request. Throwing a plain Error for a 502 bypassed every reattach path and
+// left job 139 stranded at master_building with one retained log line
+// (owner report, 12 September 2026).
+
+test("a 502 on the streaming POST is a StreamTransportError, not a plain Error", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 502,
+    statusText: "Bad Gateway",
+    body: null,
+    json: async () => {
+      throw new Error("not json");
+    },
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const error = await streamNdjson("/stream", {}, vi.fn()).then(
+    () => null,
+    (caught: unknown) => caught,
+  );
+
+  expect((error as Error).name).toBe("StreamTransportError");
+  expect((error as { status?: number }).status).toBe(502);
+});
+
+test("a 422 on the streaming POST stays a refusal and is NOT reconnectable", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 422,
+    statusText: "Unprocessable Entity",
+    body: null,
+    json: async () => ({ detail: "the reviewed file is not readable" }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const error = await streamNdjson("/stream", {}, vi.fn()).then(
+    () => null,
+    (caught: unknown) => caught,
+  );
+
+  expect((error as Error).name).toBe("Error");
+  expect((error as Error).message).toContain("not readable");
+});
+
+test("the transport classifier agrees with the run-events poller", async () => {
+  const { isTransientTransportStatus, isNonTransientStatus } = await import("./client");
+  for (const status of [500, 502, 503, 504, 408, 429]) {
+    expect(isTransientTransportStatus(status)).toBe(true);
+    expect(isNonTransientStatus({ status })).toBe(false);
+  }
+  for (const status of [400, 401, 403, 404, 410, 422]) {
+    expect(isTransientTransportStatus(status)).toBe(false);
+  }
+});

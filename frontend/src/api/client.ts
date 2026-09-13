@@ -67,6 +67,20 @@ export function isNonTransientStatus(error: unknown): boolean {
   );
 }
 
+/**
+ * A status that means "the edge or the server faltered", not "the server
+ * refused". A generation run lives on a worker thread and keeps going when the
+ * gateway drops the request, so these must reach the stream's reattach path
+ * rather than ending the run in the console: a Fly-generated 502 on the Step 2
+ * POST used to be thrown as a plain Error, which bypassed every recovery
+ * mechanism and left the job stranded at master_building with one retained log
+ * line (owner report, job 139, 12 September 2026). The run-events poller
+ * already retries exactly these; the streaming POST now agrees with it.
+ */
+export function isTransientTransportStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429;
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const baseHeaders: Record<string, string> =
     init?.body instanceof FormData ? {} : { "Content-Type": "application/json" };
@@ -131,11 +145,15 @@ export type StreamEvent =
  */
 export class StreamTransportError extends Error {
   cause?: unknown;
+  /** Set when the transport failure arrived as an HTTP status (e.g. a
+   * gateway 502) rather than as a dropped socket. */
+  status?: number;
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, status?: number) {
     super(message);
     this.name = "StreamTransportError";
     this.cause = cause;
+    this.status = status;
   }
 
   /** Page error boxes render String(err); a person should read what
@@ -180,6 +198,11 @@ export async function streamNdjson<T = unknown>(
       if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
     } catch {
       /* keep status text */
+    }
+    if (!res.ok && isTransientTransportStatus(res.status)) {
+      // Transport class, not an answer: let the caller reattach and read the
+      // run journal to discover what the server-side run actually did.
+      throw new StreamTransportError(detail, undefined, res.status);
     }
     throw new Error(detail);
   }

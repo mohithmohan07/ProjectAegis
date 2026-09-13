@@ -42,6 +42,16 @@ from .phase3 import kernel
 # ``-8`` adopts Master Governing Contract v2.0 §27.5/§32: every Descriptive
 # rubric criterion carries exactly 0.5 or 1 mark.
 MARKING_POLICY_VERSION = "assessment-marking-9-column-spec"
+
+# Q56: a candidate whose marking exhausted bounded corrections AND The Fixer
+# comes back carrying this key instead of a verdict. Materialization has
+# contained the same exhaustion since its own blocked-row seam
+# (``assessment_materialization.BLOCKED_ELIGIBILITY``); marking did not, so one
+# impossible question raised ContractError out of the decision fan-out and took
+# the entire Master lane — 51 finished, paid-for questions — down with it
+# (owner report, 12 September 2026). Same trade, same answer: the question is
+# refused and named, the lane ships.
+BLOCKED_MARKER = "marking_blocked"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 _PROMPT_CACHE_STABLE_KEYS = (
@@ -1410,7 +1420,7 @@ def decide_markings(
     ) -> dict[str, Any]:
         candidate_id, candidate, cell, total_marks, contract = unit
         payload = _payload(candidate, cell, contract, meta=metadata, format_policy=format_policy)
-        decision = kernel.decide(
+        decide = lambda: kernel.decide(  # noqa: E731 — one call, two callers
             kind="assessment.marking",
             unit_id=candidate_id,
             envelope_sha256=envelope_sha,
@@ -1444,6 +1454,26 @@ def decide_markings(
             policy_version=MARKING_POLICY_VERSION,
             fixer=fixer,
         )
+        try:
+            decision = decide()
+        except kernel.ContractError as error:
+            # Bounded corrections AND The Fixer both exhausted on this ONE
+            # candidate (kernel.decide raises only after both). Materialization
+            # already answers this exact condition with a recorded blocked row
+            # rather than a raise, for the reason CLAUDE.md gives in as many
+            # words — "finished work always ships". Marking had no such seam,
+            # so the exception escaped the fan-out, escaped the lane worker,
+            # and cost every other finished question in the lane. Refuse this
+            # one, name every defect, and let the lane continue.
+            return {
+                "candidate_id": candidate_id,
+                BLOCKED_MARKER: True,
+                "flags": [
+                    "marking blocked after bounded corrections and the "
+                    "Fixer: " + str(defect)
+                    for defect in (error.defects or [str(error)])
+                ],
+            }
         result = _assemble(
             decision["response"],
             candidate_id=candidate_id,

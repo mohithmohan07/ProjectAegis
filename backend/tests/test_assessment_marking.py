@@ -1679,3 +1679,71 @@ def test_generic_profile_rejects_an_invented_duration_basis(monkeypatch):
         "must be null when no per-subpoint" in defect
         for defect in exc_info.value.defects
     )
+
+
+# --------------------------------------------------------------------------- #
+# One impossible candidate must not take the whole Master lane (Q56)
+# --------------------------------------------------------------------------- #
+# Materialization has contained an exhausted decision as a recorded BLOCKED row
+# since its own seam; marking had no such catch, so `kernel.ContractError` rose
+# out of the fan-out, out of the lane worker's bare `except Exception`, and cost
+# 51 finished, paid-for questions with no log line at all (owner report,
+# 12 September 2026).
+
+
+def test_a_candidate_whose_marking_exhausts_is_blocked_not_raised(
+    monkeypatch,
+) -> None:
+    """The lane survives; the question is refused and every defect is named."""
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+
+    def never_valid_author(request: dict) -> dict:
+        # Always fails the checker: bounded corrections exhaust.
+        response = _valid_response(request)
+        response["marks"] = "not-a-number"
+        return response
+
+    def never_valid_fixer(_request: dict) -> dict:
+        # The Fixer's request carries the blocked check, not the candidate;
+        # anything it returns here still fails the same checker.
+        return {"marks": "not-a-number"}
+
+    rows = marking.decide_markings(
+        [(_candidate(), _cell())],
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=never_valid_author,
+        critic=lambda request: _verified(request),
+        store=kernel.DecisionStore(),
+        fixer=never_valid_fixer,
+    )
+
+    assert len(rows) == 1
+    blocked = rows[0]
+    assert blocked[marking.BLOCKED_MARKER] is True
+    assert blocked["candidate_id"]
+    # Every defect is carried out verbatim so the reviewer sees what failed.
+    assert blocked["flags"], blocked
+    assert all(
+        flag.startswith("marking blocked after bounded corrections and the ")
+        for flag in blocked["flags"]
+    )
+
+
+def test_a_sound_candidate_is_unaffected_by_the_block_seam(monkeypatch) -> None:
+    """The containment must not change a verdict that passes the checker."""
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+
+    rows = marking.decide_markings(
+        [(_candidate(), _cell())],
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=lambda request: _valid_response(request),
+        critic=lambda request: _verified(request),
+        store=kernel.DecisionStore(),
+        fixer=_forbidden("the Fixer"),
+    )
+
+    assert len(rows) == 1
+    assert marking.BLOCKED_MARKER not in rows[0]
+    assert rows[0]["marks"] is not None

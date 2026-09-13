@@ -64,6 +64,37 @@ export function fourOutputCompletionFromResult(
   };
 }
 
+export interface MasterLaneFailure {
+  lane: MasterLane;
+  label: string;
+  reason: string;
+}
+
+/**
+ * Why each unavailable Master lane has no file, in the backend's own words.
+ *
+ * The backend records the failing lane's exception type and message onto that
+ * lane's staged payload and returns it as `master_outputs[lane].reason`. The
+ * console used to discard it and print one fixed sentence, so a rate-limit
+ * wall, a gateway death and a contract fault mid-marking were indistinguishable
+ * to the reviewer. Read what was actually recorded.
+ */
+export function masterLaneFailures(data: unknown): MasterLaneFailure[] {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const result = data as Record<string, unknown>;
+  const masterOutputs = asRecord(result.master_outputs)
+    ?? asRecord(asRecord(result.concept_review)?.master_outputs);
+  if (!masterOutputs) return [];
+  return (["pre", "post"] as MasterLane[]).flatMap((lane) => {
+    const laneResult = asRecord(masterOutputs[lane]);
+    if (!laneResult || laneResult.ready === true) return [];
+    const reason = typeof laneResult.reason === "string"
+      ? laneResult.reason.trim()
+      : "";
+    return [{ lane, label: MASTER_LABEL[lane], reason }];
+  });
+}
+
 /** Build the same verdict from a refreshed job when a mobile stream detached. */
 export function fourOutputCompletionFromManifest(
   manifest?: SourceArtifactManifest,
