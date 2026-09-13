@@ -1,6 +1,32 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q59 (reviewed-file images, 13 September 2026).**
+**Latest owner amendment: Q60 (reviewed-file quote transport, 13 September 2026).**
+Job 130's Step 2 was stopped by the quoting gate, NOT by images. The Fixer's
+rationale in the owner's log ends "cited reviewed blocks." — the tail of
+`_checker`'s *"Question/context/answer/option text must be quoted from its cited
+reviewed blocks."* The reviewed files carry no embedded pictures at all (no
+`xl/media`, no drawings; the figures are `[img src="…"]` TEXT tags), and an image
+would have DISABLED that gate through its `not visual` escape. What failed: a
+reviewed cell carries the contract's PAIRED form — the `<br>` import marker beside
+the native line break it displays as (Q38) — and a model copying what the cell
+SHOWS writes the break, not the marker. Measured on the owner's own files, every
+display-view quote spanning a `<br>` fails the raw comparison: 13 of 13 in job
+130, 87 of 87 in job 139; the Corrected Triangles file has zero `<br>` and its
+extraction passed — the control. `concept_question_quote.locate` — the repo's
+existing transport, already trusted by the edited-workbook review path — bridges
+CRLF/LF and `<br>` and NOTHING else, so it is representation, not judgment
+(Rule 1); it recovers 100 of those 100 quotes. The gate accepts what it can place;
+the author and Fixer are wrapped so every candidate reaches the gate in the file's
+raw wording, keeping the `<br>` markers Rule 0 requires in the Master. An invented
+quote is still refused. `VERSION` is deliberately NOT bumped — it is the `active()`
+marker on an extracted payload — while the `RULES` change mints new decision keys
+by itself. **The owner's wider instruction — "it should be a pretty simple job post
+reviewing… just put down the questions in master file as it is, in the bulk import
+format required" — is NOT yet implemented:** it is a pipeline removal and needs the
+owner's decision. The measured facts behind it are recorded in Q60 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q59 (reviewed-file images, 13 September 2026).**
 The owner: "I need all images extracted and uploaded to project aegis fly
 server and those links should be there." A generated Concept file shows a
 chapter figure as the canonical text tag `[img src="https://…"]` in a cell, not

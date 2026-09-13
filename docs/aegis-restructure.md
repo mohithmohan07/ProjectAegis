@@ -3656,3 +3656,91 @@ all, so nothing caught it. The media pass now runs **before** the cell pass and
 closes; each sheet's pictures take their place among that sheet's rows. Output
 is byte-identical to the pre-Q57 reader on a workbook with embedded pictures,
 and the test fails on the deployed reader.
+
+## Q60 — decided — a faithful quote is not refused for the way the cell renders its own break
+
+Job 130's Step 2 was stopped by the reviewed-file quoting gate, not by images.
+
+The owner's log, verbatim:
+
+> `reviewed_file.extract` decision for post failed its mechanical response
+> contract after 3 bounded correction attempt(s), and the Fixer could not
+> produce a contract-satisfying decision either: … 1 validation error for
+> Extracted `rationale` — Extra inputs are not permitted
+> `[input_value='The block was caused by ... cited reviewed blocks.']`
+
+The Fixer's rationale ends **"cited reviewed blocks."** — the tail of
+`_checker`'s defect *"Question/context/answer/option text must be quoted from
+its cited reviewed blocks."* Q58 explains why the Fixer could not clear it and
+why the console showed the Fixer's own protocol failure instead of the block.
+
+### It was not the images
+
+The reviewed files carry **no embedded pictures at all** — no `xl/media`, no
+drawings; the chapter's figures are `[img src="…"]` text tags inside the
+concept prose, which is what a reviewer sees in a cell. And an image would have
+*disabled* this gate, not triggered it: the check is
+`if span not in text and not visual`, and `visual` is true for any cited block
+holding an image. The owner's hypothesis is refuted twice over.
+
+### What actually failed
+
+A reviewed workbook cell carries the contract's **paired** form — the `<br>`
+import marker beside the native line break it displays as (Q38). A model
+copying what the cell *shows* writes the break and not the marker. That is a
+perfectly faithful quote which an exact-substring comparison refuses.
+
+Measured on the owner's own files:
+
+| file | `<br>` pairs | display-view quotes that fail the raw gate |
+| --- | --- | --- |
+| job 130 reviewed Pre | 13 | **13 of 13** |
+| job 139 reviewed file | 87 | **87 of 87** |
+| Corrected Triangles Concept file | **0** | 0 — and its extraction passed |
+
+The Triangles file is the control: no `<br>`, no failure. It is also why the
+defect looked intermittent.
+
+### Decided
+
+`concept_question_quote` — the repo's existing, purely representational
+transport, already trusted by the edited-workbook review path — settles it.
+`locate` bridges CRLF/LF and `<br>` and **nothing else**: it never matches
+approximately and never repairs meaning, so this is representation, not
+judgment (Rule 1). The gate accepts a span it can place; the author and the
+Fixer are wrapped so every candidate reaches the gate in the file's own raw
+wording, which also keeps the `<br>` markers Rule 0 requires in the Master
+instead of freezing a rendered break into the question text. `locate` recovers
+100 of the 100 failing quotes above. An invented quote is still refused — the
+anti-invention guarantee is untouched, and a test pins it.
+
+`RULES` now states the rule the model can actually satisfy, mirroring the
+wording `concept_question_review.AUTHOR` has carried since v4. `VERSION` is
+deliberately **not** bumped: it is the `active()` marker on an extracted
+payload, so bumping it would re-extract every job that already finished. The
+`RULES` text is inside the hashed payload, so the change mints new decision
+keys by itself — which reaches only extractions that never completed.
+
+### Standing for the owner: the rest of "a pretty simple job"
+
+The owner's instruction — *"it should be a pretty simple job post reviewing. It
+should just put down the questions in master file as it is, in the bulk import
+format required, details of filling also exists in the repo"* — is broader than
+this repair, and the rest needs the owner's decision because it is a pipeline
+removal (see the standing rule in CLAUDE.md). Recorded here as measured facts,
+not as a change:
+
+* The reviewed file IS the canonical bulk-import workbook — Objective /
+  Descriptive / Subjective, 72 / 440 / 149 columns, band row, header row, data
+  from row 3; `writer.CONCEPT_FILE_LAYOUT_ID == layouts.UPDATE_AWARE_MASTER_LAYOUT_ID`,
+  so the Concept file and the Master share one layout.
+* `read_document` flattens it to **one block per row**, joining the row's cells
+  with newlines and discarding sheet identity, headers and band membership.
+  Measured on job 130's real file: ~3,000 characters per block, of which ~1,400
+  repeat the same chapter/topic preamble in **every** row.
+* `release_workbook_edits.py` + `concept_question_review.py` are an existing
+  path that reads that same workbook, reconciles its questions against the
+  accepted bank, and transports quotes losslessly — with no exact-substring
+  gate. Q52 closed it for three-step jobs; Q51 severed Step 02 from Step 01's
+  semantics, which is what forced the from-scratch extraction that job 130 hit.
+
