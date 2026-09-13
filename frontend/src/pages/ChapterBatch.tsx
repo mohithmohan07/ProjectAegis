@@ -13,6 +13,7 @@ import {
   cancellableFor,
   chapterLabel,
   lanesToPublish,
+  retryableFor,
   rowIsRetryable,
   rowNeedsPerson,
   rowProgressValue,
@@ -236,6 +237,12 @@ export default function ChapterBatch() {
     useChapterBatchRows(query);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Every selected row's last projection, from whichever page it was
+  // selected on. `rows` is only the page on screen, so filtering it left a
+  // selection spanning pages counted in the action bar but never sent.
+  const [selectedById, setSelectedById] = useState<Map<number, ChapterBatchRow>>(
+    new Map(),
+  );
   const [receipt, setReceipt] = useState<ChapterBatchPushResult | null>(null);
   const [receiptLabel, setReceiptLabel] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -285,24 +292,54 @@ export default function ChapterBatch() {
     };
   }, [data, query.board, query.grade]);
 
-  const selectedRows = useMemo(
-    () => rows.filter((row) => selected.has(row.chapter_id)),
-    [rows, selected],
-  );
+  // Keep the remembered projections current for rows on the page in view.
+  useEffect(() => {
+    setSelectedById((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const row of rows) {
+        if (selected.has(row.chapter_id) && prev.get(row.chapter_id) !== row) {
+          next.set(row.chapter_id, row);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [rows, selected]);
+
+  const selectedRows = useMemo(() => {
+    const out: ChapterBatchRow[] = [];
+    for (const id of selected) {
+      const remembered = selectedById.get(id);
+      if (remembered) out.push(remembered);
+    }
+    return out;
+  }, [selected, selectedById]);
+
+  const rememberRow = useCallback((row: ChapterBatchRow) => {
+    setSelectedById((prev) => {
+      const next = new Map(prev);
+      next.set(row.chapter_id, row);
+      return next;
+    });
+  }, []);
 
   const toggleRow = useCallback((chapterId: number) => {
+    const row = rows.find((r) => r.chapter_id === chapterId);
+    if (row) rememberRow(row);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(chapterId)) next.delete(chapterId);
       else next.add(chapterId);
       return next;
     });
-  }, []);
+  }, [rows, rememberRow]);
 
   const allOnPageSelected =
     rows.length > 0 && rows.every((row) => selected.has(row.chapter_id));
 
   const toggleAllOnPage = useCallback(() => {
+    for (const row of rows) rememberRow(row);
     setSelected((prev) => {
       const next = new Set(prev);
       const every = rows.length > 0 && rows.every((row) => next.has(row.chapter_id));
@@ -312,7 +349,7 @@ export default function ChapterBatch() {
       }
       return next;
     });
-  }, [rows]);
+  }, [rows, rememberRow]);
 
   const applyResult = useCallback(
     (result: ChapterBatchPushResult) => {
@@ -386,6 +423,7 @@ export default function ChapterBatch() {
   const step02Rows = selectableFor("step02", selectedRows);
   const publishRows = selectableFor("publish", selectedRows);
   const cancelRows = cancellableFor(selectedRows);
+  const retryRows = retryableFor(selectedRows);
 
   return (
     <>
@@ -621,13 +659,27 @@ export default function ChapterBatch() {
           </button>
           <button
             className="ghost"
+            disabled={retryRows.length === 0 || pushing !== null}
+            onClick={() => void runPush("retry", retryRows)}
+            data-testid="push-retry"
+          >
+            Retry ({retryRows.length} of {selected.size})
+          </button>
+          <button
+            className="ghost"
             disabled={cancelRows.length === 0 || pushing !== null}
             onClick={() => void runPush("cancel", cancelRows)}
             data-testid="push-cancel"
           >
             Cancel ({cancelRows.length} of {selected.size})
           </button>
-          <button className="ghost" onClick={() => setSelected(new Set())}>
+          <button
+            className="ghost"
+            onClick={() => {
+              setSelected(new Set());
+              setSelectedById(new Map());
+            }}
+          >
             Clear
           </button>
         </div>
@@ -815,21 +867,40 @@ function PrimaryAction({
       </button>
     );
   }
-  if (can.step02) {
-    return (
-      <button
-        disabled={busy}
-        onClick={() => onRun("step02")}
-        id={`chapter-${row.chapter_id}-run-step02`}
-      >
-        Run Step 02
-      </button>
-    );
-  }
   // The reviewed-file uploads are per lane. With one available lane the
   // input sits in the row; with two, the row opens the drawer where each
   // lane is named — a defaulted lane would record the correction against
   // the OTHER lane, which is a silent wrong write, not an error.
+  //
+  // Order matters: at concept_review both upload_concept and step02 are
+  // offered (Run Step 02 is the accept-unchanged shortcut), and at
+  // master_review upload_master is the act the step needs. Listing step02
+  // first hid the reviewed-Concept upload behind it, and listing
+  // upload_concept before upload_master left a master_review row offering
+  // a Concept upload the server refuses with 409 (verified audit,
+  // 13 September 2026). The uploads come first; Step 02 stays one click
+  // away in the action bar and the drawer.
+  if (can.upload_master) {
+    return reviewLanes.length === 1 ? (
+      <ChapterRowUpload
+        chapterId={row.chapter_id}
+        slot="master"
+        lane={reviewLanes[0].lane}
+        disabled={busy}
+        onUploaded={onRowUpdated}
+        label="Upload reviewed Master file"
+        compact
+      />
+    ) : (
+      <button
+        className="ghost"
+        onClick={onOpenDrawer}
+        id={`chapter-${row.chapter_id}-open-master-upload`}
+      >
+        Upload reviewed Master files
+      </button>
+    );
+  }
   if (can.upload_concept) {
     return reviewLanes.length === 1 ? (
       <ChapterRowUpload
@@ -851,24 +922,14 @@ function PrimaryAction({
       </button>
     );
   }
-  if (can.upload_master) {
-    return reviewLanes.length === 1 ? (
-      <ChapterRowUpload
-        chapterId={row.chapter_id}
-        slot="master"
-        lane={reviewLanes[0].lane}
-        disabled={busy}
-        onUploaded={onRowUpdated}
-        label="Upload reviewed Master file"
-        compact
-      />
-    ) : (
+  if (can.step02) {
+    return (
       <button
-        className="ghost"
-        onClick={onOpenDrawer}
-        id={`chapter-${row.chapter_id}-open-master-upload`}
+        disabled={busy}
+        onClick={() => onRun("step02")}
+        id={`chapter-${row.chapter_id}-run-step02`}
       >
-        Upload reviewed Master files
+        Run Step 02
       </button>
     );
   }

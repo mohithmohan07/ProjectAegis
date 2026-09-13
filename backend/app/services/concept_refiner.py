@@ -1081,7 +1081,15 @@ def append_activity_hub(details: str, hub_text: str) -> str:
             existing = (content or "").strip()
             if text in existing:
                 return details
-            merged = f"{existing} {text}".strip() if existing else text
+            # One note per line. Space-joining put five "Figure —" notes on
+            # a single 4,134-character line in the owner's job 139 file — the
+            # dominant cause of the unreadable Concept Details cell, measured
+            # against the reviewer's hand-restructured target (Q59 review,
+            # docs/structured-concept-details-review-2026-09-13.md). The
+            # writer pairs this break into <br> + LF at the workbook seam;
+            # the parsers split sections on " // " and never on a newline
+            # inside a section, so nothing downstream reads it differently.
+            merged = f"{existing}\n{text}".strip() if existing else text
             sections[i] = (_ACTIVITY_HUB_LABEL, merged)
             return join_sections(sections)
 

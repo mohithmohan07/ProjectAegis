@@ -48,7 +48,7 @@ while the identical `files.find(kind)` code worked on Build Concepts, which
 declares `UploadJobOut`. Declaring the model also stops the route disclosing
 raw columns no console consumer reads.
 
-### 3. Step 02 is inadmissible under every configuration but one — OWNER
+### 3. Step 02 is inadmissible under every configuration but one — DECIDED (Q65)
 
 `chapter_queue_worker` computes
 `usable = OPENAI_MAX_CONCURRENCY - provider_reserve()`, then
@@ -83,6 +83,15 @@ the owner**, because every option is a policy choice: raise the floor to
 a gate of 8), lower the reserve, or declare the queue unsupported below a named
 gate size and refuse to start with a readable message.
 
+**Resolution (Q65, the owner: "go with the best suitable option for all").**
+The queue refuses to start below the gate it needs — `admission_shortfall()`
+names the arithmetic in the log and `initialize_chapter_queue` returns without
+a worker — instead of admitting Step 01s into a queue where a Step 02 can never
+run. The scheduling half shipped with it: the dispatcher skips an inadmissible
+task instead of stopping at it, holds the oldest denied task's cost back from
+everything behind it so a steady supply of Step 01s cannot starve a Step 02,
+and logs one line per denied task naming its cost and the budget.
+
 ## Important (18 verified)
 
 Most consequential, in order:
@@ -91,29 +100,53 @@ Most consequential, in order:
   promised refund and records `failed/attempts_exhausted` for a step that never
   ran — the error text says the opposite of what happened. The same collision
   also spins the dispatcher at ~60–100 cycles/s for the whole duration of the
-  conflicting run.
-* A resumable `run_incomplete` exit is settled as a clean `done` (step01).
+  conflicting run. — **FIXED (Q66):** a refunded outcome is requeued whatever
+  the attempt count, and the task is held back one backoff interval
+  (`AEGIS_QUEUE_COLLISION_BACKOFF_SECONDS`, default 30) before it is claimable
+  again.
+* A resumable `run_incomplete` exit is settled as a clean `done` (step01). —
+  **FIXED (Q66):** `_after_generation` reads the wrapper's marker; a resumable
+  one is the contract's "any other exception" row (queued while attempts remain,
+  else `failed/run_incomplete`), a non-resumable one is `failed/non_resumable`,
+  and a recorded pending decision outranks both.
 * Step 02 has no pre-claim storage check, so a full volume burns an attempt and
   a partial paid run — which is the exact outcome contract §7 was written to
-  prevent.
-* No wall-clock cap on a queued task and no way to stop a running one.
+  prevent. — **FIXED (Q66):** `admits("step02")` asks
+  `_volume_can_hold_a_master_batch()` first; the batch reservation inside
+  `_build_master_siblings` still decides for real.
+* No wall-clock cap on a queued task and no way to stop a running one. — open.
 * Worker step bodies are never executed by any test, and the injected `sleep`
-  seam is dead.
+  seam is dead. — **partly addressed (Q64/Q66):** `_run_step01`'s body,
+  `_after_generation`, `classify_exception`, `_settle` and `_dispatch_once` are
+  now exercised directly; `_run_step02` and `_run_publish` bodies are not.
 * `PrimaryAction`'s can-ordering hides the reviewed-Concept upload at
   `concept_review`; at `master_review` the row's one action is a Concept upload
-  the server then refuses with 409.
-* A selection spanning pages is counted in the action bar but never sent.
+  the server then refuses with 409. — **FIXED (Q66):** the uploads come before
+  Step 02 in the cascade, and `can.upload_concept` now says exactly what the
+  route accepts (`pending`/`reviewed`); whether a second Concept round after the
+  Masters exist should be allowed is recorded for the owner under Q66.
+* A selection spanning pages is counted in the action bar but never sent. —
+  **FIXED (Q66):** the page remembers every selected row's last projection
+  across pages; *Clear* forgets all of it.
 
 ## Minor (16 verified)
 
 Includes: all three pre-spend pauses writing one `blocked_kind`
-(`human_decision`) where §6 requires the pause to name itself; no non-SQLite
-fallback for the `json_extract` signal reads; the partial UNIQUE index declared
-only on the model; `reason_code at_capacity` declared in §9 but never emitted;
-`publish` having no already-complete reconcile entry; the per-row Publish
-button being dead code (`can.publish` is a strict subset of `can.upload_master`);
-and `retryableFor` being written, tested and never imported, so there is no bulk
-Retry.
+(`human_decision`) where §6 requires the pause to name itself — **FIXED
+(Q66):** `blocked_kind_for_pending` transcribes the `kind` each pause records
+(`source_review`, `source_topic_recovery`, `type_granularity`), and the row's
+reason and the drawer's decision card read the pause's own `decision_question`,
+which the old read never looked for (every pause rendered the generic sentence
+and a blank card); no non-SQLite fallback for the `json_extract` signal reads;
+the partial UNIQUE index declared only on the model; `reason_code at_capacity`
+declared in §9 but never emitted; `publish` having no already-complete
+reconcile entry; the per-row Publish button being dead code (`can.publish` is a
+strict subset of `can.upload_master`); and `retryableFor` being written, tested
+and never imported, so there is no bulk Retry — **FIXED (Q66):** the action bar
+has *Retry (n of m)*.
+
+`docs/chapter-batch-console-usage.md` is the team's guide to the console as it
+now stands.
 
 ## The deferred OpenAI Batch-API lane
 

@@ -1,6 +1,31 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q64 (batch console audit, 13 September 2026).**
+**Latest owner amendment: Q66 (batch console unattended-ready, 13 September 2026).**
+The owner: "go with the best suitable option for all, dont deploy yet … get it
+done with the BATCH API inculcation. Give instructions how to use the BATCH
+API." The batch API is the chapter console (Q53). **Q65** takes the seven open
+calls the best-suited way: the queue refuses to start below the gate it needs
+(`gate >= reserve + workers x 2`, arithmetic in the log) and the dispatcher
+skips, holds cost back and logs instead of `break`ing; a startup sweep recovers
+console rows stranded markerless before Q64; Karnataka stays; hub notes join on
+a newline (Option A); the keyword-weight coupling (`0.5 x K` marks for K
+keywords) is named in the defect and both prompts; an Objective explanation may
+quote a LaTeX answer as a `[Katex]` span; the Master band ends at 98% so 99% is
+only ever finished-incomplete. **Q66** closes the audit's remaining important
+findings: a refunded lock collision on the last attempt is requeued and held
+back one backoff, a Step 01 that returned `run_incomplete` is retried or failed
+honestly and never `done`, Step 02 is not admitted into a volume that cannot
+hold a Master batch, the three pre-spend pauses name themselves
+(`source_review` / `source_topic_recovery` / `type_granularity`) and carry
+their own `decision_question`, `can.upload_concept` says exactly what the route
+accepts, and a selection spanning pages is sent with a bulk Retry.
+`docs/chapter-batch-console-usage.md` is the team's guide. Recorded for the
+owner, not changed: a second Concept round after the Masters exist; a
+wall-clock cap and stopping a running step; the OpenAI Batch-API lane (held).
+**PR #318 is not merged: "dont deploy yet."** Q65 and Q66 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q64 (batch console audit, 13 September 2026).**
 The owner: "let's finish off the remaining work on batch api." Every clause of
 `docs/chapter-batch-console-contract.md` was read against the code and every
 claimed gap adversarially verified: **39 survived, 1 refuted, 3 blocking.**

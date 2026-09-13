@@ -267,13 +267,27 @@ def rubric_tag_leaks(value: Any) -> list[str]:
     ]
 
 
+_KATEX_TAG_PADDING_RE = re.compile(
+    r"\[katex\]\s*|\s*\[/katex\]", re.IGNORECASE,
+)
+
+
 def _answer_prefix_key(value: Any, *, case_sensitive: bool = False) -> str:
-    """Whitespace/punctuation-insensitive comparison key for a leading answer."""
+    """Whitespace/punctuation-insensitive comparison key for a leading answer.
+
+    Padding inside a ``[Katex] … [/Katex]`` span is representation, not
+    content: the writer pads it, a model may not, and both spell the same
+    answer. Applied to both sides of the comparison, so it never widens what
+    counts as a match beyond that one whitespace difference.
+    """
 
     text = str(value or "").replace("\n", " ").strip()
     if not case_sensitive:
         text = text.casefold()
     text = re.sub(r"\s+", " ", text)
+    text = _KATEX_TAG_PADDING_RE.sub(
+        lambda match: match.group(0).strip(), text,
+    )
     return text.rstrip(" .;:,!?")
 
 
@@ -313,13 +327,20 @@ def objective_explanation_defects(
     if medium == "image":
         return []
     accepted = {_answer_prefix_key(content, case_sensitive=include_option_label)}
-    if medium == "equation":
-        from . import katex_rules
+    # The same answer in its [Katex]-wrapped spelling is accepted whatever
+    # medium the answer cell declared, not only for Equation. An answer cell
+    # typed Text that carries LaTeX (owner's Triangles run, PRC-0021-PRQ-0001:
+    # '\text{AB} \perp \text{CD}') left only the raw spelling here, and the
+    # rich-text field forbids raw LaTeX — so the explanation was refused for
+    # not opening with the answer AND for opening with it. Two gates, one
+    # closed cycle. A wrapped spelling is the same answer represented for a
+    # rich-text field; nothing about the content is judged.
+    from . import katex_rules
 
-        accepted.add(_answer_prefix_key(
-            katex_rules.rich_answer_display("Equation", content),
-            case_sensitive=include_option_label,
-        ))
+    accepted.add(_answer_prefix_key(
+        katex_rules.rich_answer_display("Equation", content),
+        case_sensitive=include_option_label,
+    ))
     accepted.discard("")
     if include_option_label:
         index = next(i for i, answer in enumerate(answers) if answer is key)
@@ -1006,6 +1027,33 @@ def validate_candidate(
                         f"{exact_weight_sum(keyword_weights):g} != "
                         "subquestion marks "
                         f"{sub_mark:g}"
+                    )
+                floor = Decimal("0.5") * len(keywords)
+                if (
+                    column_policy.get("rubric_half_step")
+                    and sub_mark is not None
+                    and keywords
+                    and Decimal(str(sub_mark)) < floor
+                ):
+                    # Two gates on the same numbers — each keyword weight a
+                    # positive multiple of 0.5, and the weights summing to
+                    # the subquestion's marks — have no solution when the
+                    # marks are below 0.5 per keyword. The owner's Triangles
+                    # run shows 0.25 across two keywords on a 0.5-mark
+                    # subquestion and 0.375 across four on 1.5: the model
+                    # oscillated between the two refusals, exhausted its
+                    # attempts and the Fixer, and the question was dropped
+                    # (Q63). Say the impossibility once, in arithmetic the
+                    # author can act on. Declared values only; no judgment.
+                    errors.append(
+                        f"subquestion {position} has {len(keywords)} "
+                        f"keyword(s) but only {sub_mark:g} mark(s); with "
+                        "every keyword weight a positive multiple of 0.5 "
+                        f"the subquestion needs at least "
+                        f"{floor.normalize():f} mark(s) "
+                        "— raise its marks or, upstream, author no more "
+                        f"than {int(Decimal(str(sub_mark)) / Decimal('0.5'))} "
+                        "keyword(s) for it"
                     )
             if (
                 len(sub_marks) == len(subquestions)

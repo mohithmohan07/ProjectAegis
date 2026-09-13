@@ -117,6 +117,22 @@ def bootstrap() -> None:
             logging.getLogger(__name__).warning(
                 "interrupted Master build sweep failed", exc_info=True,
             )
+        # A batch-pushed run that Step 01 finished without its Concept-review
+        # marker (Q64) is stranded until the marker exists. Restore it.
+        try:
+            from .services import build_concepts_release as concept_release
+
+            healed = concept_release.sweep_markerless_batch_runs(db)
+            if healed:
+                logging.getLogger(__name__).warning(
+                    "restored the Concept-review marker on %d batch run(s): %s",
+                    len(healed), healed,
+                )
+        except Exception:
+            db.rollback()
+            logging.getLogger(__name__).warning(
+                "markerless batch run sweep failed", exc_info=True,
+            )
         syllabus_svc.bootstrap_syllabus(db)
     finally:
         db.close()

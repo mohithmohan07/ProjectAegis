@@ -3936,3 +3936,164 @@ grouping for something marking did.
   LaTeX, which the rich-text gate forbids. This is the closed cycle already
   recorded under Q56 as awaiting the owner; it has now cost a real question.
 
+
+## Q65 — decided — the owner's seven open calls, each taken the best-suited way
+
+The owner, shown the seven open calls with a recommendation on each: *"go with
+the best suitable option for all, dont deploy yet."* Each is recorded here with
+what was chosen, why the alternative was not, and where it lives. Nothing here
+changes what a run produces except where a stated defect made a paid question
+impossible to ship; every such change is a versioned gate or a prompt, never a
+judgment moved into code.
+
+### 1. Step 02 admission — refuse to start below the gate it needs
+
+`budget = max(1, (gate − reserve) ÷ workers)` and a Step 02 costs 2, so under
+the code defaults (8/16/6) and staging (3/16/1) a Step 02 could never be
+admitted, silently, forever (Q64 audit, blocking #3). Chosen: the queue
+**refuses to start** when `gate < reserve + workers × max(cost)`, with the
+arithmetic in the log (`chapter_queue_worker.admission_shortfall`,
+`initialize_chapter_queue`). Not chosen: raising the floor to 2, which at 8/6
+presents 12 concurrent requests to a gate of 8 and times out on the slot wait
+after real spend; lowering the reserve, which at a gate of 8 leaves no room
+either way. Shipped with it, as ordering mechanics: the dispatcher skips an
+inadmissible task instead of `break`ing at it, holds the oldest denied task's
+cost back (`admits(kind, reserved=…)`) so a steady supply of Step 01s cannot
+starve a Step 02, and logs one line per denied task naming cost, in-flight
+spend and budget.
+
+### 2. Chapters already stranded — recover them at startup
+
+Rows pushed before Q64 paid for a full Step 01 and ended markerless. Chosen:
+`build_concepts_release.sweep_markerless_batch_runs` runs at startup, finds
+every console row whose job is `released`/`generated` under the v2 workflow
+with staged Post content and no review marker, and initialises the Concept
+review for it. The team downloads the Concept files and continues from Step
+02 instead of paying for the run again. It touches only rows on the console
+board; a job that is not on the board is not its business.
+
+### 3. Karnataka vs KSTATE — left as it is
+
+The dropdown reads "Karnataka" where the chapter codes read `KSTATE`. The
+catalogue is already mixed (CBSE and ICSE are abbreviations; Maharashtra is a
+display name over `MSBSHSE`). Chosen: no change; the codes are identity and
+would not move either way.
+
+### 4. Structured `concept_details` — Option A
+
+Measured on job 130: the Activity/Info Hub notes, joined with a single space,
+made one 4,134-character line; the ` // ` section separator accounted for
+about an eighth of the remaining gap. Chosen: `concept_refiner.append_activity_hub`
+joins successive hub notes with a newline, so each note sits on its own line
+in the workbook cell. Not chosen: Option B (sections on their own lines),
+which costs ~11 parsers, the `"// Types:"` release gate and the console's own
+` // ` splitter for one more break per row; it stays proposed in
+`docs/structured-concept-details-review-2026-09-13.md`.
+
+### 5. Keyword weights that cannot be satisfied — tell the model the coupling
+
+Each keyword weight must be a positive multiple of 0.5 **and** the weights must
+sum to the subquestion's marks (Rule 0 §27.5), so K keywords need at least
+`0.5 × K` marks. The Triangles run authored two keywords on a 0.5-mark
+subquestion and four on 1.5 marks — impossible either way — and the model
+oscillated between the two gates until the question was dropped. Chosen: the
+defect text now names the coupling and the exact numbers (`assessment_release.
+validate_candidate`), and both the marking and the materialization prompts
+state it before the model chooses. Not chosen: relaxing the 0.5 quantum, which
+changes the contract.
+
+### 6. The KaTeX explanation cycle — the quoted answer may be a `[Katex]` span
+
+An Objective explanation must begin with the option label and the exact
+correct answer; the rich-text gate forbids raw LaTeX outside a `[Katex]` span.
+For a Text-typed answer written in LaTeX (`\text{AB} \perp \text{CD}`) the two
+could not both hold. Chosen: `objective_explanation_defects` accepts the
+answer's KaTeX display form (`[Katex]…[/Katex]`) as the quoted answer for every
+medium, and `_answer_prefix_key` strips the padding inside the tags so a model
+that writes `[Katex]x[/Katex]` matches the wrapper's `[Katex] x [/Katex]`.
+That is the only form that satisfies both gates; nothing else moved.
+
+### 7. The 99 % that confused the owner — the Master band ends at 98 %
+
+`0.99` meant both "both Master lanes nearly done" and "finished with fewer than
+four outputs ready", so the bar alone could not say whether a run was still
+building. Chosen: the live Master band is `0.70 → 0.98`; `0.99` is now only
+the finished-incomplete verdict and `1.0` only all four outputs. Recorded in
+`build_concepts_release_contract._build_master_siblings` and `build_review_masters`.
+
+### PR #318 — not merged
+
+*"dont deploy yet."* Merging to `main` deploys to Fly. The branch stays open
+with CI green until the owner says otherwise.
+
+Tests: `tests/test_decided_options_2026_09_13.py`.
+
+## Q66 — decided — the batch console runs unattended, and how to use it
+
+The owner: *"get it done with the BATCH API inculcation. Give instructions how
+to use the BATCH API."* The batch API is the chapter console (Q53); the OpenAI
+Batch-API lane stays held for the reasons recorded in the Q64 audit. This entry
+closes the audit's remaining important findings and adds the guide.
+
+### Fixed
+
+* **A refunded collision on the last attempt is requeued, never
+  `failed/attempts_exhausted`.** A lock collision was never a try; the refund
+  now outranks the attempt count in `_settle`, and the task is held back one
+  `AEGIS_QUEUE_COLLISION_BACKOFF_SECONDS` (default 30) before it is claimable,
+  so the dispatcher no longer spins against the same lock at 60–100 cycles/s.
+* **A Step 01 that returned `run_incomplete` is not `done`.** Step 01's failure
+  wrapper catches the exception, stages what was paid for and *returns*; the
+  worker read only the exception path and settled a row with no Concept files
+  as green. `_after_generation` now reads the marker: resumable → the
+  contract's "any other exception" row (queued while attempts remain, then
+  `failed/run_incomplete`; a re-run resumes from the checkpoint); non-resumable
+  → `failed/non_resumable`; a recorded pending decision outranks both.
+* **Step 02 is not admitted into a volume that cannot hold a Master batch.**
+  `admits("step02")` asks `storage_capacity` first; the batch reservation
+  inside `_build_master_siblings` still decides for real.
+* **The three pre-spend pauses name themselves** (contract §6):
+  `chapter_batches.blocked_kind_for_pending` transcribes the `kind` each pause
+  records — `phase3_source_graph_review → source_review`,
+  `source_topic_coverage_review → source_topic_recovery`,
+  `type_granularity_review → type_granularity`, anything else
+  `human_decision` — in `derive_state`, `_after_generation` and
+  `classify_exception`. The row's reason and the drawer's decision card read
+  the pause's own `decision_question`; the old read looked for `question` /
+  `prompt`, which no pause writes, so every pause rendered the generic
+  sentence and a blank card.
+* **`can.upload_concept` says what the route accepts.** The reviewed-Concept
+  route refuses `master_ready` and `published` with a 409; the flag offered the
+  upload at `master_review` anyway. It now offers it at `pending`/`reviewed`
+  only, and the row's primary action lists the uploads before Step 02 so the
+  reviewed-Concept upload is no longer hidden at `concept_review`.
+* **A selection spanning pages is sent.** The page remembers each selected
+  row's last projection across pages; *Retry (n of m)* joins the action bar
+  (`retryableFor` was written and tested but never imported); *Clear* forgets
+  every page's selection.
+
+### Recorded for the owner, not changed
+
+* **A second Concept round after the Masters exist.** The route's rule
+  ("Master authoring has started or completed for this upload; start a new run
+  to submit different Concept inputs") is Q49/Q51's; whether a reviewed Concept
+  re-upload should instead open a new Master version is a pipeline-policy
+  question. Until decided, the console offers what the route accepts.
+* **No wall-clock cap on a queued task and no way to stop a running step**
+  remain open (Q64 audit).
+* **OpenAI Batch API**: held. 36 recorded decision kinds per chapter mean
+  70–100 sequential batch waits under a 24-hour-only guarantee, for no fewer
+  requests.
+
+### The guide
+
+`docs/chapter-batch-console-usage.md`: the three steps in one picture; the
+deployment arithmetic and every environment knob with its default; finding
+chapters; staging, pushing, watching, reviewing, uploading and publishing, step
+by step; every row state with its label and meaning; every way a row stops
+with what the queue did and what the person does; the push verdicts; the HTTP
+routes with `curl` examples; what the console guarantees and what it does not.
+`README.md` links it beside the contract.
+
+Tests: `tests/test_chapter_batch_unattended.py`;
+`frontend/src/pages/ChapterBatch.rows.test.tsx` (the two cross-page cases).
