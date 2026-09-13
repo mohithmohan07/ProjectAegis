@@ -16,11 +16,14 @@ KEY = "generation_quality_policy"
 #: figure reference from learner prose. v3 (13 September 2026, Q68):
 #: everything in v2, plus ``host_creations_resolved`` — a Host unit that
 #: minted a concept in a parallel batch is re-decided once with every
-#: batch's creation visible. v4 (13 September 2026, Q70): everything in v3,
-#: plus ``declared_pre_options`` — the Pre author declares each question's
-#: choice set as an ``options`` array, the cell carries it and the
-#: materializer's checker holds the projected answers[] to that count. A run
-#: keeps the version it recorded; only newly stamped work adopts the latest.
+#: batch's creation visible. v4 (13 September 2026, Q70 and Q71): everything
+#: in v3, plus ``declared_pre_options`` — the Pre author declares each
+#: question's choice set as an ``options`` array, the cell carries it and the
+#: materializer's checker holds the projected answers[] to that count — and
+#: ``duplicate_case_titles_returned`` — two Cases of one mined Type sharing a
+#: case_title are a coverage-class defect the Type miner sends back to the
+#: model, with the Fixer as the final resort. A run keeps the version it
+#: recorded; only newly stamped work adopts the latest.
 V1 = "owner-generation-quality-2026-09-11-v1"
 V2 = "owner-generation-quality-2026-09-13-v2"
 V3 = "owner-generation-quality-2026-09-13-v3"
@@ -164,6 +167,20 @@ def declared_pre_options(value: Mapping[str, Any] | None) -> bool:
     ``assessment_materialization`` holds the projected answers[] to that
     count. A run stamped v3 or earlier keeps the v1 response schema, prompt
     and checker it was sealed with.
+    """
+    recorded = version_of(value)
+    return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V4)
+
+
+def duplicate_case_titles_returned(value: Mapping[str, Any] | None) -> bool:
+    """v4: the Type miner returns a repeated Case title to the model (Q71).
+
+    Two Cases of one mined Type carrying the same case_title (the reviewers'
+    "Explaining the importance of DNA copying …" used for two Examples,
+    How Do Organisms Reproduce) reached the Concept file because nothing
+    read the CASE WORDING rule back. Under v4 the miner's COVERAGE DEFECTS
+    follow-up carries ``duplicate_case_titles`` and the Fixer is the final
+    resort; a run stamped v3 or earlier replays the loop it was sealed with.
     """
     recorded = version_of(value)
     return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V4)

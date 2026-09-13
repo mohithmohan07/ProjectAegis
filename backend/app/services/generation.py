@@ -8271,6 +8271,47 @@ def _duplicate_inventory_assignments(inventory: dict, types: list[dict]) -> list
     ]
 
 
+def _duplicate_case_titles(types: list[dict]) -> list[dict]:
+    """Cases of ONE mined Type that share a case_title (a coverage-class defect).
+
+    Mechanics only. The rule is the model's (``concepts.type_mining.system``,
+    CASE WORDING: "Two Cases in one chapter never share a case_title …");
+    this reads two titles as equal exactly when ``_merge_equivalent_mined_types``
+    would — whitespace collapsed and letters lower-cased by
+    ``bi.normalize_question_text``, nothing else — and returns the groups so
+    the miner's follow-up can send them BACK to the model. It never decides
+    what the Cases mean and never composes a title. Scope is within a Type:
+    a Type is a chapter-wide answering FORM today (Q14) and a Q2 split
+    legitimately repeats one Case across rows, so the same sub-type wording
+    under two different Types is not this defect.
+    """
+    groups: list[dict] = []
+    for type_index, mtype in enumerate(types):
+        if not isinstance(mtype, dict):
+            continue
+        cases = mtype.get("case_prompts") or []
+        by_key: dict[str, list[int]] = {}
+        for index, case in enumerate(cases):
+            if not isinstance(case, dict):
+                continue
+            key = bi.normalize_question_text(str(case.get("case_title") or ""))
+            if key:
+                by_key.setdefault(key, []).append(index)
+        for indexes in by_key.values():
+            if len(indexes) < 2:
+                continue
+            groups.append({
+                "type_index": type_index,
+                "type_id": str(mtype.get("type_id") or ""),
+                "type_title": str(mtype.get("type_title") or ""),
+                "case_title": str(cases[indexes[0]].get("case_title") or ""),
+                "case_indexes": list(indexes),
+                "case_ids": [str(cases[i].get("case_id") or "") for i in indexes],
+                "example_qids": [_assignment_case_qids(cases[i]) for i in indexes],
+            })
+    return groups
+
+
 def _repair_nested_mined_types(raw_types: list) -> list[dict]:
     """Lift Type-shaped objects that the model nested in ``case_prompts``."""
     repaired: list[dict] = []
@@ -11219,6 +11260,186 @@ def _apply_exact_once_duplicate_backstop(
     return normalized, removed
 
 
+def _resolve_duplicate_case_titles_via_fixer(
+    types: list[dict], *, inventory: dict, meta: dict, stage: str,
+    attempts_note: str, fixer=None, store=None,
+) -> list[dict]:
+    """The Fixer is the final resort for a Case title the miner still repeats.
+
+    One recorded decision per (Type, repeated title) group (Q13): the Fixer
+    names a distinct case_title for each listed Case — its judgment, applied
+    mechanically — or accepts the coincidence with a flag. A Fixer that cannot
+    satisfy the checker, or a deployment with no Fixer provider (dry and test
+    runs), leaves the Cases exactly as mined and says so in the saved log:
+    before this seam the duplicate shipped silently, and a title is never a
+    reason to stop a paid run. Code never composes a title.
+    """
+    import json as _json
+
+    groups = _duplicate_case_titles(types)
+    if not groups:
+        return types
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    if fixer is None:
+        fixer = p3_fixer.default_provider()
+    envelope_sha256 = hashlib.sha256(_json.dumps(
+        inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    rule = (
+        "Two Cases in one chapter never share a case_title. Two Examples that "
+        "share a description share ONE Case; two Examples that genuinely "
+        "differ get case_titles that name what differs (the given, the ask or "
+        "the constraint). case_title DEFINES the sub-type — what is given, "
+        "what must be done, and the distinguishing condition — and is NEVER "
+        "a raw question."
+    )
+    resolved = copy.deepcopy(types)
+    for group in groups:
+        mtype = resolved[group["type_index"]]
+        indexes = list(group["case_indexes"])
+        where = (
+            f"{len(indexes)} Case(s) of {group['type_id']} "
+            f"({group['type_title'][:60]}) sharing the title "
+            f"{group['case_title'][:80]!r} after {attempts_note}"
+        )
+        if fixer is None:
+            progress.log(
+                f"Type Mining left {where}; no Fixer provider is available "
+                "— shipped as mined for review.",
+                level="warning",
+            )
+            continue
+        other_titles = frozenset(
+            bi.normalize_question_text(str(case.get("case_title") or ""))
+            for index, case in enumerate(mtype.get("case_prompts") or [])
+            if index not in indexes and isinstance(case, dict)
+        )
+        payload = {
+            "fixer": True,
+            "stage": stage,
+            "blocked_check": [{
+                "code": "duplicate_case_titles",
+                "field": "case_title",
+                "message": where,
+                "case_indexes": indexes,
+                "case_ids": list(group["case_ids"]),
+            }],
+            "contract": {
+                "kind": "fixer.type_mining_case_titles",
+                "rule": rule,
+                "response_schema": {
+                    "cases": [{"case_index": 0, "case_title": ""}],
+                    "rationale": "",
+                },
+                "alternative": (
+                    "only when the listed titles genuinely must coincide "
+                    "(the comparison folded a real difference) return "
+                    "{\"accept_with_flag\": true, \"rationale\"}"
+                ),
+                "never": (
+                    "drop, move, merge or re-order a Case or Example, or "
+                    "change any field but case_title"
+                ),
+            },
+            "metadata": _metadata_block(meta),
+            "type": copy.deepcopy(mtype),
+        }
+
+        def _check(response, *, _indexes=tuple(indexes), _others=other_titles):
+            if not isinstance(response, dict):
+                return ["response must be a JSON object"]
+            defects: list[str] = []
+            if not str(response.get("rationale") or "").strip():
+                defects.append("rationale is required")
+            if response.get("accept_with_flag") is True:
+                return defects
+            cases = response.get("cases")
+            if not isinstance(cases, list):
+                defects.append(
+                    "return {\"cases\": [{\"case_index\", \"case_title\"}], "
+                    "\"rationale\"} or {\"accept_with_flag\": true, \"rationale\"}"
+                )
+                return defects
+            answered: dict[int, str] = {}
+            for entry in cases:
+                if not isinstance(entry, dict):
+                    defects.append("each cases entry must be an object")
+                    continue
+                index = entry.get("case_index")
+                if not isinstance(index, int) or index not in _indexes:
+                    defects.append(
+                        f"case_index {index!r} is not one of the listed "
+                        f"Cases {list(_indexes)}")
+                    continue
+                if index in answered:
+                    defects.append(f"case_index {index} is answered twice")
+                    continue
+                title = " ".join(str(entry.get("case_title") or "").split())
+                if not title:
+                    defects.append(
+                        f"case_index {index} needs a non-empty case_title")
+                    continue
+                answered[index] = bi.normalize_question_text(title)
+            missing = sorted(set(_indexes) - set(answered))
+            if missing:
+                defects.append(f"no case_title for case_index {missing}")
+            folded = list(answered.values())
+            if len(set(folded)) != len(folded):
+                defects.append("the returned case_titles still repeat one another")
+            clash = sorted(key for key in set(folded) if key in _others)
+            if clash:
+                defects.append(
+                    "a returned case_title repeats another Case of this Type: "
+                    + "; ".join(clash))
+            return defects
+
+        unit_id = (
+            f"{group['type_id']}#cases"
+            + "-".join(str(index) for index in indexes)
+        )
+        try:
+            decision = p3_kernel.decide(
+                kind="fixer.type_mining_case_titles",
+                unit_id=unit_id,
+                envelope_sha256=envelope_sha256,
+                payload=payload,
+                provider=fixer,
+                checker=_check,
+                store=store or _phase3_fixer_store(),
+                policy_version=p3_fixer.FIXER_POLICY_VERSION,
+            )
+        except p3_kernel.ContractError as exc:
+            # Protocol impossibility on a title: not a new halt. The
+            # duplicate ships as mined, named, exactly as it shipped
+            # unnamed before this seam.
+            progress.log(
+                f"Type Mining left {where}; the Fixer could not resolve it "
+                f"({exc}) — shipped as mined for review.",
+                level="warning",
+            )
+            continue
+        response = decision.get("response") or {}
+        rationale = " ".join(
+            str(response.get("rationale") or "").split())[:240]
+        if response.get("accept_with_flag") is True:
+            progress.log(
+                f"Type Mining: the Fixer accepted {where} with a flag — "
+                f"{rationale}",
+                level="warning",
+            )
+            continue
+        for entry in response.get("cases") or []:
+            mtype["case_prompts"][int(entry["case_index"])]["case_title"] = (
+                " ".join(str(entry.get("case_title") or "").split()))
+        progress.log(
+            f"Type Mining: the Fixer re-titled {where} — {rationale}",
+            level="warning",
+        )
+    return resolved
+
+
 def _mine_types_from_inventory_via_api(
     *, meta: dict, inventory: dict, max_coverage_attempts: int = 4,
     max_focused_attempts: int = 2,
@@ -11229,6 +11450,12 @@ def _mine_types_from_inventory_via_api(
     qids remain, focused calls return additive deltas and a deterministic
     single-item fallback closes any residual gap without replacing authored
     Types. The final exact-once gate remains mandatory.
+
+    Under generation-quality v4 a repeated case_title inside one Type is a
+    third coverage-class defect returned through the same broad follow-up
+    (``duplicate_case_titles``); whatever the loop, the deltas and the
+    fallbacks leave goes to the Fixer for one recorded decision. Code never
+    composes a title, and a title is never a reason to stop a paid run.
     """
     import json as _json
 
@@ -11252,13 +11479,20 @@ def _mine_types_from_inventory_via_api(
     types = _normalize_mined_type_candidate(
         list(data.get("types") or []), inventory)
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
+    from . import generation_quality_policy
+    # A repeated Case title inside one Type is a coverage-class defect the
+    # model is asked to correct (Q68 second pass). A run stamped v3 or earlier
+    # keeps the loop it was sealed with: with the gate off, every string,
+    # branch and log line below is byte-identical to the previous release.
+    check_titles = generation_quality_policy.duplicate_case_titles_returned(meta)
 
     for attempt in range(1, max_coverage_attempts + 1):
         missed = _uncovered_inventory_items(inventory, types)
         duplicates = _duplicate_inventory_assignments(inventory, types)
-        if not missed and not duplicates:
+        title_duplicates = _duplicate_case_titles(types) if check_titles else []
+        if not missed and not duplicates and not title_duplicates:
             break
-        if missed and not duplicates:
+        if missed and not duplicates and not title_duplicates:
             progress.log(
                 f"Type Mining broad repairs left {len(missed)} missed item(s) "
                 "and no duplicates — switching to focused coverage deltas.",
@@ -11267,8 +11501,12 @@ def _mine_types_from_inventory_via_api(
             break
         progress.log(
             f"Type Mining coverage attempt {attempt}: {len(missed)} inventory "
-            f"item(s) unclassified, {len(duplicates)} duplicate assignment(s) "
-            "— asking GPT for a complete corrected Type list.",
+            f"item(s) unclassified, {len(duplicates)} duplicate assignment(s)"
+            + (
+                f", {len(title_duplicates)} repeated Case title(s)"
+                if check_titles else ""
+            )
+            + " — asking GPT for a complete corrected Type list.",
             level="warning",
         )
         follow_up = (
@@ -11279,11 +11517,22 @@ def _mine_types_from_inventory_via_api(
             + _json.dumps({
                 "unclassified_items": missed,
                 "duplicate_assignments": duplicates,
+                **(
+                    {"duplicate_case_titles": title_duplicates}
+                    if check_titles else {}
+                ),
             }, ensure_ascii=False)
             + "\n\nReturn the COMPLETE corrected {\"types\": [...]} list. "
             "Every inventory qid must appear exactly once as one Example under "
             "one Case in one Type. Remove duplicate placements; never drop the "
             "question entirely. Keep full source wording."
+            + (
+                " Two Cases in one Type never share a case_title: Examples of "
+                "one variety belong in ONE Case; Cases that genuinely differ "
+                "get case_titles naming what differs (the given, the ask or "
+                "the constraint). Never drop or move a question to fix a title."
+                if check_titles else ""
+            )
         )
         corrected = _openai_json(
             system, follow_up, purpose="concept_validation")
@@ -11293,9 +11542,21 @@ def _mine_types_from_inventory_via_api(
         candidate_missed = _uncovered_inventory_items(inventory, candidate)
         candidate_duplicates = _duplicate_inventory_assignments(
             inventory, candidate)
-        current_defects = len(missed) + len(duplicates)
-        candidate_defects = len(candidate_missed) + len(candidate_duplicates)
-        if candidate_defects < current_defects:
+        candidate_title_duplicates = (
+            _duplicate_case_titles(candidate) if check_titles else [])
+        current_coverage = len(missed) + len(duplicates)
+        candidate_coverage = len(candidate_missed) + len(candidate_duplicates)
+        current_defects = current_coverage + len(title_duplicates)
+        candidate_defects = candidate_coverage + len(candidate_title_duplicates)
+        # Exact-once coverage is never traded for a title: a candidate is
+        # accepted when coverage improves, or when coverage holds and fewer
+        # Case titles repeat. With no title defects on either side this is
+        # the strict-improvement test the loop always had.
+        improved = candidate_coverage < current_coverage or (
+            candidate_coverage == current_coverage
+            and len(candidate_title_duplicates) < len(title_duplicates)
+        )
+        if improved:
             types = candidate
         else:
             progress.log(
@@ -11364,6 +11625,15 @@ def _mine_types_from_inventory_via_api(
             "repair attempt(s): "
             f"{len(still_missed)} unclassified item(s), "
             f"{len(still_duplicate)} duplicate assignment(s)."
+        )
+    if check_titles:
+        # Final resort for a Case title the broad rounds, the focused deltas
+        # and the fallbacks still repeat: one recorded Fixer decision per
+        # group, after the coverage gate so a title never masks a lost QID.
+        types = _resolve_duplicate_case_titles_via_fixer(
+            types, inventory=inventory, meta=meta, stage="type_mining",
+            attempts_note=(
+                f"{max_coverage_attempts} broad coverage repair attempt(s)"),
         )
     return {"types": types}
 
@@ -21385,6 +21655,22 @@ def _run_live_concept_pre_final_stages(
         raw_type_count = len((mined_types or {}).get("types") or [])
         mined_types = _consolidate_semantic_types_via_api(
             mined_types, inventory=question_task_inventory, meta=meta)
+        from . import generation_quality_policy as _quality_policy
+        if _quality_policy.duplicate_case_titles_returned(meta):
+            # Consolidation moves "Cases intact under a shared operator
+            # Type" (its prompt), so two merged Types' same-titled Cases
+            # meet here verbatim — the one producer of a repeated title
+            # after the miner's own resort. Decide-once keys make a title
+            # the miner already settled free to re-check.
+            mined_types = {
+                **(mined_types or {}),
+                "types": _resolve_duplicate_case_titles_via_fixer(
+                    list((mined_types or {}).get("types") or []),
+                    inventory=question_task_inventory, meta=meta,
+                    stage="type_consolidation",
+                    attempts_note="semantic Type consolidation",
+                ),
+            }
         consolidated_type_count = len(
             (mined_types or {}).get("types") or [])
         review = type_granularity_decision.build_review(

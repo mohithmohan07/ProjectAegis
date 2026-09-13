@@ -4323,7 +4323,7 @@ place where a rule's FORM changed is named below.
 * **Declared `options` on generated Pre questions** so a dropped option is a
   materializer defect instead of a silent loss. — DONE, see Q70.
 * **Duplicate case titles as a coverage defect** in the mining follow-up
-  (the prompt rule is in).
+  (the prompt rule is in). — DONE, see Q71.
 * **Placeholder captions minted into source text** (`_markdown_image`,
   `render_semantic_source`) and a per-row duplicate-image warning.
 * Ten remaining hub/figure/caption items: captions losing their printed
@@ -4748,4 +4748,74 @@ for free, a v3 build byte-identical, the live author's schema selection, the
 cell carry under a v4 profile only, the materializer's declared-count refusal
 and its historical skip, the gated instruction and the unchanged pre-v4 key);
 the V4 pin in `tests/test_figure_references_kept.py`. No paid generation.
+
+## Q71 — decided — a repeated Case title inside one mined Type goes back to the model (generation-quality v4)
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items), Q13 (the Fixer),
+Q14 (Types as chapter-wide forms). **Contract:** none changed.
+
+**Reproduced.** The CASE WORDING rule ("Two Cases in one chapter never share
+a case_title …") was in `concepts.type_mining.system`, but nothing read it
+back: `_mine_types_from_inventory_via_api` checked only QID coverage
+(`_uncovered_inventory_items`, `_duplicate_inventory_assignments`),
+`_merge_equivalent_mined_types` collapsed two same-titled Cases only when
+every hint also matched, and the consolidation prompt moves "Cases intact"
+so two merged Types' same-titled Cases met there verbatim — the reviewers'
+"Explaining the importance of DNA copying …" titled two Cases of one Type.
+
+**Decided.** Under generation-quality v4 (`duplicate_case_titles_returned`,
+read from the `meta` the miner already receives): (1) a pure detector,
+`_duplicate_case_titles(types)` — Cases of ONE Type whose titles are equal
+under `bi.normalize_question_text` (whitespace and case only, the exact key
+`_merge_equivalent_mined_types` already uses; no punctuation or synonym
+folding, no threshold) — returns the groups; scope is within a Type because a
+Type is a chapter-wide answering form (Q14) and a Q2 split legitimately
+repeats one Case across rows. (2) The miner's existing COVERAGE DEFECTS
+follow-up carries a third key, `duplicate_case_titles`, plus one additive
+sentence; the loop's break conditions include it; acceptance is
+lexicographic — coverage must improve, or hold while title repeats fall — so
+a title repair can never buy its fix with exact-once coverage, and with no
+title defects the test is the old strict-improvement test byte for byte.
+(3) What survives the loop, the focused deltas, the fallbacks and the final
+coverage gate goes to the Fixer through `kernel.decide` (kind
+`fixer.type_mining_case_titles`, `FIXER_POLICY_VERSION`, the run's Fixer
+store, envelope = the canonical inventory's digest): the Fixer returns a
+distinct `case_title` per listed Case — its judgment, applied mechanically;
+code never composes a title — or `accept_with_flag`; a Fixer that cannot
+satisfy the checker, or a deployment with none (dry and test runs), leaves the
+Cases as mined and says so in the saved log — never a new halt, since before
+this change the duplicate shipped silently. (4) The same resort runs once
+more on the accepted consolidation result, the one other producer of a
+within-Type repeat before `type_taxonomy_ready`. No rule or stage is removed;
+the CASE WORDING sentence, the coverage gate, the backstop, the focused
+deltas and the deterministic fallbacks all stand.
+
+**Replay.** A run stamped v3 or earlier replays the loop, the follow-up bytes,
+the log lines and the tail unchanged (pinned on a v3 stamp and on the
+unstamped historical `meta`). Spend: at most one extra broad follow-up per
+attempt when titles are the only defect, plus one Fixer decision per (Type,
+repeated title) group at each of the two sites; title-clean chapters cost
+nothing new.
+
+**Not taken; recorded for the owner (unchanged from Q67):** whether the gate
+becomes chapter-wide once Types are scoped to the concept they test; whether
+a Q2 per-destination split may re-title its verbatim copy. Two Rule 1
+residues already on the tree can re-mint a repeat after the Fixer at render
+time (`_case_title_needs_definition` → `_semantic_fallback_wording`, and the
+templated `_backfill_type_cases_from_inventory` wording) — named in the
+catalogue as their own item, not widened here. A Type/Case-level review flag
+has no carrier to a Concept-file row today; the record is the durable
+decision store and the saved job log.
+
+### Verification
+
+Offline only: `tests/test_type_mining_duplicate_case_titles.py` (the detector
+folds only whitespace and case and stays within a Type; a v4 run sends the
+repeat back through the follow-up and the log names it; a v3 or unstamped
+run never asks; a title repair that drops a QID is rejected; the Fixer resort
+re-titles exactly the listed Cases, leaves every other field byte-identical,
+replays for free, refuses an answer that still repeats, and ships the Cases
+as mined when there is no Fixer). No paid generation.
 
