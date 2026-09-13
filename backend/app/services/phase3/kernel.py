@@ -484,7 +484,7 @@ def _fixer_artifact(
         shapes.append({
             key: value for key, value in candidate.items() if key != "rationale"
         })
-    defects: list[str] = []
+    refused: list[list[str]] = []
     for shape in shapes:
         defects = [
             str(row) for row in checker(shape or {}) if str(row).strip()
@@ -493,7 +493,16 @@ def _fixer_artifact(
             not defect.startswith("[confidence] ") for defect in defects
         ):
             return shape, defects
-    return candidate, defects
+        refused.append(defects)
+    # Neither shape passed. Report the shorter refusal, ties keeping the
+    # as-is one. Trying the stripped shape must not invent a defect the
+    # Fixer did not have: a checker that REQUIRES a top-level rationale
+    # answers the stripped shape with "response has no rationale", and
+    # feeding that back would both misname the block in the recorded issue
+    # (the honesty Q56 and Q60 are about) and spend a bounded attempt
+    # telling the Fixer to add a field it already sent. Length only —
+    # nothing here reads what a defect says.
+    return candidate, min(refused, key=len) if refused else []
 
 
 def decide(

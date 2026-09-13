@@ -3744,3 +3744,67 @@ not as a change:
   gate. Q52 closed it for three-step jobs; Q51 severed Step 02 from Step 01's
   semantics, which is what forced the from-scratch extraction that job 130 hit.
 
+## Q61 — decided — a strict provider schema must require every property it declares
+
+The adversarial review of Q58 hunted for the same defect class — a prompt or
+schema instructing a model to produce something a checker or the provider
+structurally forbids — and found a worse variant of it, twice.
+
+### The request itself was unsendable
+
+OpenAI Structured Outputs refuses the WHOLE request with 400 `invalid_schema`
+when a `"strict": True` schema declares a property it leaves out of `required`.
+The contradiction is in the **request**, so no retry, no Fixer and no model
+change can help: the provider never generates a token.
+
+The repo had already paid for this once. Commit `d857f8a` fixed it in
+`concept_question_review`, whose comment still records the rule — *"Strict
+provider schemas require every property, including empty lists. A Python
+default makes this optional in `model_json_schema()` and causes the provider to
+reject the entire request before reading the workbook."*
+
+Two hand-written schemas carried the same defect from the day they were written:
+
+| schema | undeclared as required | consequence |
+| --- | --- | --- |
+| `release_review._instruction_schema` | `parent_concept`, `keywords` | every reviewer instruction round → `InstructionRoundFailed`, HTTP 502 |
+| `concept_revisions._edit_schema` | `concept_display_name`, `parent_concept`, `keywords` | every revision round recorded `status="failed"` — a permanent refusal that reads as a flaky provider |
+
+Both consumers already read those fields with `or ""` (and `or topic`), so
+requiring them changes no behaviour except that the request is now accepted.
+Both routes are gated to legacy, non-three-step jobs by
+`_require_legacy_review_job`, so this never touched the current Q51/Q52 path —
+which is why the features simply appeared never to work rather than breaking a
+run.
+
+An AST sweep — walking the tree rather than evaluating the literal, so a schema
+built from names or calls is still judged — covers **48** object schemas nested
+under a `strict: True` schema. Two problems before, **zero** after. The sweep is
+kept as `tests/test_strict_provider_schema_required.py`, and it names a
+dynamically-built `required` rather than skipping it silently.
+
+### Two corrections to Q58's own fix
+
+* `_fixer_artifact` returned the **last** shape's defect list, so on a caller
+  whose checker REQUIRES a top-level rationale (premap's empty-capture checker,
+  the assessment-cell verdict checker) a total failure reported *"response has
+  no rationale"* — about an artifact that sent one. That both misnames the block
+  in the recorded issue, which is exactly the honesty Q56 and Q60 are about, and
+  spends a bounded attempt telling the Fixer to add a field it already sent. It
+  now reports the shorter refusal, ties keeping the as-is one. Length only —
+  nothing reads what a defect says.
+* `FIXER_SYSTEM` claimed *"the contract and blocked_check name it"* of the
+  response schema. They do not: the contract block carries only kind, unit_id
+  and policy_version. The prompt now says to infer the schema from
+  `last_response` and the rules in `original_payload`, and states that the
+  rationale is a protocol field the server separates where the caller's schema
+  forbids extras — so a complaint about an unexpected `rationale` is never
+  something to negotiate and never a reason to withhold the reasoning.
+
+The review's other recommendation — **do not** amend `FIXER_SYSTEM` to allow
+omitting the rationale — is adopted as a non-change: with `_fixer_artifact` the
+stripped shape is accepted on the Fixer's first call, so it would save no
+attempt, and an omitted rationale degrades the Q13 record to the stock
+"corrected by the Fixer's best judgment" on exactly the blocks a human must
+audit.
+

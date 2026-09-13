@@ -150,3 +150,39 @@ def test_a_fixer_failure_still_names_what_blocked_the_run(tmp_path):
     assert "block B7 undisposed" in message
     assert "the Fixer's own artifact is malformed" in message
     assert raised.value.defects[0] == "the reviewed file left block B7 undisposed"
+
+
+def test_a_total_failure_reports_the_fixers_own_defects_not_the_stripped_shapes(tmp_path):
+    """Trying the stripped shape must not invent a defect the Fixer did not have.
+
+    Several callers REQUIRE a top-level rationale (premap's empty-capture
+    checker, the assessment-cell verdict checker). For those, the stripped
+    shape answers "response has no rationale" — about an artifact that sent
+    one. Feeding that back both misnames the block in the recorded issue and
+    spends a bounded attempt telling the Fixer to add a field it already sent.
+    """
+
+    def checker(value):
+        defects = []
+        if "rationale" not in value:
+            defects.append("response has no rationale")
+        if value.get("verdict") != "resolved":
+            defects.append("verdict must be resolved")
+        return defects
+
+    with pytest.raises(kernel.ContractError) as raised:
+        kernel.decide(
+            kind="test.wants_rationale",
+            unit_id="u1",
+            envelope_sha256="c" * 64,
+            payload={"stage": "test.wants_rationale"},
+            provider=lambda _r: {"verdict": "draft", "rationale": "drafted"},
+            checker=checker,
+            critic=lambda request: {"verdict": "verified", "confidence": 1.0, "issues": []},
+            fixer=lambda _r: {"verdict": "still-wrong", "rationale": "tried"},
+            store=kernel.DecisionStore(tmp_path / "decisions"),
+            policy_version="test-1",
+        )
+
+    assert "verdict must be resolved" in str(raised.value)
+    assert "response has no rationale" not in str(raised.value)

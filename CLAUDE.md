@@ -1,6 +1,32 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q60 (reviewed-file quote transport, 13 September 2026).**
+**Latest owner amendment: Q61 (strict request schemas, 13 September 2026).**
+The adversarial review of Q58 found a worse variant of the same defect class,
+twice. OpenAI Structured Outputs refuses the WHOLE request with 400
+`invalid_schema` when a `"strict": True` schema declares a property it leaves
+out of `required` — the contradiction is in the REQUEST, so no retry, no Fixer
+and no model change can help. `release_review._instruction_schema` (missing
+`parent_concept`, `keywords`) made every reviewer instruction round a 502, and
+`concept_revisions._edit_schema` (missing `concept_display_name`,
+`parent_concept`, `keywords`) made every revision round a recorded
+`status="failed"` that read as a flaky provider. Both have been so since they
+were written; both are gated to legacy non-three-step jobs, so neither touched
+the current path. Both consumers already read those fields with `or ""`, so
+requiring them changes nothing but acceptance. The repo had paid for this rule
+once already (commit `d857f8a`, comment at `concept_question_review.py:203`).
+An AST sweep — walking the tree, not evaluating the literal — judges 48 object
+schemas under a `strict: True` schema: 2 problems before, 0 after, and the sweep
+is kept as a test that NAMES a dynamically-built `required` instead of skipping
+it. Two corrections to Q58's own fix: `_fixer_artifact` reported the LAST
+shape's defects, so a rationale-REQUIRING caller was told "response has no
+rationale" about an artifact that sent one — it now reports the shorter refusal,
+by length only; and `FIXER_SYSTEM`'s claim that "the contract and blocked_check
+name it" of the response schema was false (the contract carries only kind,
+unit_id, policy_version). Adopted as a NON-change: the Fixer's rationale stays
+unconditional, because omitting it would save no attempt and would degrade the
+Q13 record to a stock sentence. Q61 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q60 (reviewed-file quote transport, 13 September 2026).**
 Job 130's Step 2 was stopped by the quoting gate, NOT by images. The Fixer's
 rationale in the owner's log ends "cited reviewed blocks." — the tail of
 `_checker`'s *"Question/context/answer/option text must be quoted from its cited

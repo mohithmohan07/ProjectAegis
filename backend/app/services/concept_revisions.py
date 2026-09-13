@@ -293,8 +293,18 @@ def _edit_schema(concept_ids: list[int]) -> dict[str, Any]:
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
+                        # Strict provider schemas require EVERY declared
+                        # property in ``required`` (the rule
+                        # ``concept_question_review`` already records):
+                        # a property left out makes the API refuse the
+                        # whole request with 400 invalid_schema, before
+                        # reading a word of the reviewer's instruction.
+                        # Both consumers below already read these with
+                        # ``or ""``, so requiring them changes nothing
+                        # except that the request is now accepted.
                         "required": [
-                            "topic", "concept_title", "concept_details",
+                            "topic", "concept_title", "concept_display_name",
+                            "parent_concept", "concept_details", "keywords",
                             "reason",
                         ],
                         "properties": {
