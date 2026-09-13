@@ -1716,6 +1716,7 @@ def test_a_candidate_whose_marking_exhausts_is_blocked_not_raised(
         critic=lambda request: _verified(request),
         store=kernel.DecisionStore(),
         fixer=never_valid_fixer,
+        contain_exhausted=True,
     )
 
     assert len(rows) == 1
@@ -1747,3 +1748,31 @@ def test_a_sound_candidate_is_unaffected_by_the_block_seam(monkeypatch) -> None:
     assert len(rows) == 1
     assert marking.BLOCKED_MARKER not in rows[0]
     assert rows[0]["marks"] is not None
+
+
+def test_without_containment_an_exhausted_candidate_still_fails_closed(
+    monkeypatch,
+) -> None:
+    """The default is unchanged: every direct caller keeps its hard refusal.
+
+    Containment is opt-in precisely so the 40-odd fail-closed contracts in this
+    file keep meaning what they say; only the release run, where a raise costs
+    the whole lane, turns it on.
+    """
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+
+    def never_valid_author(request: dict) -> dict:
+        response = _valid_response(request)
+        response["marks"] = "not-a-number"
+        return response
+
+    with pytest.raises(kernel.ContractError):
+        marking.decide_markings(
+            [(_candidate(), _cell())],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=never_valid_author,
+            critic=lambda request: _verified(request),
+            store=kernel.DecisionStore(),
+            fixer=lambda _request: {"marks": "not-a-number"},
+        )

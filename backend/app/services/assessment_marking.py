@@ -1365,8 +1365,19 @@ def decide_markings(
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
     on_result=None,
+    contain_exhausted: bool = False,
 ) -> list[dict[str, Any]]:
     """Return one cached marking verdict per candidate/cell pair, in order.
+
+    ``contain_exhausted`` decides what happens to ONE candidate whose bounded
+    corrections and The Fixer both exhausted. Default False keeps the
+    fail-closed contract every direct caller and its tests rely on: the
+    ``kernel.ContractError`` propagates. The release run passes True, because
+    there a raise costs every other finished, paid-for question in the lane —
+    the trade ``assessment_materialization`` already refuses at its own blocked
+    -row seam, and the one that cost 51 questions on 12 September 2026. When
+    True the candidate returns a ``BLOCKED_MARKER`` row carrying every defect,
+    and the caller excludes and records it.
 
     ``profile`` owns the allowed sheet/category, marks, and duration contract.
     Its resolved authoring policy joins the decision payload and therefore the
@@ -1458,13 +1469,15 @@ def decide_markings(
             decision = decide()
         except kernel.ContractError as error:
             # Bounded corrections AND The Fixer both exhausted on this ONE
-            # candidate (kernel.decide raises only after both). Materialization
-            # already answers this exact condition with a recorded blocked row
-            # rather than a raise, for the reason CLAUDE.md gives in as many
-            # words — "finished work always ships". Marking had no such seam,
-            # so the exception escaped the fan-out, escaped the lane worker,
-            # and cost every other finished question in the lane. Refuse this
-            # one, name every defect, and let the lane continue.
+            # candidate (kernel.decide raises only after both).
+            if not contain_exhausted:
+                raise
+            # Materialization already answers this exact condition with a
+            # recorded blocked row rather than a raise, for the reason
+            # CLAUDE.md gives in as many words — "finished work always ships".
+            # Marking had no such seam, so the exception escaped the fan-out,
+            # escaped the lane worker, and cost every other finished question
+            # in the lane. Refuse this one, name every defect, let the lane go.
             return {
                 "candidate_id": candidate_id,
                 BLOCKED_MARKER: True,

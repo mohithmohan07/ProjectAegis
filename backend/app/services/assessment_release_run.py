@@ -2664,6 +2664,9 @@ def run_release_for_job(
         critic=marking_critic,
         store=store,
         fixer=fixer,
+        # One impossible candidate must not cost the lane every other
+        # finished, paid-for question (Q56).
+        contain_exhausted=True,
         on_result=(
             None if stage_progress is None
             else lambda index, item, result: _observe_stage(
