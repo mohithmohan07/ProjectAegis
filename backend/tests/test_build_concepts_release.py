@@ -605,7 +605,13 @@ def test_manifest_only_routes_keep_staging_and_publication_in_parity(
         payload["records"], payload["type_case_rows"]
     ) == []
     assert release.structural_defects(payload) == []
-    assert release.release_state(payload) == release.READY
+    # The fixture authors no chapter/topic descriptions, so the release
+    # carries the advisory band findings (Q67) and nothing blocking.
+    assert release.release_state(payload) in {release.READY, release.READY_WITH_FLAGS}
+    assert not [
+        issue for issue in payload.get("issues") or []
+        if str(issue.get("severity") or "") == "error"
+    ]
 
     def commit_only(database, _path, ids):
         database.commit()

@@ -415,7 +415,9 @@ def test_release_qc_blocks_a_concept_tiered_off_the_rule():
 
     exact = _tiered_questions("PRC-0001", dict(RULE["per_tier"]))
     issues, blocking = release_qc.audit(_qc_payload(exact))
-    assert issues == []
+    # The fixture authors no band descriptions; that advisory finding (Q67)
+    # is not this test's concern and never blocks.
+    assert [i for i in issues if i["code"] not in release_qc.BAND_DESCRIPTION_CODES] == []
     assert blocking == []
 
 
@@ -425,11 +427,11 @@ def test_release_qc_is_dormant_without_a_rule_or_without_tiers():
         row["pre_question_id"] = f"PRC-0001-{row['question_id']}"
         row["pre_concept_id"] = "PRC-0001"
     issues, blocking = release_qc.audit(_qc_payload(untiered))
-    assert issues == []
+    assert [i for i in issues if i["code"] not in release_qc.BAND_DESCRIPTION_CODES] == []
     assert blocking == []
     lopsided = _tiered_questions("PRC-0001", {"Basic": 4, "Intermediate": 6})
     issues, blocking = release_qc.audit(_qc_payload(lopsided, rule=None))
-    assert issues == []
+    assert [i for i in issues if i["code"] not in release_qc.BAND_DESCRIPTION_CODES] == []
     assert blocking == []
 
 

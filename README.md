@@ -78,7 +78,9 @@ The worker runs on **one** machine. Its database lease closes the restart and
 multi-thread holes within a process and volume; it cannot make two Fly machines
 coherent, because a second machine has its own volume and its own SQLite file.
 
-`docs/chapter-batch-console-contract.md` is the frozen contract.
+`docs/chapter-batch-console-contract.md` is the frozen contract;
+`docs/chapter-batch-console-usage.md` is the team's step-by-step guide
+(what to click, every state, what to do when a row stops, the HTTP routes).
 
 ### Post-generation pipeline
 

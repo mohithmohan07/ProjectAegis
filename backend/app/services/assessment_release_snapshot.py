@@ -418,8 +418,12 @@ def build(
                 str(chapter.subject or ""),
                 book=chapter_book,
             ),
-            "chapter_display_name": str(
-                chapter.chapter_display_name or chapter.chapter_title or ""
+            # The same composer the Concept writer uses (contract §15): the
+            # stored display name may still carry the import-time identity
+            # tag, which is how the Master's cell came to disagree with the
+            # Concept file's (Q67).
+            "chapter_display_name": bi.chapter_display_cell(
+                chapter.chapter_title, chapter.chapter_display_name
             ),
             # Carried, not omitted (spec-step8 T12/M4): the profile's
             # ``forced_blank_fields`` decides whether it ships, and a key

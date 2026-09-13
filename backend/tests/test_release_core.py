@@ -845,10 +845,14 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
         if event.get("type") == "progress"
     ]
     assert master_progress
-    assert max(master_progress) == 0.99
-    assert round(max(master_progress) * 100) == 99, (
-        "the live Master stage must never render as 100%; only the terminal "
-        "four-files-ready verdict owns 100%"
+    # 0.98, not 0.99: the band's ceiling sits BELOW the value a run that
+    # finished with fewer than four outputs reports (0.99), so the bar alone
+    # can tell "still building" from "finished incomplete" (Q65).
+    assert max(master_progress) == 0.98
+    assert round(max(master_progress) * 100) == 98, (
+        "the live Master stage must never render as 99% or 100%; 99% is the "
+        "finished-incomplete verdict and only the terminal four-files-ready "
+        "verdict owns 100%"
     )
 
 

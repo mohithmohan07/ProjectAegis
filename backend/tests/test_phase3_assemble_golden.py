@@ -224,9 +224,9 @@ def test_assemble_records_zero_model_usage(
     original_mastery = generation._ensure_mastery_lines_via_api
     original_coverage = generation._enforce_rendered_inventory_coverage
 
-    def deterministic_mastery(records, *, meta, use_api=True):
+    def deterministic_mastery(records, *, meta, use_api=True, **kwargs):
         assert use_api is False
-        return original_mastery(records, meta=meta, use_api=use_api)
+        return original_mastery(records, meta=meta, use_api=use_api, **kwargs)
 
     def deterministic_coverage(
         records, inventory, mined_types=None, *, fixer=None, fixer_store=None,

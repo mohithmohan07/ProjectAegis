@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 from . import (
     ANSWER_TYPES, CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
-    appears_in_wire, duration_minutes_cell, join_multi, list_token_defects,
+    appears_in_wire, chapter_display_cell, duration_minutes_cell, join_multi, list_token_defects,
     merge_sources, normalize_answer_type, wire_answer_type,
     normalize_question_text, split_multi, strip_title_tag, strip_topic_title,
 )
@@ -979,7 +979,8 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
         # ---- Chapter band (tag in title, clean display) ----
         "chapter_title": f"{chapter.chapter_title} ({c_tag})",
         "is_update_chapter": workbook_contract.UPDATE_FIELD_VALUE,
-        "chapter_display_name": chapter.chapter_title,
+        "chapter_display_name": chapter_display_cell(
+            chapter.chapter_title, chapter.chapter_display_name),
         # Contract v2.0 §32: a real numeric minutes cell, never unit text.
         "chapter_duration": duration_minutes_cell(chapter.chapter_duration),
         "pre_topics": pre_topics,

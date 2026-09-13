@@ -330,10 +330,17 @@ def test_settle_keeps_planned_one_concept_culminations_without_conformance():
             response["culminations"] = [
                 {
                     "concept_id": row["concept_id"],
+                    # A planned culmination echoes the plan's title and
+                    # leaves mastery to the plan seam.
+                    "culmination_title": row["draft_culmination_title"],
                     "consolidation": (
                         "Together the stanza's meaning and literary form "
                         "create one complete invitation, allowing learners "
                         "to explain both its message and its effect."
+                    ),
+                    "achieving_mastery": (
+                        "" if row.get("planned")
+                        else "Explain the invitation's message and effect together."
                     ),
                 }
                 for row in request["culminations"]

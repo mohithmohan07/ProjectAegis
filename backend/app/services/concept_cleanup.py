@@ -8,8 +8,11 @@ team-reported concept-mapping defects that are safe to fix without an LLM:
     ("Culmination - A & B & C" -> "Culmination - A, B and C").
     A single ``&`` (e.g. "History & Civics") is left alone.
   * Dangling source references in descriptions ("(Example 19)", "Examples
-    Type III", "Figure 1,2", "Table no. 1", "ex 1") -> removed. Actual worded
-    content like "worked example: ..." is preserved.
+    Type III", "Table no. 1", "ex 1") -> removed. Actual worded content like
+    "worked example: ..." is preserved. A FIGURE reference ("Fig. 7.7") is
+    kept in learner prose for rows stamped generation-quality v2 or later
+    (Q67): deleting it left the sentence without its subject; rows sealed
+    earlier replay through the cleanup they were sealed with.
 
 Two non-destructive detectors are also provided for defects whose real fix is
 prompt-side (so callers can flag rather than silently rewrite):
@@ -107,6 +110,16 @@ _REF_CORE_NO_FIG = (
     r"(?:examples?|ex)\b\.?\s*(?:no\.?\s*)?"
     r"(?:type\s+)?" + _REF_NUM + r"\b"
 )
+# Same token WITHOUT figures (tables still neutralised): a figure reference
+# in learner prose is the sentence's own subject or object ("as illustrated
+# in Fig. 7.7"); deleting it left "as illustrated in." — the reviewers' three
+# subjectless sentences, reproduced byte for byte (Q67). Kept for rows whose
+# recorded generation-quality policy is v2 or later; older rows replay
+# through the cleanup they were sealed with.
+_REF_CORE_KEEP_FIG = (
+    r"(?:examples?|ex|tables?)\b\.?\s*(?:no\.?\s*)?"
+    r"(?:type\s+)?" + _REF_NUM + r"\b"
+)
 # Parenthetical reference, e.g. "(Example 19)", "(Examples Type III)", "(see Fig 2)".
 _PAREN_REF_RE = re.compile(
     r"(?:(?:[,;]\s*|\b(?:and|or)\s+)?"
@@ -118,11 +131,20 @@ _PAREN_REF_NO_FIG_RE = re.compile(
     r"\b(?:see|refer(?:\s+to)?)\s+)?"
     r"\(\s*(?:see\s+)?(?:" + _REF_CORE_NO_FIG + r")\s*\)", re.IGNORECASE,
 )
+_PAREN_REF_KEEP_FIG_RE = re.compile(
+    r"(?:(?:[,;]\s*|\b(?:and|or)\s+)?"
+    r"\b(?:see|refer(?:\s+to)?)\s+)?"
+    r"\(\s*(?:see\s+)?(?:" + _REF_CORE_KEEP_FIG + r")\s*\)", re.IGNORECASE,
+)
 # Bare inline reference, optionally led by a connector ("and"/"or"/",") and/or a
 # cue word ("see"/"refer"). Consuming the leading connector keeps multi-reference
 # clauses ("Table 1 and Figure 2 or Example 3") from leaving stranded "and/or".
 _INLINE_REF_RE = re.compile(
     r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE,
+    re.IGNORECASE,
+)
+_INLINE_REF_KEEP_FIG_RE = re.compile(
+    r"(?:[,]\s*|\b(?:and|or)\s+)?(?:\b(?:see|refer(?:\s+to)?)\s+)?" + _REF_CORE_KEEP_FIG,
     re.IGNORECASE,
 )
 _INLINE_REF_NO_FIG_RE = re.compile(
@@ -366,17 +388,25 @@ def _tidy(text: str) -> str:
     return text.strip()
 
 
-def strip_dangling_references(text: str) -> str:
+def strip_dangling_references(text: str, *, keep_figures: bool = False) -> str:
     """Remove bare source-artifact references; keep real worded content.
 
     When the text embeds an actual image URL, figure/table references stay
     (they point at the shipped image, e.g. "(Refer fig. 11.1) ![](https://…)").
+    With ``keep_figures`` a figure reference stays even without an image on
+    the section: the figure a Description cites is the one the row's hub or
+    Example carries, and deleting the token left the sentence without its
+    subject (Q67). Example/Exercise/page apparatus is neutralised as before.
     """
     if not text:
         return text
     has_image = bool(_IMAGE_URL_RE.search(text))
-    paren_re = _PAREN_REF_NO_FIG_RE if has_image else _PAREN_REF_RE
-    inline_re = _INLINE_REF_NO_FIG_RE if has_image else _INLINE_REF_RE
+    if has_image:
+        paren_re, inline_re = _PAREN_REF_NO_FIG_RE, _INLINE_REF_NO_FIG_RE
+    elif keep_figures:
+        paren_re, inline_re = _PAREN_REF_KEEP_FIG_RE, _INLINE_REF_KEEP_FIG_RE
+    else:
+        paren_re, inline_re = _PAREN_REF_RE, _INLINE_REF_RE
     out = paren_re.sub("", text)
 
     def _inline_sub(m: re.Match) -> str:
@@ -506,7 +536,9 @@ _TEXTBOOK_SECTION_REF_RE = re.compile(
 )
 
 
-def _clean_details(details: str, *, neutralize: bool = True) -> str:
+def _clean_details(
+    details: str, *, neutralize: bool = True, keep_figures: bool = False,
+) -> str:
     """Sanitize a concept_details string section-by-section.
 
     The Types section is preserved verbatim (only MMD wording is rewritten) so
@@ -533,7 +565,9 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             # preserved for content inlining, prose keeps them too.
             cleaned = replace_mmd_references(part)
         else:
-            cleaned = replace_mmd_references(strip_dangling_references(part))
+            cleaned = replace_mmd_references(
+                strip_dangling_references(part, keep_figures=keep_figures)
+            )
         if (
             label.startswith("description")
             or cr.is_learner_analysis_label(label)
@@ -567,14 +601,25 @@ def _neutralize_name_artifacts(name: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip(" -:.,") or name
 
 
-def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dict:
+def clean_concept_record(
+    rec: dict, *, neutralize_artifacts: bool = True, keep_figures: bool | None = None,
+) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place).
 
     ``neutralize_artifacts=False`` leaves source references ("Exercise 1.2",
     "Example 5") in place so the LLM repair pass can replace them with the
     actual condensed problem content; pass ``True`` (default) as the final
     deterministic guarantee that no reference survives to strict validation.
+
+    ``keep_figures`` (Q67): whether a figure reference in learner prose is
+    kept. ``None`` reads the row's own recorded generation-quality stamp, so a
+    row sealed under v1 replays through the cleanup it was sealed with; a
+    caller holding the run envelope passes the envelope's answer.
     """
+    from . import generation_quality_policy
+
+    if keep_figures is None:
+        keep_figures = generation_quality_policy.figure_references_kept(rec)
     for field in ("topic", "parent_concept", "concept_title", "concept_details"):
         if rec.get(field):
             rec[field] = strip_control_chars(rec[field])
@@ -596,7 +641,8 @@ def clean_concept_record(rec: dict, *, neutralize_artifacts: bool = True) -> dic
         rec["concept_details"] = kr.canonicalize_rich_text(
             rec["concept_details"])
         rec["concept_details"] = _clean_details(
-            rec["concept_details"], neutralize=neutralize_artifacts)
+            rec["concept_details"], neutralize=neutralize_artifacts,
+            keep_figures=keep_figures)
     if neutralize_artifacts:
         # Absolute last resort: scrub any validator-shaped token that named
         # neutralization missed (OCR forms, MMD leftovers, page14, etc.).

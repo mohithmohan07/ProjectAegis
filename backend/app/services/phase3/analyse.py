@@ -12,7 +12,9 @@ Mastery is untouched: every concept still carries its Mastery line.
   canonical source blocks plus the question/task inventory
   (experiment/practical items are named evidence for error analysis).
   Distinctness and genuineness are the model's authored judgment; the
-  checker is mechanics only (positional ids, kind enum, non-empty text).
+  checker is mechanics only (positional ids, kind enum, non-empty text —
+  and, under ``analysis_correction_policy`` frozen on new envelopes, a
+  non-empty paired ``correction`` on every item).
   There is NO count quota of any kind — a thin chapter may yield few or
   zero items and is never padded (Rule 1: no volume-derived structure).
 * **4.3 Allot** — each item is allotted to exactly one settled concept.
@@ -36,6 +38,7 @@ from . import envelope as envelope_mod
 from . import kernel
 from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from ... import config
+from .. import analysis_correction_policy
 from .. import progress
 
 # Items are allotted in bounded batches (payload size mechanics only —
@@ -175,8 +178,11 @@ def build_evidence(env: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _inventory_checker() -> Callable[[Mapping[str, Any]], list[str]]:
-    """Mechanics only: positional ids, kind enum, non-empty text.
+def _inventory_checker(
+    *, require_correction: bool = False,
+) -> Callable[[Mapping[str, Any]], list[str]]:
+    """Mechanics only: positional ids, kind enum, non-empty text — and, when
+    ``require_correction`` (the correction policy), a non-empty ``correction``.
 
     Distinctness/genuineness are the model's authored judgment (the
     advisory critic reviews them); an empty items list is legal — a thin
@@ -211,6 +217,26 @@ def _inventory_checker() -> Callable[[Mapping[str, Any]], list[str]]:
                 defects.append(
                     f"{item_id or expected[position]} has empty text"
                 )
+            if require_correction and not _normal(row.get("correction")):
+                defects.append(
+                    f"{item_id or expected[position]} has empty correction"
+                )
+            if require_correction:
+                # A reserved section label inside either half is a shape the
+                # composer would split on (``normalize_analysis_sections``
+                # tears the pair at it); refusing it judges formatting, not
+                # meaning, and stays gated so historical checkers are
+                # byte-identical.
+                from .. import concept_refiner as cr
+
+                for field in ("text", "correction"):
+                    if cr._INLINE_ANALYSIS_RE.search(_normal(row.get(field))):
+                        defects.append(
+                            f"{item_id or expected[position]} {field} contains "
+                            "a reserved section label (Misconceptions:/Error "
+                            "Analysis:/Common|Possible Error|Mistake:) the "
+                            "composer would split on"
+                        )
         return defects
 
     return check
@@ -261,7 +287,9 @@ def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.ANALYSE_INVENTORY_SYSTEM, prompts.render(payload),
+        prompts.ANALYSE_INVENTORY_SYSTEM
+        + analysis_correction_policy.author_instruction(payload),
+        prompts.render(payload),
         purpose="concept_mapping", image_urls=image_inputs(payload),
     )
 
@@ -274,7 +302,11 @@ def _cached_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
         payload, stable_keys=("stage", "rules", "settled_concepts", "evidence"),
     )
     return generation._openai_json(
-        prompts.ANALYSE_CRITIC_SYSTEM if critic else prompts.ANALYSE_ALLOT_SYSTEM,
+        (
+            prompts.ANALYSE_CRITIC_SYSTEM
+            + analysis_correction_policy.critic_instruction(payload)
+        )
+        if critic else prompts.ANALYSE_ALLOT_SYSTEM,
         suffix, purpose="advisory_critic" if critic else "concept_mapping",
         image_urls=image_inputs(payload),
         prompt_cache_prefix=prefix,
@@ -332,8 +364,10 @@ def analyse(
 
     # ---- 2.4 Build: one decision over chapter-wide evidence ----------
     evidence = build_evidence(env)
+    correction = analysis_correction_policy.fields(env)
     build_payload = {
         "stage": "analyse.inventory",
+        **correction,
         "rules": (
             "Phase 2.4: build the chapter's inventory of DISTINCT "
             "Misconceptions and Error Analyses — each a genuine, strong "
@@ -342,7 +376,8 @@ def analyse(
             "holds about this chapter's content; an error analysis is a "
             "concrete process error — a faulty action or reasoning step "
             "made while applying the chapter's content. They are two "
-            "distinct meanings; never restate one as the other. Error "
+            "distinct meanings; never restate one as the other. "
+            + analysis_correction_policy.rules_sentence(correction) + "Error "
             "analysis typically surfaces around practical/experimental "
             "work — the question/task inventory entries marked "
             "practical_evidence are named evidence for it. Judge purely "
@@ -365,10 +400,13 @@ def analyse(
         envelope_sha256=envelope_sha,
         payload=build_payload,
         provider=provider,
-        checker=_inventory_checker(),
+        checker=_inventory_checker(require_correction=bool(correction)),
         critic=critic,
         store=store,
-        policy_version=_policy_version("ANALYSE_INVENTORY_SYSTEM"),
+        policy_version=(
+            _policy_version("ANALYSE_INVENTORY_SYSTEM")
+            + analysis_correction_policy.suffix(build_payload)
+        ),
         fixer=fixer,
     )
     inventory: list[dict[str, Any]] = []
@@ -381,6 +419,14 @@ def analyse(
             "text": _normal(row.get("text")),
             "evidence": _normal(row.get("evidence")),
             "rationale": _normal(row.get("rationale")),
+            # Present only when the response carries it: a stored
+            # pre-policy decision rebuilds the identical dict, so the
+            # recorded snapshot, every downstream packet that copies these
+            # items and the allot payload replay byte for byte.
+            **(
+                {"correction": _normal(row.get("correction"))}
+                if "correction" in row else {}
+            ),
         })
     build_flags = list(build_decision.get("review_flags") or [])
 
@@ -456,6 +502,10 @@ def analyse(
                     "kind": item["kind"],
                     "text": item["text"],
                     "evidence": item["evidence"],
+                    **(
+                        {"correction": item["correction"]}
+                        if "correction" in item else {}
+                    ),
                 }
                 for item in batch
             ],

@@ -232,3 +232,101 @@ test("the page never calls useRunConsole and never touches browser storage", asy
   expect(storage.setItem).not.toHaveBeenCalled();
   expect(storage.removeItem).not.toHaveBeenCalled();
 });
+
+/* ---------------------------------------------------------------------
+   A selection that spans pages (Q66).
+
+   `rows` is only the page on screen. Filtering the selection through it
+   counted a row picked on page 1 in the action bar and then never sent
+   it once the operator moved to page 2 (verified audit, 13 September
+   2026). The page now remembers every selected row's last projection.
+   --------------------------------------------------------------------- */
+
+function retryable(chapterId: number, name: string): ChapterBatchRow {
+  return {
+    ...row(chapterId, name),
+    job_id: 40 + chapterId,
+    source_filename: `${name.toLowerCase()}.pdf`,
+    state: "failed",
+    state_label: "Failed",
+    can: can({ upload_source: true, retry: true }),
+    queue: queue({
+      task_id: 100 + chapterId, kind: "step01", state: "failed",
+      attempt: 2, failure_code: "attempts_exhausted",
+      last_error: "the provider timed out",
+    }),
+  };
+}
+
+const PAGE_ONE: ChapterBatchPage = {
+  ...PAGE,
+  items: [retryable(1, "Shapes"), row(2, "Numbers"), row(3, "Measurement")],
+  page: 1, page_size: 3, total: 5, total_pages: 2,
+};
+
+const PAGE_TWO: ChapterBatchPage = {
+  ...PAGE,
+  items: [retryable(4, "Fractions"), row(5, "Time")],
+  page: 2, page_size: 3, total: 5, total_pages: 2,
+};
+
+function checkboxFor(container: HTMLElement, chapterId: number): HTMLInputElement {
+  const box = container.querySelector<HTMLInputElement>(
+    `[data-testid="chapter-row-${chapterId}"] input[type="checkbox"]`,
+  );
+  expect(box).not.toBeNull();
+  return box as HTMLInputElement;
+}
+
+test("a row selected on page 1 is still counted and sent from page 2", async () => {
+  apiMock.chapterBatchList.mockImplementation(
+    async (query: { page?: number }) => (query.page === 2 ? PAGE_TWO : PAGE_ONE),
+  );
+  apiMock.chapterBatchRetry.mockReset();
+  apiMock.chapterBatchRetry.mockResolvedValue({
+    step: "", push_group_id: "g-1", results: [],
+  });
+
+  const { container } = renderPage();
+  await screen.findByText("Shapes");
+  fireEvent.click(checkboxFor(container, 1));
+  expect(screen.getByTestId("chapter-actionbar").textContent).toContain("1 selected");
+  expect(screen.getByTestId("push-retry").textContent).toContain("Retry (1 of 1)");
+
+  fireEvent.click(screen.getByText("Next"));
+  await screen.findByText("Fractions");
+  expect(screen.queryByText("Shapes")).toBeNull();
+
+  // Still one selected, still retryable, from a page that no longer shows it.
+  expect(screen.getByTestId("chapter-actionbar").textContent).toContain("1 selected");
+  const retry = screen.getByTestId("push-retry") as HTMLButtonElement;
+  expect(retry.textContent).toContain("Retry (1 of 1)");
+  expect(retry.disabled).toBe(false);
+
+  fireEvent.click(checkboxFor(container, 4));
+  expect(screen.getByTestId("push-retry").textContent).toContain("Retry (2 of 2)");
+
+  fireEvent.click(screen.getByTestId("push-retry"));
+  await waitFor(() => {
+    expect(apiMock.chapterBatchRetry).toHaveBeenCalledTimes(1);
+  });
+  expect(apiMock.chapterBatchRetry).toHaveBeenCalledWith([1, 4]);
+});
+
+test("Clear forgets a selection made on another page too", async () => {
+  apiMock.chapterBatchList.mockImplementation(
+    async (query: { page?: number }) => (query.page === 2 ? PAGE_TWO : PAGE_ONE),
+  );
+  const { container } = renderPage();
+  await screen.findByText("Shapes");
+  fireEvent.click(checkboxFor(container, 1));
+  fireEvent.click(screen.getByText("Next"));
+  await screen.findByText("Fractions");
+  fireEvent.click(screen.getByText("Clear"));
+  expect(screen.queryByTestId("chapter-actionbar")).toBeNull();
+
+  // Back on page 1 the row is unselected: nothing lingers in the memory.
+  fireEvent.click(screen.getByText("Previous"));
+  await screen.findByText("Shapes");
+  expect(checkboxFor(container, 1).checked).toBe(false);
+});

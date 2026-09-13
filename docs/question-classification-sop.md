@@ -58,7 +58,8 @@ original wording, source occurrence, accepted polished wording and any missing
 dependency finding.
 
 New work carries `generation_quality_policy =
-owner-generation-quality-2026-09-11-v1`. Source and generated cell authors,
+owner-generation-quality-2026-09-13-v4` (a run keeps the version it recorded —
+v1, v2 or v3; every version carries this instruction). Source and generated cell authors,
 independent critics, and the Fixer's original payload receive the strengthened
 response-demand contract. Generated cell decisions include the complete carried
 question evidence, including structured tables, options and children. The

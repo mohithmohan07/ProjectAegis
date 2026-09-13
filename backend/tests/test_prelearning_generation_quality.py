@@ -207,6 +207,8 @@ def test_retained_atoms_survive_map_and_plan_without_importing_source_tasks(tmp_
             "question_id": "PRQ-0001", "question_text": "What does a map key tell the reader?",
             "answer": "The meaning of the symbols on the map.", "tier": "Basic",
             "rationale": "This checks the retained prerequisite's diagnostic scope.",
+            # Q70: a new run's author declares its choice set (none here).
+            "options": [],
         }]}
 
     def critic(payload):

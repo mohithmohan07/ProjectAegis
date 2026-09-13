@@ -12,6 +12,13 @@ from dataclasses import dataclass
 
 
 _BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+# Q38 writes ONE logical break as the PAIR "<br>" + the native line break it
+# renders as, and says a paired prose break imports as one logical break. The
+# view must consume both or one break reads as two, and then neither faithful
+# transcription a model can produce — the marker alone, or the break alone —
+# matches the cell it was copied from. Measured on the owner's job 130 and 139
+# files: that is the whole of what the quoting gate was refusing.
+_BR_PAIR = re.compile(r"<br\s*/?>[^\S\n]*\n?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -24,9 +31,15 @@ class QuoteMatch:
 
 
 def view(value: object) -> str:
-    """Return the display view used only for reversible quote lookup."""
+    """Return the display view used only for reversible quote lookup.
 
-    return _BR.sub("\n", str(value or "").replace("\r\n", "\n").replace("\r", "\n"))
+    One logical break is one newline here, whichever of its three written
+    forms the source used: the Q38 pair, a bare marker, or a bare break. A
+    paragraph still keeps its two breaks, because each pair collapses to one.
+    """
+
+    normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    return _BR_PAIR.sub("\n", normalized)
 
 
 def _view_with_raw_offsets(source: str) -> tuple[str, list[int]]:
@@ -49,8 +62,10 @@ def _view_with_raw_offsets(source: str) -> tuple[str, list[int]]:
             offsets.append(raw_start)
             index += 1
             continue
-        match = _BR.match(source, index)
+        match = _BR_PAIR.match(source, index)
         if match:
+            # The whole pair is ONE view character, so the raw slice a
+            # caller gets back keeps the marker and its partner together.
             out.append("\n")
             offsets.append(index)
             index = match.end()

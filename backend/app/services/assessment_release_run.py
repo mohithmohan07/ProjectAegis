@@ -50,6 +50,7 @@ from . import assessment_master_refiner as master_refiner
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
 from . import assessment_release as rel
+from . import generation_quality_policy
 from . import assessment_release_snapshot as release_snapshot
 from . import assessment_release_service as release_service
 from . import assessment_routing as routing
@@ -391,8 +392,15 @@ def _learner_text_snapshot(candidates: list[Mapping]) -> list[tuple]:
 
 
 def _assert_learner_text_unchanged(
-    before: list[tuple], candidates: list[Mapping],
+    before: list[tuple], candidates: list[Mapping], *, stage: str = "grouping",
 ) -> None:
+    """Refuse a stage that rewrote learner-facing text it may not touch.
+
+    ``stage`` names the caller. Five stages share this check and the message
+    said "grouping" for every one of them, so an operator reading the error
+    could not tell which stage had rewritten the text (owner report, the
+    Triangles run, 13 September 2026 — where the real one was marking).
+    """
     after = _learner_text_snapshot(candidates)
     if after == before:
         return
@@ -404,7 +412,7 @@ def _assert_learner_text_unchanged(
         if before_by_id.get(candidate_id) != after_by_id.get(candidate_id)
     )
     raise grouping.GroupingError(
-        "assessment grouping altered immutable learner-facing question text"
+        f"assessment {stage} altered immutable learner-facing question text"
         + (f": {changed}" if changed else "")
     )
 
@@ -1173,6 +1181,21 @@ def _bind_generated_cells(
             # Pre coverage rule carries it into the level stage, which
             # transports the authoring decision rather than re-deciding.
             cell["generated_question"]["tier"] = authored_tier
+        declared_options = question.get("options")
+        if (
+            generation_quality_policy.declared_pre_options(profile)
+            and isinstance(declared_options, list)
+        ):
+            # Generation-quality v4 (Q70): the author's declared choice set
+            # rides the question into materialization, whose checker holds
+            # the projected answers[] to this count. Gated on the run's
+            # RECORDED stamp, not on key presence: a reviewed-file Pre row
+            # already carries an ``options`` list from its extraction
+            # (reviewed_file_input), and carrying it onto a pre-v4 cell
+            # would move that cell's materialization key on replay.
+            cell["generated_question"]["options"] = [
+                str(option) for option in declared_options
+            ]
         cell["flags"] = list(decided_flags)
         cell["authority"] = authority
         cell[_CELL_AUDIT_FIELD] = {
@@ -2640,7 +2663,9 @@ def run_release_for_job(
         }
         if _needs_review(verdict):
             _append_warning(candidate, _ANSWER_RESTRICTION_WARNING)
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="answer restriction",
+    )
     _snapshot_answer_restrictions(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -2727,6 +2752,27 @@ def run_release_for_job(
         if not generate_lane:
             atoms = [atoms[index] for index in keep]
         blocked_candidates = blocked_candidates + marking_blocked
+        # Rebase the immutability baseline onto the survivors. It was taken
+        # ABOVE this containment, so a blocked candidate is absent from the
+        # snapshot's counterpart and `_assert_learner_text_unchanged` reads
+        # the deliberate removal as an altered text — and RAISES, killing the
+        # whole lane. That is exactly what Q56's containment exists to
+        # prevent, undone two lines later: measured on the owner's Triangles
+        # run, 4 questions blocked at marking produced
+        # "assessment grouping altered immutable learner-facing question
+        # text: [4 candidate ids]" and took Output 04 with them, while the
+        # Pre lane published because materialization's older containment runs
+        # BEFORE the snapshot is taken.
+        #
+        # The rows kept are the ORIGINAL snapshot rows, never a fresh
+        # snapshot: re-reading the candidates here would also erase a genuine
+        # rewrite made in this same stage, which is the one thing the
+        # assertion is for. Removal is recorded above as a BLOCKED row and in
+        # the log line below; it is never silent.
+        surviving = {str(candidate.get("candidate_id") or "") for candidate in candidates}
+        learner_text_before = [
+            row for row in learner_text_before if str(row[0]) in surviving
+        ]
         progress.log(
             f"Master file continues with {len(candidates)} of "
             f"{len(candidates) + len(marking_blocked)} marked question(s); "
@@ -2771,7 +2817,9 @@ def run_release_for_job(
         }
         if _needs_review(verdict):
             _append_warning(candidate, _MARKING_WARNING)
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="marking",
+    )
     _snapshot_markings(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -2834,7 +2882,9 @@ def run_release_for_job(
             }
             if review.get("review_flags"):
                 _append_warning(candidate, item_review.WARNING)
-        _assert_learner_text_unchanged(learner_text_before, candidates)
+        _assert_learner_text_unchanged(
+            learner_text_before, candidates, stage="item review",
+        )
 
     # Stage 7 — route only across the immutable staged concept-release
     # concepts (this run's own lane; OD4 numbers them 01 or 03).
@@ -2954,6 +3004,12 @@ def run_release_for_job(
         critic=level_critic,
         store=store,
         fixer=fixer,
+        # The release's accepted concept sequence, in the bridge's own
+        # order — the staged release's record order, the root order
+        # assessment_teaching_order also reads (through each record's
+        # _aegis_release_qids) — so the tier author sees where a home
+        # concept sits (Q69). Evidence only.
+        chapter_teaching_order=concept_payload,
     )
     expected_level_ids = [
         str(candidate.get("candidate_id") or "") for candidate in eligible
@@ -3011,7 +3067,9 @@ def run_release_for_job(
         concept_key = str(candidate["concept_key"])
         buckets.setdefault((concept_key, tier), []).append(candidate)
 
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="levels",
+    )
     _snapshot_levels(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -3281,7 +3339,9 @@ def run_release_for_job(
             _append_warning(record, _QUALITY_WARNING)
         _observe_stage(stage_progress, "qa", group_index + 1, len(qa_groups))
 
-    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _assert_learner_text_unchanged(
+        learner_text_before, candidates, stage="grouping",
+    )
     _snapshot_groups(
         snapshot_directory,
         envelope_sha256=envelope_sha,

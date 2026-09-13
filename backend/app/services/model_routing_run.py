@@ -53,7 +53,7 @@ def save_profile_for_job(job, profile, *, quality_version=None, repair_version=N
     path = _record_path(job)
     record = {"version": 1, "profile": profile}
     if quality_version is not None:
-        if quality_version != quality.VERSION:
+        if quality_version not in quality.SUPPORTED:
             raise ValueError("Unknown saved generation quality policy")
         record[quality.KEY] = quality_version
     if repair_version is not None:

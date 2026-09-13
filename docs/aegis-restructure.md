@@ -2767,7 +2767,11 @@ to stand alone without large repeated chapter extracts in concept descriptions.
 Remove repeating concepts, follow source teaching order through Post Types,
 Cases and questions, and handle statistics tables correctly in KaTeX.
 
-New uploads freeze `owner-generation-quality-2026-09-11-v1` before source work.
+New uploads freeze the current generation-quality stamp before source work
+(`owner-generation-quality-2026-09-11-v1` until 13 September 2026, then
+`owner-generation-quality-2026-09-13-v2` (kept figure references, Q68), `-v3`
+(Host creations resolved, Q68) and `-v4` (declared Pre options and duplicate
+Case titles, Q70/Q71)); a run keeps the version it recorded.
 The stamp travels through source semantics, polishing, the sealed Phase 3
 envelope, staged Pre/Post releases, assessment profiles, authors and reviewers.
 An existing upload's saved model record without this quality stamp retains its
@@ -3538,3 +3542,1431 @@ there and fails, streaming peaks at **0.8 MB**. An earlier version of this test
 passed on the old reader — its fixture declared 30 cells, not 201,580, and the
 threshold sat just above the real cost. It now asserts the fixture reproduces
 the condition before trusting the measurement.
+
+## Q58 — decided — the Fixer can satisfy a strict caller contract, and a Fixer failure still names the block
+
+Job 130's Step 2 died after the reviewed file had already been read and paid
+for. The console named it exactly, which is the Q56 work doing its job:
+
+> `reviewed_file.extract` decision for post failed its mechanical response
+> contract after 3 bounded correction attempt(s), and the Fixer could not
+> produce a contract-satisfying decision either: Invalid reviewed-file schema:
+> 1 validation error for Extracted `rationale` — Extra inputs are not permitted
+
+### The Fixer was instructed to emit a field its own checker had to reject
+
+`prompts.FIXER_SYSTEM` says: *"Return the corrected artifact in the SAME
+response schema the original provider was asked for … plus a `"rationale"`
+field."* `kernel.decide` then validates that candidate with the **caller's**
+checker — which for this stage is `reviewed_file_input.Extracted`, a pydantic
+model with `extra="forbid"` and no `rationale` field. Three attempts, three
+identical `extra_forbidden` defects, then `ContractError`.
+
+So the Fixer could never succeed on **any** strict-schema stage. Q13 leans on
+the Fixer to guarantee a run completes — *"nothing is guessed silently, nothing
+is lost, finished work always ships"* — and on every stage whose checker is a
+closed schema that safety net was structurally dead.
+
+The author side is not at fault and is not changed: its provider schema really
+is strict (`additionalProperties: false`, every field required) and really is
+sent for `gpt-5.6-luna`, so the author cannot produce extras. Only the Fixer
+can, because its prompt requires it.
+
+`_fixer_artifact` offers the checker the candidate **as-is** first, then — only
+when it carries a top-level `rationale` — the same candidate without that key.
+The **checker** decides which shape is valid, so a caller whose own contract
+carries a rationale is untouched and nothing here judges what the Fixer said.
+The raw candidate is retained so the recorded review flag still quotes what the
+Fixer actually decided.
+
+### A Fixer failure hid the defect that actually stopped the run
+
+The raise carried `fixer_defects or blocked`. When the Fixer's own artifact was
+malformed — exactly the case above — the message named the **Fixer's** protocol
+failure and dropped every trace of what blocked the extraction. There is no
+other durable record: a failed author produces no pending receipt, so the
+message is the whole account. Whoever reads the console cannot tell what to
+correct. It now names the original block first, then the Fixer's shortfall, and
+`defects` carries both.
+
+## Q59 — decided — every reviewed-file picture is uploaded to this server and carries its link
+
+The owner: *"I think it's because of the images. Images were not in the
+generated file, and then when images were added. I need all images extracted
+and uploaded to project aegis fly server and those links should be there."*
+
+The first half is right about what the reviewer sees. The generated Concept
+file is the canonical Bulk Import workbook, and a chapter figure reaches it as
+the canonical text tag `[img src="https://…" alt="…"]` inside the concept
+prose — a URL in a cell, not a picture on the sheet. A reviewer working in
+Excel pastes the real figures in.
+
+### What happened to a pasted picture
+
+`read_document` turned it into a base64 `data:` URI and stopped there.
+
+* It was stored **inline** in `job.question_inventory`, and `queue` appends a
+  second `deepcopy` of the whole document to `reviewed_file_history` on every
+  upload — so a re-upload doubled it again, in a JSON column that is read and
+  rewritten whole.
+* It was sent inline on **every** provider call: three bounded author attempts
+  plus the critic, each carrying the full base64 body.
+* It was hashed into the decision key, so two identical files differing only in
+  picture bytes were different decisions.
+* **A picture no question cited was lost outright.** Only
+  `prepare` published, and only the refs the extraction attached to a question
+  (`question_image_grid._publish`). Everything else had no `https` URL, and a
+  `data:` URI can never become a canonical `[img]` tag — `_CANONICAL_IMAGE_TAG_RE`
+  requires `https://`. There was no link for it to be.
+
+Measured on six pasted screenshots (a 6.99 MB workbook):
+
+| | inline | linked |
+| --- | --- | --- |
+| durable job document | 10.35 MB | **4.3 KB** |
+| after one re-upload | 20.69 MB | **8.6 KB** |
+| bytes on the volume | — | 2.76 MB of JPEG |
+
+### Decided
+
+Every picture is pinned to the content-addressed asset store as the file is
+read — cited or not — and the document carries the signed
+`/source-assets/{job_id}/{sha256}.jpg?sig=` URL that `/source-assets` already
+serves publicly and immutably. `pin_image` is mechanics: hash, convert, store,
+mint. Transparency composites onto **white**, the ground Excel shows behind a
+pasted picture, instead of the black a bare `RGB` conversion produces — which
+would erase a line drawing completely. Normalising to JPEG also fixes a quieter
+failure: a pasted BMP or TIFF used to go to the vision API as
+`data:image/bmp;…`, which it will not accept.
+
+`reviewed_file_images` on the release payload is the complete manifest — every
+picture, its link, its sheet, row and column. `_aegis_source_evidence` on a
+concept and `source_context` on a question carry the pictures that row itself
+cites. **None of this decides placement**: which picture belongs to which
+question is the extraction's judgment, projected mechanically (Rule 1).
+
+A file queued before this change still carries its bytes inline; those are
+uploaded on first use, so its links are durable too. Where a deployment has no
+public origin configured the bytes are still stored and the caller keeps the
+inline form — nothing is lost and no upload fails for want of a hostname.
+
+### A Q57 regression, found on the way
+
+Q57 moved the embedded-picture pass after the streaming cell pass, so image
+blocks were emitted **after every sheet's rows** instead of among their own
+sheet's — a figure pasted beside concept row 2 read as if it came after the
+last sheet. Q57 was verified on four real files that contain no `xl/media` at
+all, so nothing caught it. The media pass now runs **before** the cell pass and
+closes; each sheet's pictures take their place among that sheet's rows. Output
+is byte-identical to the pre-Q57 reader on a workbook with embedded pictures,
+and the test fails on the deployed reader.
+
+## Q60 — decided — a faithful quote is not refused for the way the cell renders its own break
+
+Job 130's Step 2 was stopped by the reviewed-file quoting gate, not by images.
+
+The owner's log, verbatim:
+
+> `reviewed_file.extract` decision for post failed its mechanical response
+> contract after 3 bounded correction attempt(s), and the Fixer could not
+> produce a contract-satisfying decision either: … 1 validation error for
+> Extracted `rationale` — Extra inputs are not permitted
+> `[input_value='The block was caused by ... cited reviewed blocks.']`
+
+The Fixer's rationale ends **"cited reviewed blocks."** — the tail of
+`_checker`'s defect *"Question/context/answer/option text must be quoted from
+its cited reviewed blocks."* Q58 explains why the Fixer could not clear it and
+why the console showed the Fixer's own protocol failure instead of the block.
+
+### It was not the images
+
+The reviewed files carry **no embedded pictures at all** — no `xl/media`, no
+drawings; the chapter's figures are `[img src="…"]` text tags inside the
+concept prose, which is what a reviewer sees in a cell. And an image would have
+*disabled* this gate, not triggered it: the check is
+`if span not in text and not visual`, and `visual` is true for any cited block
+holding an image. The owner's hypothesis is refuted twice over.
+
+### What actually failed
+
+A reviewed workbook cell carries the contract's **paired** form — the `<br>`
+import marker beside the native line break it displays as (Q38). A model
+copying what the cell *shows* writes the break and not the marker. That is a
+perfectly faithful quote which an exact-substring comparison refuses.
+
+Measured on the owner's own files:
+
+| file | `<br>` pairs | display-view quotes that fail the raw gate |
+| --- | --- | --- |
+| job 130 reviewed Pre | 13 | **13 of 13** |
+| job 139 reviewed file | 87 | **87 of 87** |
+| Corrected Triangles Concept file | **0** | 0 — and its extraction passed |
+
+The Triangles file is the control: no `<br>`, no failure. It is also why the
+defect looked intermittent.
+
+### Decided
+
+`concept_question_quote` — the repo's existing, purely representational
+transport, already trusted by the edited-workbook review path — settles it.
+`locate` bridges CRLF/LF and `<br>` and **nothing else**: it never matches
+approximately and never repairs meaning, so this is representation, not
+judgment (Rule 1). The gate accepts a span it can place; the author and the
+Fixer are wrapped so every candidate reaches the gate in the file's own raw
+wording, which also keeps the `<br>` markers Rule 0 requires in the Master
+instead of freezing a rendered break into the question text. `locate` recovers
+100 of the 100 failing quotes above. An invented quote is still refused — the
+anti-invention guarantee is untouched, and a test pins it.
+
+`RULES` now states the rule the model can actually satisfy, mirroring the
+wording `concept_question_review.AUTHOR` has carried since v4. `VERSION` is
+deliberately **not** bumped: it is the `active()` marker on an extracted
+payload, so bumping it would re-extract every job that already finished. The
+`RULES` text is inside the hashed payload, so the change mints new decision
+keys by itself — which reaches only extractions that never completed.
+
+### Standing for the owner: the rest of "a pretty simple job"
+
+The owner's instruction — *"it should be a pretty simple job post reviewing. It
+should just put down the questions in master file as it is, in the bulk import
+format required, details of filling also exists in the repo"* — is broader than
+this repair, and the rest needs the owner's decision because it is a pipeline
+removal (see the standing rule in CLAUDE.md). Recorded here as measured facts,
+not as a change:
+
+* The reviewed file IS the canonical bulk-import workbook — Objective /
+  Descriptive / Subjective, 72 / 440 / 149 columns, band row, header row, data
+  from row 3; `writer.CONCEPT_FILE_LAYOUT_ID == layouts.UPDATE_AWARE_MASTER_LAYOUT_ID`,
+  so the Concept file and the Master share one layout.
+* `read_document` flattens it to **one block per row**, joining the row's cells
+  with newlines and discarding sheet identity, headers and band membership.
+  Measured on job 130's real file: ~3,000 characters per block, of which ~1,400
+  repeat the same chapter/topic preamble in **every** row.
+* `release_workbook_edits.py` + `concept_question_review.py` are an existing
+  path that reads that same workbook, reconciles its questions against the
+  accepted bank, and transports quotes losslessly — with no exact-substring
+  gate. Q52 closed it for three-step jobs; Q51 severed Step 02 from Step 01's
+  semantics, which is what forced the from-scratch extraction that job 130 hit.
+
+## Q61 — decided — a strict provider schema must require every property it declares
+
+The adversarial review of Q58 hunted for the same defect class — a prompt or
+schema instructing a model to produce something a checker or the provider
+structurally forbids — and found a worse variant of it, twice.
+
+### The request itself was unsendable
+
+OpenAI Structured Outputs refuses the WHOLE request with 400 `invalid_schema`
+when a `"strict": True` schema declares a property it leaves out of `required`.
+The contradiction is in the **request**, so no retry, no Fixer and no model
+change can help: the provider never generates a token.
+
+The repo had already paid for this once. Commit `d857f8a` fixed it in
+`concept_question_review`, whose comment still records the rule — *"Strict
+provider schemas require every property, including empty lists. A Python
+default makes this optional in `model_json_schema()` and causes the provider to
+reject the entire request before reading the workbook."*
+
+Two hand-written schemas carried the same defect from the day they were written:
+
+| schema | undeclared as required | consequence |
+| --- | --- | --- |
+| `release_review._instruction_schema` | `parent_concept`, `keywords` | every reviewer instruction round → `InstructionRoundFailed`, HTTP 502 |
+| `concept_revisions._edit_schema` | `concept_display_name`, `parent_concept`, `keywords` | every revision round recorded `status="failed"` — a permanent refusal that reads as a flaky provider |
+
+Both consumers already read those fields with `or ""` (and `or topic`), so
+requiring them changes no behaviour except that the request is now accepted.
+Both routes are gated to legacy, non-three-step jobs by
+`_require_legacy_review_job`, so this never touched the current Q51/Q52 path —
+which is why the features simply appeared never to work rather than breaking a
+run.
+
+An AST sweep — walking the tree rather than evaluating the literal, so a schema
+built from names or calls is still judged — covers **48** object schemas nested
+under a `strict: True` schema. Two problems before, **zero** after. The sweep is
+kept as `tests/test_strict_provider_schema_required.py`, and it names a
+dynamically-built `required` rather than skipping it silently.
+
+### Two corrections to Q58's own fix
+
+* `_fixer_artifact` returned the **last** shape's defect list, so on a caller
+  whose checker REQUIRES a top-level rationale (premap's empty-capture checker,
+  the assessment-cell verdict checker) a total failure reported *"response has
+  no rationale"* — about an artifact that sent one. That both misnames the block
+  in the recorded issue, which is exactly the honesty Q56 and Q60 are about, and
+  spends a bounded attempt telling the Fixer to add a field it already sent. It
+  now reports the shorter refusal, ties keeping the as-is one. Length only —
+  nothing reads what a defect says.
+* `FIXER_SYSTEM` claimed *"the contract and blocked_check name it"* of the
+  response schema. They do not: the contract block carries only kind, unit_id
+  and policy_version. The prompt now says to infer the schema from
+  `last_response` and the rules in `original_payload`, and states that the
+  rationale is a protocol field the server separates where the caller's schema
+  forbids extras — so a complaint about an unexpected `rationale` is never
+  something to negotiate and never a reason to withhold the reasoning.
+
+The review's other recommendation — **do not** amend `FIXER_SYSTEM` to allow
+omitting the rationale — is adopted as a non-change: with `_fixer_artifact` the
+stripped shape is accepted on the Fixer's first call, so it would save no
+attempt, and an omitted rationale degrades the Q13 record to the stock
+"corrected by the Fixer's best judgment" on exactly the blocks a human must
+audit.
+
+## Q62 — decided — one logical break is one break, however the model writes it
+
+**This entry corrects a claim made in Q60.** Q60 reported that
+`concept_question_quote.locate` "recovers 100 of the 100 failing quotes". That
+measurement fed `locate` the output of `view(raw_slice)` — by construction the
+one form `view(source)` already contains. It was a tautology, and it is not
+what a model produces. The adversarial review of Q58 caught it; it reproduces.
+
+### The defect is one layer below the gate
+
+Q38 writes a break in a workbook cell as a **pair**: the `<br>` import marker
+beside the native line break it renders as, and states that a paired prose
+break imports as **one** logical break. `view` mapped `<br>` to a newline
+without consuming its partner, so `A<br>\nB` viewed as `A\n\nB` — two breaks
+for one. Neither faithful transcription a model can actually write therefore
+matched the cell it copied from:
+
+| what the model writes | before | after |
+| --- | --- | --- |
+| the cell's exact bytes, `…diagram<br>\nCase…` | accepted | accepted |
+| the marker, break dropped, `…diagram<br>Case…` | **refused** | accepted |
+| the break, marker dropped, `…diagram\nCase…` | **refused** | accepted |
+
+Only the exact bytes, or the double-newline form nothing produces, got through.
+
+Measured on the owner's real files, per paired break, for each realistic form:
+
+| file | paired breaks | before | after |
+| --- | --- | --- | --- |
+| job 130 reviewed Pre | 13 | **0 recovered** | 13 |
+| job 139 reviewed file | 87 | **0 recovered** | 87 |
+
+### Decided
+
+`_BR_PAIR` consumes the marker together with the line ending it renders as, in
+`view` and in the `_view_with_raw_offsets` map that `locate` indexes the raw
+slice through — the two must agree or a quote is cut at the wrong byte. All
+three written forms of one break now resolve to the **same raw cell slice**, so
+the `<br>` markers Rule 0 requires in the Master still survive; a paragraph
+still keeps its two breaks, because each pair collapses to one; a bare marker
+and a bare break are unchanged; KaTeX row separators are untouched. A
+paraphrase is still refused — the transport bridges representation, never
+wording (Rule 1).
+
+This is the same transport `concept_question_review` has relied on since v4,
+so the correction reaches the edited-workbook review path too. Full backend
+suite: 4905 passed.
+
+### Two anti-invention holes, reported and NOT fixed, awaiting the owner
+
+Both were verified by the review against the live checker, and both let
+invented content through TODAY, independent of any redesign:
+
+* **The `visual` escape.** `_checker` skips containment entirely for a question
+  citing any block with an image (`if span not in text and not visual`). A
+  wholly fabricated question text AND option pass with zero defects off a
+  17-character "Embedded image" block. Narrowing it is not free: a question a
+  reviewer pasted as a screenshot has its wording in no cell, and refusing it
+  fails the WHOLE lane rather than one question.
+* **Cross-cell frankenspans.** `quoted_source` joins a row's cells with
+  newlines, so a span welded from the end of one cell and the start of another
+  is a valid substring and passes with zero defects.
+
+Fixing either tightens what reaches `kernel.ContractError`, which kills the
+lane and every finished, paid-for question in it — so the safe order is Q56's
+contained BLOCKED row first, and that is a pipeline change for the owner to
+decide.
+
+## Q63 — decided — a question blocked at marking no longer takes the lane with it
+
+**This is a regression Q56 introduced, found in the owner's Triangles run.**
+
+Q56 gave marking the same containment materialization already had: an
+impossible question becomes a recorded BLOCKED row and the lane carries on,
+"so one impossible question can no longer take a whole lane and every other
+finished, paid-for question with it". Two lines later, it did exactly that.
+
+### The mechanism
+
+`assessment_release_run` snapshots the learner-facing text **once**, above the
+containment, and five later stages assert it is unchanged. The marking
+containment removes the blocked candidates *after* that snapshot, so each one
+is present in the baseline and absent from the candidates —
+`_assert_learner_text_unchanged` reads the deliberate removal as an altered
+text and **raises**, killing the lane.
+
+Materialization's older containment runs *before* the snapshot is taken, which
+is why it never showed this and why the owner's Pre lane published normally.
+
+### Measured on the owner's run
+
+| lane | blocked at | outcome |
+| --- | --- | --- |
+| Output 02 (Pre) | materialization — 5 questions | published, `released_with_warnings` |
+| Output 04 (Post) | **marking — 4 questions** | **dead:** *"assessment grouping altered immutable learner-facing question text: ['CAND-0f36286bc75c02d0', 'CAND-6a28bd47f57e2604', 'CAND-d2b8e2ec5e0e12dd', 'CAND-d8789f09bbc7589c']"* |
+
+Four blocked, four "altered" ids — the same four.
+
+### Decided
+
+After the containment, the baseline is rebased onto the survivors. The rows
+kept are the **original** snapshot rows, never a fresh snapshot: re-reading the
+candidates there would also erase a genuine rewrite made in that same stage,
+which is the one thing the assertion exists for. The removal itself is already
+recorded as a BLOCKED row and in the "continues with N of M" log line, so
+nothing becomes silent.
+
+The error also names its stage. Five stages share that assertion and the
+message said "grouping" for every one of them, so the owner's log blamed
+grouping for something marking did.
+
+### Two contract contradictions this run also surfaced — reported, NOT fixed
+
+* **Keyword weights can be unsatisfiable.** `assessment_release` requires each
+  keyword weight to be a positive multiple of 0.5 *and* the weights to sum to
+  the subquestion's marks. For K keywords a solution exists only when the
+  subquestion's marks are at least `0.5 × K`. The run shows 0.25 across two
+  keywords (0.5 marks) and 0.375 across four (1.5 marks) — both impossible.
+  The model oscillates between the two gates, exhausts its attempts and the
+  Fixer, and the question is dropped. The defect text never names the coupling,
+  so it is never told why it cannot win. The same family as Q58 and Q61.
+* **The KaTeX explanation cycle is biting.** `PRC-0021-PRQ-0001` was refused
+  for *"answer_explanation must begin with the option label and the exact
+  correct answer text `'\text{AB} \perp \text{CD}'`"* **and** for
+  *"rich-text: raw_latex"*. Beginning with the exact answer means emitting raw
+  LaTeX, which the rich-text gate forbids. This is the closed cycle already
+  recorded under Q56 as awaiting the owner; it has now cost a real question.
+
+
+## Q65 — decided — the owner's seven open calls, each taken the best-suited way
+
+The owner, shown the seven open calls with a recommendation on each: *"go with
+the best suitable option for all, dont deploy yet."* Each is recorded here with
+what was chosen, why the alternative was not, and where it lives. Nothing here
+changes what a run produces except where a stated defect made a paid question
+impossible to ship; every such change is a versioned gate or a prompt, never a
+judgment moved into code.
+
+### 1. Step 02 admission — refuse to start below the gate it needs
+
+`budget = max(1, (gate − reserve) ÷ workers)` and a Step 02 costs 2, so under
+the code defaults (8/16/6) and staging (3/16/1) a Step 02 could never be
+admitted, silently, forever (Q64 audit, blocking #3). Chosen: the queue
+**refuses to start** when `gate < reserve + workers × max(cost)`, with the
+arithmetic in the log (`chapter_queue_worker.admission_shortfall`,
+`initialize_chapter_queue`). Not chosen: raising the floor to 2, which at 8/6
+presents 12 concurrent requests to a gate of 8 and times out on the slot wait
+after real spend; lowering the reserve, which at a gate of 8 leaves no room
+either way. Shipped with it, as ordering mechanics: the dispatcher skips an
+inadmissible task instead of `break`ing at it, holds the oldest denied task's
+cost back (`admits(kind, reserved=…)`) so a steady supply of Step 01s cannot
+starve a Step 02, and logs one line per denied task naming cost, in-flight
+spend and budget.
+
+### 2. Chapters already stranded — recover them at startup
+
+Rows pushed before Q64 paid for a full Step 01 and ended markerless. Chosen:
+`build_concepts_release.sweep_markerless_batch_runs` runs at startup, finds
+every console row whose job is `released`/`generated` under the v2 workflow
+with staged Post content and no review marker, and initialises the Concept
+review for it. The team downloads the Concept files and continues from Step
+02 instead of paying for the run again. It touches only rows on the console
+board; a job that is not on the board is not its business.
+
+### 3. Karnataka vs KSTATE — left as it is
+
+The dropdown reads "Karnataka" where the chapter codes read `KSTATE`. The
+catalogue is already mixed (CBSE and ICSE are abbreviations; Maharashtra is a
+display name over `MSBSHSE`). Chosen: no change; the codes are identity and
+would not move either way.
+
+### 4. Structured `concept_details` — Option A
+
+Measured on job 130: the Activity/Info Hub notes, joined with a single space,
+made one 4,134-character line; the ` // ` section separator accounted for
+about an eighth of the remaining gap. Chosen: `concept_refiner.append_activity_hub`
+joins successive hub notes with a newline, so each note sits on its own line
+in the workbook cell. Not chosen: Option B (sections on their own lines),
+which costs ~11 parsers, the `"// Types:"` release gate and the console's own
+` // ` splitter for one more break per row; it stays proposed in
+`docs/structured-concept-details-review-2026-09-13.md`.
+
+### 5. Keyword weights that cannot be satisfied — tell the model the coupling
+
+Each keyword weight must be a positive multiple of 0.5 **and** the weights must
+sum to the subquestion's marks (Rule 0 §27.5), so K keywords need at least
+`0.5 × K` marks. The Triangles run authored two keywords on a 0.5-mark
+subquestion and four on 1.5 marks — impossible either way — and the model
+oscillated between the two gates until the question was dropped. Chosen: the
+defect text now names the coupling and the exact numbers (`assessment_release.
+validate_candidate`), and both the marking and the materialization prompts
+state it before the model chooses. Not chosen: relaxing the 0.5 quantum, which
+changes the contract.
+
+### 6. The KaTeX explanation cycle — the quoted answer may be a `[Katex]` span
+
+An Objective explanation must begin with the option label and the exact
+correct answer; the rich-text gate forbids raw LaTeX outside a `[Katex]` span.
+For a Text-typed answer written in LaTeX (`\text{AB} \perp \text{CD}`) the two
+could not both hold. Chosen: `objective_explanation_defects` accepts the
+answer's KaTeX display form (`[Katex]…[/Katex]`) as the quoted answer for every
+medium, and `_answer_prefix_key` strips the padding inside the tags so a model
+that writes `[Katex]x[/Katex]` matches the wrapper's `[Katex] x [/Katex]`.
+That is the only form that satisfies both gates; nothing else moved.
+
+### 7. The 99 % that confused the owner — the Master band ends at 98 %
+
+`0.99` meant both "both Master lanes nearly done" and "finished with fewer than
+four outputs ready", so the bar alone could not say whether a run was still
+building. Chosen: the live Master band is `0.70 → 0.98`; `0.99` is now only
+the finished-incomplete verdict and `1.0` only all four outputs. Recorded in
+`build_concepts_release_contract._build_master_siblings` and `build_review_masters`.
+
+### PR #318 — not merged
+
+*"dont deploy yet."* Merging to `main` deploys to Fly. The branch stays open
+with CI green until the owner says otherwise.
+
+Tests: `tests/test_decided_options_2026_09_13.py`.
+
+## Q66 — decided — the batch console runs unattended, and how to use it
+
+The owner: *"get it done with the BATCH API inculcation. Give instructions how
+to use the BATCH API."* The batch API is the chapter console (Q53); the OpenAI
+Batch-API lane stays held for the reasons recorded in the Q64 audit. This entry
+closes the audit's remaining important findings and adds the guide.
+
+### Fixed
+
+* **A refunded collision on the last attempt is requeued, never
+  `failed/attempts_exhausted`.** A lock collision was never a try; the refund
+  now outranks the attempt count in `_settle`, and the task is held back one
+  `AEGIS_QUEUE_COLLISION_BACKOFF_SECONDS` (default 30) before it is claimable,
+  so the dispatcher no longer spins against the same lock at 60–100 cycles/s.
+* **A Step 01 that returned `run_incomplete` is not `done`.** Step 01's failure
+  wrapper catches the exception, stages what was paid for and *returns*; the
+  worker read only the exception path and settled a row with no Concept files
+  as green. `_after_generation` now reads the marker: resumable → the
+  contract's "any other exception" row (queued while attempts remain, then
+  `failed/run_incomplete`; a re-run resumes from the checkpoint); non-resumable
+  → `failed/non_resumable`; a recorded pending decision outranks both.
+* **Step 02 is not admitted into a volume that cannot hold a Master batch.**
+  `admits("step02")` asks `storage_capacity` first; the batch reservation
+  inside `_build_master_siblings` still decides for real.
+* **The three pre-spend pauses name themselves** (contract §6):
+  `chapter_batches.blocked_kind_for_pending` transcribes the `kind` each pause
+  records — `phase3_source_graph_review → source_review`,
+  `source_topic_coverage_review → source_topic_recovery`,
+  `type_granularity_review → type_granularity`, anything else
+  `human_decision` — in `derive_state`, `_after_generation` and
+  `classify_exception`. The row's reason and the drawer's decision card read
+  the pause's own `decision_question`; the old read looked for `question` /
+  `prompt`, which no pause writes, so every pause rendered the generic
+  sentence and a blank card.
+* **`can.upload_concept` says what the route accepts.** The reviewed-Concept
+  route refuses `master_ready` and `published` with a 409; the flag offered the
+  upload at `master_review` anyway. It now offers it at `pending`/`reviewed`
+  only, and the row's primary action lists the uploads before Step 02 so the
+  reviewed-Concept upload is no longer hidden at `concept_review`.
+* **A selection spanning pages is sent.** The page remembers each selected
+  row's last projection across pages; *Retry (n of m)* joins the action bar
+  (`retryableFor` was written and tested but never imported); *Clear* forgets
+  every page's selection.
+
+### Recorded for the owner, not changed
+
+* **A second Concept round after the Masters exist.** The route's rule
+  ("Master authoring has started or completed for this upload; start a new run
+  to submit different Concept inputs") is Q49/Q51's; whether a reviewed Concept
+  re-upload should instead open a new Master version is a pipeline-policy
+  question. Until decided, the console offers what the route accepts.
+* **No wall-clock cap on a queued task and no way to stop a running step**
+  remain open (Q64 audit).
+* **OpenAI Batch API**: held. 36 recorded decision kinds per chapter mean
+  70–100 sequential batch waits under a 24-hour-only guarantee, for no fewer
+  requests.
+
+### The guide
+
+`docs/chapter-batch-console-usage.md`: the three steps in one picture; the
+deployment arithmetic and every environment knob with its default; finding
+chapters; staging, pushing, watching, reviewing, uploading and publishing, step
+by step; every row state with its label and meaning; every way a row stops
+with what the queue did and what the person does; the push verdicts; the HTTP
+routes with `curl` examples; what the console guarantees and what it does not.
+`README.md` links it beside the contract.
+
+Tests: `tests/test_chapter_batch_unattended.py`;
+`frontend/src/pages/ChapterBatch.rows.test.tsx` (the two cross-page cases).
+
+## Q67 — decided — the reviewers' corrections catalogue: the mechanical half fixed, the rules improved, the contract questions named
+
+The owner: *"I can share some errors which I have found in the previous runs
+which needs to be fixed. So go through all of these properly … Make sure you
+dont lose the technical details of writing the columns/rows, the rules that are
+to be followed/ the prompting (you can make it better; but dont lose the
+existing ones)."* The attached `Corrections.docx` is the reviewers' log of
+every hand correction on four chapters — Bholi (10 CBSE English), Print Culture
+and the Modern World (10 CBSE Social Science), How Do Organisms Reproduce (10
+CBSE Science) and Triangles (10 CBSE Maths).
+
+Every correction was traced to its origin on the current tree by six
+independent readers (concept prose, format fields, topology, Types/Cases,
+Examples/activities, Master fields), each origin reproduced offline where it is
+mechanical, and every claim then adversarially verified by a second reader
+(workflow `wf_d6ae7915-77a`). This entry records what was done with each
+class. No existing rule was removed; every prompt change is additive, and each
+place where a rule's FORM changed is named below.
+
+### Fixed — code (mechanics, each reproduced first)
+
+1. **Step 02 dropped the chapter band.** The reviewed candidate copied none of
+   Step 01's `chapter_meta`, so the Master's `chapter_duration` shipped blank
+   (Bholi is registered at 126 minutes), release QC raised a BLOCKING
+   `chapter_duration_unregistered` that falsely named the registry as empty
+   (Step 03's write would have been refused), `chapter_description` shipped
+   blank, and every `topic_description` fell to the code-composed "Covers X,
+   Y, Z." list contract §9.1 declares invalid. Now: the duration is a run
+   variable (§32.1 — registry, else the explicit upload value, never an
+   estimate) and rides the reviewed candidate exactly as it rides Step 01;
+   the chapter and topic descriptions are read from the **reviewed file's own
+   band cells** — the extraction schema carries `chapter_description` and
+   per-concept `topic_description`, both gated as quotes from the file
+   (`reviewed_file_input._chapter_meta_from_reviewed`). The file is the only
+   Step 02 evidence (Q49/Q51); nothing composes prose.
+2. **The "Covers X, Y, Z." fallback is purged** (`build_concepts.
+   _sync_chapter_topic_summary`), alongside the two fallbacks purged before it.
+   An unauthored topic ships BLANK and release QC names it
+   (`topic_description_unauthored`, and `chapter_description_unauthored`) —
+   visibly, **not blocking**, so a reviewed Master whose file carries no band
+   cell still publishes with an honest cell instead of stranding the team
+   behind a Concept re-upload the route refuses (Q66). §9.1 would support
+   making the topic finding blocking; that is the owner's call.
+3. **`chapter_duration_unregistered` says what it measured**: that no
+   registry value or explicit upload variable was frozen onto the payload —
+   it no longer asserts that the registry has no row (Bholi is registered
+   and still fired it). The audit stays a pure function of the payload; it
+   does not consult the registry (verified against
+   `build_concepts_release.py`'s recorded-key contract).
+4. **`chapter_display_name` has one composer** (`bulk_import.
+   chapter_display_cell`): the human title, tag-stripped, in both the Concept
+   writer and the Master snapshot (contract §15). The Master used the stored
+   display name, which pre-fix imports still carry as "Bholi (10_English_CBSE)".
+5. **Keyword cells never mix delimiters in one file.** `column_spec.
+   keyword_cell` re-tokenises a declared pipe list of ANY spacing
+   (`"a |b| c"`, `"a|b|c"`) before projecting; before, only the exact `" | "`
+   spelling was re-delimited and every other spelling shipped verbatim with
+   pipes beside comma-space rows. The delimiter the cell should carry is a
+   three-way conflict recorded below.
+6. **Activity/Info Hub figure notes** carry their caption once
+   (`_figure_hub_note` rendered `Figure — {caption}: {caption}.`), and a
+   figure whose recorded caption is one of the code's own placeholder
+   defaults ("Source visual", "Source visual 3", "Source figure") renders
+   `Figure — {block id}.` with a neutral alt — never "Source visual: Source
+   visual." in prose or alt.
+7. **A bare number label renders as an Activity label** (`Activity — 7.1:` →
+   `Activity — Activity 7.1:`), and a hub note is punctuated on its text,
+   never after a trailing `[img]` tag (the stray " . " before a trailing
+   figure); the public task text closes the sentence an inline image
+   interrupted.
+8. **Leading source ordinals** ("5.", "(b)") are removed from the public
+   Example text ONLY when the item's own `source_label`/`subpart_label`
+   records that same number or letter — provenance the row already keeps;
+   without the match nothing is touched. The exact-source override had been
+   putting them back on four Bholi concepts.
+9. **The Detailed Analysis topic stays last.** `_language_plan_topics`
+   re-sorted the sealed language plan by earliest cited block, so a
+   whole-work lens that cites the opening block moved to the front — the
+   Bholi one-position shift the reviewer undid across 27 rows. The plan's own
+   recorded order (author-decided, `plan_defects`-validated) is now the order.
+   Sealed envelopes of already-run English chapters replay their recorded
+   order (identity-bound) and do not self-heal — a data question, same class
+   as Q64's stranded chapters.
+10. **A lettered/roman enumerator printed with a section number** ("7.3.3 (a)
+    Male Reproductive System") is structural apparatus like the number:
+    `_NUMBER_PREFIX_RE` no longer leaves "(a)" at the head of the title.
+11. **Type consolidation no longer rejects a split by count.**
+    `len(candidate) > len(original)` sat in the acceptance condition — a
+    numeric threshold that threw away the model's semantic answer whenever
+    it returned MORE Types, whatever their meaning (Rule 1). The exact-once
+    and immutable-semantics gates remain; a split is logged as accepted.
+12. **Host receives the miner's recorded hints** (`difficulty_hint`,
+    `placement_scope`, `topic_match_hint`, `cognitive_skill_hint`) on every
+    unit; they were dropped on the way, so the printed-position rule pulled
+    advanced in-text tasks onto the early concept they sit beside (Triangles).
+    Transport only; the placement stays the Host model's verdict.
+
+### Improved — prompts (all additive; the sentence each sat beside is kept)
+
+* **Mastery in the imperative register** (Settle, ANALYSIS, PREMAP, premap
+  rules, Polish guidance, Refiner, critics): "Identify …", never "A learner
+  can …" — 30 of 41 Organisms concepts were rewritten by hand.
+* **Teacher's voice, no author notes, no evidence narration** (Settle,
+  ANALYSIS, PREMAP): never "the source states …", never a note to the
+  author ("observations should be recorded rather than assumed"), and never a
+  transcribed figure caption or "Source visual" label in a Description.
+* **Grammar in the Refiner's remit** (Refiner rules and system, critics):
+  pronoun reference, subjectless or dangling sentences, definitions that do
+  not parse, "this change" naming what changes.
+* **Title Case for topic and concept names** (PREMAP, premap rules, the
+  `concepts.system` quality rules, the hierarchy topic instruction) with
+  acronyms and symbols as printed — the model, not a casing heuristic,
+  decides what is an acronym; a name an accepted roster or sealed plan
+  supplies is kept as given. Deliberately NOT in the reviewed-file RULES:
+  the reviewer's own names are the authority there (Q49).
+* **Keywords as ONE `" | "` string** in the two prompts that gave no
+  delimiter (`concepts.opening_recovery.system`, the reviewed-file RULES).
+* **No two Cases share a title; the source ordinal is provenance, not
+  wording; an Example never begins with it** (type mining and inventory
+  prompts).
+* **Host placement**: advanced work and later-taught methods belong with the
+  later concept; prefer the most granular method/application concept; an
+  Activity/experiment unit goes to the related NORMAL concept, never a
+  Culmination; major concepts assessed by exercises get their own Types —
+  the four rules that survived only in two DEAD prompts
+  (`concepts.type_embedding.system`, `concepts.type_host_review.system`, no
+  callers) are carried live again. The dead registrations are left in place.
+* **Culmination names are synthesis names.** The instruction
+  `Name: "Culmination - <A>, <B> and <C>"` (both `concepts.culmination.system`
+  and `concepts.system`) produced a 368-character title on an eight-concept
+  topic by construction; it now asks for a short learner-facing synthesis
+  name with the exact "Culmination - " prefix, never the member list, never
+  a concept outside the topic. **This is the one place a rule's form
+  changed**; the "never leak a concept from another topic" sentence and
+  owner decision D8 (no culmination for a single-concept topic) stand. No
+  length gate was added — "under 80 characters" is the reviewer's norm and a
+  length threshold would be Rule 1's forbidden kind.
+* **Section enumerators** ((a), (b), (i)) named beside the decimal-number
+  rule in the hierarchy instruction, `concepts.consolidate` and
+  `concepts.system`.
+* **What the Subjective lane MEANS** (assessment cells, versioned
+  `assessment-cell-5-lane-mechanics-2026-09-13` /
+  `assessment-generated-cell-5-…`): a Subjective verdict projects the answer
+  into `$$a$$` blanks matched against a bounded set, so a sentence of
+  explanation is Descriptive even when short and bounded (boundedness is
+  `answer_restriction = Specific`, not the Subjective lane), and a category's
+  presence under `formats_by_sheet.subjective` is availability, not evidence.
+  The critics flag the reverse. Ten Bholi Pre questions had been filed
+  Subjective and moved by hand. The Pre author is told to author each
+  question in the response form it intends (a fill-in shows its blank, a
+  selection question lists its options).
+
+### Recorded for the owner — contract questions, with the exact change each would take
+
+* **Keyword delimiter, three ways**: contract §16/Appendix B say `" | "`,
+  register Q33 and `column_spec.keywords_separator` say comma-space, the
+  reviewer re-delimited three chapters to pipe. One line plus a versioned
+  policy bump once decided; the mixing defect is fixed regardless (above).
+* **Pre `concept_source`**: Q42/Q27/§18 make the publication the Concept
+  Source on every lane; the reviewer set Pre to `UpSchool DB` on three
+  chapters by the same logic Q33 applies to generated questions. A
+  lane-keyed policy key in three composers if the owner agrees.
+* **Types scoped to the concept they test** (Types/Cases family, the most
+  consequential): the mining doctrine makes a Type a chapter-wide answering
+  FORM and Q14 then moves every Case and QID of it onto ONE owner — hence 26
+  of 42 Organisms cases on a concept they did not test and 31 of 41 concepts
+  with no question, and all seven Activity blocks on Seed Germination. Both
+  reviewers are satisfied only if a Type is scoped to the one concept it
+  tests at mining time; that inverts the doctrine and Q14's two boundaries,
+  so it is the owner's ruling. The exact sentences to replace are in the
+  workflow record. Related: whether Q14 governs Container-02 hub notes at all
+  (register Phase 2.2 says hub items are placed by what they depict).
+* **Culminations hosting Cases**: Host rules (2)/(4) route multi-concept
+  questions to Culminations; the reviewer emptied every culmination
+  ("culminations are summaries"). Owner's call.
+* **Misconception coverage and form**: the reviewer wants a block on every
+  non-culmination concept and one numbered "(1) … Correction: …" component;
+  contract §10 and Q1 say entries are not mandatory and name two kinds. Two
+  parts: coverage (a prompt target under option B) and a paired `correction`
+  field (schema + render; planned below).
+* **Figure references in prose**: numbered ("Fig. 7.7", Science reviewer)
+  vs "the figure" beside an inline image (Print Culture reviewer); the
+  validator keys on the number. Either way prose must stay complete (below).
+* **Four options per generated MCQ** (§22 fixes no count); **a locator hint
+  printed in the book** (drop as apparatus, or keep per §7.3/§19.3);
+  **Descriptive answer_restriction** (the reviewer set 17 of 19 to Open — a
+  lane default §31/A-034 forbids; the real question is what the CMS
+  evaluator does with Specific on prose); **per-sheet category
+  compatibility** as a declared layer over the Q45 catalogue; **in-text
+  referent resolution** (Q47) vs "Step 02 reads nothing semantic from Step
+  01" (Q51) — the fragment questions ("How does this process work?") cannot
+  be resolved anywhere in the three-step workflow today; **one captioned hub
+  entry per figure** even when a question claims it (Q38 conflict).
+
+### Planned next, not in this change (each medium, each with its mechanism known)
+
+* **Culmination `achieving_mastery`** (§11.1 requires it; culminations ship
+  without one by construction) and **Settle re-authoring the culmination
+  title** from the FINAL member set (the Post title is minted before Settle,
+  Host and coherence change the members — hence phantom and cross-topic
+  members in names); the post-Settle duplicate-identity refresh's mechanical
+  member-list join (`prelearning_formation_contract._refresh_affected_culminations`,
+  a wrapper on `settle.settle` for every lane, fired only on duplicate
+  (topic, title) groups — not "the Pre lane", which mints no culminations)
+  becomes an authored title. — DONE, see Q68.
+* **Paired `correction` on every misconception/error item** with a numbered
+  render (schema, checker, inventory carry, both renders, legacy replay
+  branch). — DONE, see Q68.
+* **`strip_dangling_references` deleting "Fig. 7.7" from prose** and leaving
+  "as illustrated in." — reproduced byte for byte; the publication path
+  already removed this cleaner for the same reason, staging still runs it.
+  Needs version gating so a sealed run's deposit fixpoint replays
+  identically. — DONE, see Q68.
+* **Host `create_new` across blind parallel batches** (three same-meaning
+  Triangles concepts): a second sequential pass that sees every first-pass
+  creation; provenance sentence for the coherence merger. — DONE, see Q68.
+* **Settle and the tier author see the chapter's teaching order** (Topic 05
+  using flowers before Topic 06 introduces them; advanced tiers on opening
+  concepts). — DONE, see Q69.
+* **Declared `options` on generated Pre questions** so a dropped option is a
+  materializer defect instead of a silent loss. — DONE, see Q70.
+* **Duplicate case titles as a coverage defect** in the mining follow-up
+  (the prompt rule is in). — DONE, see Q71.
+* **Placeholder captions minted into source text** (`_markdown_image`,
+  `render_semantic_source`) and a per-row duplicate-image warning. — DONE,
+  see Q72 (the reader stamp is deliberately not bumped — owner question
+  recorded there).
+* Ten remaining hub/figure/caption items: captions losing their printed
+  "Figure 7.2" (an extraction-prompt clarification), hub labels for bare
+  markers, a captioned entry for a claimed figure (owner).
+
+### Verification follow-up (same day)
+
+The workflow's own adversarial verification finished 22 of 58 verdicts before
+the session limit; each was read against what shipped. Six residual points
+were real and are fixed here, same commit series:
+
+* **A regression in item 9.** With the plan topics kept in the plan's own
+  order, `compile_semantic_graph`'s span chain and positional fallback still
+  read the list as if it were source-sorted — a whole-work Detailed Analysis
+  topic (last, citing the opening block) got the whole text, its predecessor
+  a negative span, and the fallback returned it for every position. Both now
+  read a source-ordered VIEW of the same rows; ids and export keep the plan's
+  order. Pinned on the existing plan fixture.
+* The recorded-label match for a leading ordinal counts only a standalone
+  token: "Questions" no longer yields "s", "Exercise" no longer "e".
+* The Host's `new_concept` mastery line is written in the same imperative
+  register as every other author's.
+* The reviewed file's band cells (`chapter_description`, `topic_description`)
+  travel through the same `<br>` transport as every quote, so the Master band
+  keeps its markers.
+* The page-extraction prompt states that the printed figure label ("Figure
+  7.2") is the first words of `source_caption`, never dropped or moved into
+  `public_alt` — the five Organisms captions that lost their numbers.
+* The bare-number title fallbacks (`_plain_title`, `_semantic_title_key`)
+  drop a leading "(a)"/"(iv)" enumerator exactly as the parser does, and
+  agree with each other.
+
+Declined from the same verdicts, with the reason: the audit consults no
+registry (kept pure, above); the reviewed-file RULES do not recase the
+reviewer's names; the writer's topic_description read-back equality stays
+(it now certifies the authored-or-blank value).
+
+### Verification
+
+Offline only. Every mechanical origin above was reproduced on the current
+tree before it was changed; the new tests pin the reviewers' exact cases
+(`tests/test_reviewed_chapter_band.py`,
+`tests/test_corrections_catalogue_2026_09_13.py`,
+`tests/test_corrections_catalogue_topology_2026_09_13.py`). Three tests that
+pinned the old behaviour were updated with the reason in place ("Covers A."
+and the delivery-integrity name list; the cell policy version pins). No paid
+generation was run. Nothing here changes what a sealed run replays.
+
+## Q68 — decided — the corrections catalogue's second pass: culminations authored whole, corrections paired, figure references kept, blind Host batches resolved
+
+**Status:** decided (owner: "go through all of these first and then set up a
+proper workflow … you can make it better; but dont lose the existing ones").
+**Date:** 2026-09-13. **Amends:** Q67 (executes four of its "planned next"
+items), Q1 (mastery on every concept), Q13 (the Fixer), Q14 (Host units).
+**Contract:** §11.1 ("A Culmination MUST contain a real Description and
+Mastery."), §10 (the two learner-analysis kinds).
+
+### Culmination title and Achieving Mastery are authored from the FINAL members
+
+**Reproduced.** `settle._settle_topic` composed a culmination as
+`"Description: " + consolidation` under the title the skeleton minted at
+0.81 — before Settle, the Host and the coherence pass changed the member set.
+The authoring response schema (`prompts.ANALYSIS_SYSTEM`) declared
+`{concept_id, consolidation}` only; the settle rules told the model to fold
+the capability INTO the paragraph; `_authoring_checker` demanded a non-empty
+consolidation and nothing else. Downstream, four culmination exemptions —
+`concept_refiner.refine_chapter`, `generation._ensure_mastery_lines_via_api`,
+`polish._failures` and `concept_validator` (`strict_mastery_statement and not
+is_culm`) — meant nothing ever asked for the missing line or repaired it.
+The one code-composed list-form name left on the tree was the post-Settle
+duplicate-identity refresh (`prelearning_formation_contract.
+_refresh_affected_culminations`, a wrapper on `settle.settle` for every
+lane), which overwrote whatever Settle had named with `"Culmination - " +
+", ".join(member titles)` — the "Culmination - A, B, C" names the reviewers
+corrected, with phantom and cross-topic members.
+
+**Decided.** The Settle authoring response carries, per culmination,
+`culmination_title` and `achieving_mastery` beside `consolidation`. The
+request names the supplied title `draft_culmination_title` — a stale draft
+to replace, never the response field — and marks a sealed-plan row
+`planned: true`. The checker (mechanics, the class of "consolidation is
+empty") requires the exact `Culmination - ` prefix (the identity
+`cr.is_culmination` keys on), a non-empty mastery in `[Katex]` form, and
+refuses a culmination mastery that repeats a member's in the same response;
+a planned row must echo its title exactly and return an empty mastery,
+because the sealed literary plan owns both (its mastery is appended by the
+plan seam after Settle, as before). The row is composed exactly like a
+normal row — `Description: <prose>\nAchieving Mastery: <mastery>` through
+`kr.repair_unwrapped_math` — so Assemble, the refiners, the validator and
+the workbook writer treat it like every other concept. A response that
+somehow still lacks a title or a mastery ships the row visibly flagged,
+never dropped (R4). The refresh seam asks for the same two fields
+(`CULMINATION_POLICY_VERSION` is a literal, so it is bumped to
+`settle-row-identity-culmination-2`: `kernel.decide` serves a stored hit
+unchecked, and a `-1` record has no title to apply); its critic dissents on
+a list-form title or a missing/repeated mastery, advisory as ever. The four
+exemptions are removed: a culmination missing its line is now a Polish
+repair target with culmination-specific guidance, and the strict gate
+reports it (`missing_mastery_statement` is outside the blocking codes, so
+the terminal gate flags and never halts).
+
+**Replay.** `settle.author` is keyed through the `ANALYSIS_SYSTEM` digest
+and the payload, both of which change, so no stored authoring decision is
+served under the new key: a completed run (restored `final_content_ready`)
+never re-enters Phase 3, while a run resuming from a NON-terminal checkpoint
+re-authors Settle for every topic — a re-spend, said here rather than hidden.
+`AUTHOR_POLICY_SUFFIX` stays `-q1`. **The adversarial verification of this
+item found the replay claim incomplete and it is fixed in the same series:**
+sealed Post runs are NOT label-free — the pre-Q68 settle rules told the model
+to fold the capability into the paragraph, and 7 of job 139's 9 culminations
+carry "Achieving Mastery:" INLINE — and two of the four removed skips sit in
+the DATABASE DEPOSIT chain (`refine_chapter`,
+`_ensure_mastery_lines_via_api`), which runs over restored sealed rows before
+the final-certificate recompute that seals `concept_details`; an ungated
+formatter would have refused every pre-Q68 `final_content_ready` checkpoint
+deposited after this deploy (the queued, paused, crashed and console-Retried
+class) and discarded the checkpoint. Both formatters now take
+`format_culminations`, the run's recorded generation-quality answer
+(`culmination_mastery_formatted`, true from v2 on — v2 was minted in the same
+change as the widening, so no run stamped v2 or later was sealed under the
+skip), read from the bound routing record at the deposit and from the
+envelope or metadata in Assemble and the Refiner — the `keep_figures`
+pattern. Also recorded from that verification: `host._settled_index` keys
+settled rows by casefold title alone, so two topics given the same authored
+synthesis name would collide there (the member-list join made that impossible
+by construction); a topic-scoped index or a cross-topic duplicate-title
+review flag in Assemble is the mechanical option, not taken here. And
+`_MASTERY_LABEL_RE` (`mastery\s*[:\-]`) now also reaches culmination
+paragraphs — the pre-existing normal-row hazard ("reaches mastery: …" is cut
+at the label), unchanged in kind.
+
+**Prompts.** Every existing sentence is kept; the new ones sit beside the
+consolidation sentence they extend in `prompts.ANALYSIS_SYSTEM`, the settle
+request rules, `CULMINATION_SYSTEM` and `CULMINATION_CRITIC_SYSTEM`.
+
+**Not taken.** `ensure_analysis_sections`' Q1 rule that a culmination carries
+no inventory item; `_ensure_parent_concepts` (only defaults a culmination's
+parent); the refresh seam's `keywords = ", ".join(titles)` (the delimiter is
+the recorded Q33/contract question and `column_spec.keyword_cell`
+re-tokenises it at the writer).
+
+### Every misconception and error-analysis item carries its paired correction
+
+**Reproduced.** Both lanes' inventory passes (`phase3/analyse.py`,
+`phase3/preanalyse.py`) asked each item for `{item_id, kind, text,
+evidence, rationale}` only; the checkers refused only an empty text; the
+composers (`assemble.stamp_analysis_allotments`, `preanalyse.stamp`)
+rendered `Misconceptions: <t1>. <t2>; Error Analysis: <t3>` through
+`_join_analysis_texts` — unnumbered, no correction. The Science reviewer
+rewrote 34 concepts to "(1) <false statement>. Correction: <what is true>."
+
+**Decided.** One envelope-frozen, instruction-only policy module,
+`analysis_correction_policy` (`KEY "_analysis_correction_policy"`, `VERSION
+"analysis-correction-2026-09-13"`), sealed onto NEW envelopes beside
+`prelearning_foundation_policy` by `concept_topology_contract` — inside the
+seal, hence inside `envelope_sha256` and every decision key. Under it: both
+lanes' build payloads carry the key and an additive rules sentence directly
+after "never restate one as the other."; the live author and critic
+adapters append the same text (every `*_SYSTEM` constant is untouched, so
+the prompt digests, the Instruction Architect's frozen-core hash and the
+`analysis-1`/`pre-analysis-1` pins do not move); the checkers add "<id> has
+empty correction" (mechanics, the class of "has empty text"); the
+recorded decision's `policy_version` gains a readable `;analysis-correction-…`
+marker; the inventory dicts carry `correction` only when the response row
+has it, so a stored pre-policy decision rebuilds the identical dict and the
+recorded snapshot, the capture packet and the allot payloads replay byte for
+byte. One new composer branch, `assemble._render_analysis_component`,
+renders per component `Misconceptions: (1) <text>. Correction: <c>. (2) …;
+Error Analysis: (1) <text>. Correction: <c>.` — `(n)` is the item's position
+within THAT component, never the LA-/PLA- id; both contract §10 kinds are
+kept; an inventory without the field takes the unchanged
+`_join_analysis_texts`. A leading "Correction:" echo is stripped once
+(`concept_refiner.strip_correction_label_echo`, the sibling of the kind-label
+strip). The Refiner's editable-field rule gains the pairing sentence and its
+mechanical identity check refuses a refinement that merges, drops or
+renumbers a pair; rows rendered before the policy carry no `Correction:`
+marker and are exempt. Verified offline: the pair body passes
+`repair_unwrapped_math`, `_CANONICAL_ANALYSIS_CONTENT_RE`,
+`normalize_analysis_sections`, `ensure_valid_learner_analysis` and the strict
+validator byte-identically.
+
+**Replay.** A sealed envelope without the key: `fields()` is `{}`, the
+split rules literal reconcatenates to the byte-identical old string, the
+checker runs without the requirement, the suffix is empty — the decision key
+is exactly the pre-change key, and a cache hit (served unchecked) carries no
+`correction`, so the section renders exactly as it always did. A run
+mid-flight at deployment keeps its sealed envelope, so it keeps the old
+prompt, checker and render with no mixed shapes; one exception the
+verification measured: `kernel._callable_contract_hash` hashes the checker's
+bytecode into the PENDING-author receipt, so a run interrupted INSIDE the
+2.4 build authoring re-makes that one author call after deploy (stored
+decisions are served unchecked and are unaffected).
+
+**Verification follow-ups (same day).** The adversarial verification found:
+(a) a correction carrying a reserved inline label ("a common mistake: …")
+would be TORN by `normalize_analysis_sections` at the deposit fixpoint — the
+author instruction now states the six-field schema, forbids self-numbering
+and forbids a section label inside either half, and, under the policy only,
+both checkers refuse the shape (mechanics: formatting the composer would
+split on); (b) the frozen `*_SYSTEM` constants still state the five-field
+schema while `_SHARED` asks the model to match "the stated schema" — the
+instruction now restates the schema for this request, so the constants (and
+the prompt digests) stay untouched; (c) `_close_sentence` wrote "]." after a
+trailing image tag — it now punctuates before the tag, the Q67 hub-note
+principle; (d) the pair-token regex shipped as `\(\d+\)(?=\s)|Correction:`,
+narrower than the design's, and is kept; (e) the refiner discard is now
+pinned end to end. Known and left to the critic: a refinement that swaps the
+two texts between pairs while keeping the markers passes the mechanical gate.
+
+**Still with the owner (Q67's two sibling questions, untouched here):** a
+block on EVERY non-culmination concept (would remove "NOT every concept
+receives an item — that is the design" from both allot prompts and amend
+§10), and folding Error Analysis into one numbered Misconceptions component
+(would collapse the two kinds §10 defines as distinct). Neither is needed
+for the pairing.
+
+### Figure references survive the dangling-reference cleaner (policy v2)
+
+**Reproduced.** `concept_cleanup.strip_dangling_references` deleted "Fig.
+7.7" and "Figure 6.3" from prose because the row carried no image, leaving
+"as illustrated in." — the reviewers' three sentences, byte for byte. The
+publication path had already stopped running this cleaner for the same
+reason; the staging deposit fixpoint (`phase3/assemble`) and the Master
+refiner still ran it.
+
+**Decided.** `generation_quality_policy` becomes two-version: `V1` (the
+recorded 2026-09-11 stamp) and `V2` (`owner-generation-quality-2026-09-13-v2`);
+`SUPPORTED` names both, `VERSION` is `V2`, `is_current` accepts any
+supported version, `fields` carries the RECORDED version forward and
+`figure_references_kept` is true from V2 on. Under V2 the cleaner keeps
+figure references (`Fig.`/`Figure`/`Diagram`) and still strips dangling
+example/table references; a row that carries an image keeps every reference
+as before. `clean_concept_record(..., keep_figures=None)` reads the row's
+own stamp; the deposit pipeline and the release refiner read the envelope's
+or the metadata's. `release_workbook_edits` carries the run's recorded
+version instead of re-stamping the latest, so a v1 run's edited release
+still replays under v1.
+
+**The reach of a shared constant, found by the second pass's own design
+review and fixed before commit.** Bumping `VERSION` alone would have (a)
+refused every existing checkpoint bundle and routing record, since
+`checkpoints._validate_payload` and `model_routing_run.save_profile_for_job`
+compared the recorded stamp against the single latest constant — both now
+accept every `SUPPORTED` version; (b) re-stripped a v2 run's sealed rows at
+the database deposit, where plain rows carry no stamp — the deposit chain
+(`_deposit_and_publish_concepts` → `_deposit_concepts` → `_add_concept`) now
+takes `keep_figures` from `bound_figure_references_kept()`, the routing
+record the process is bound to, so the final-certificate recompute sees the
+sealed text; (c) made the T7.2 publication receipt report a kept figure as
+"house normalization" — it now cleans under the payload's recorded version;
+(d) re-keyed sealed v1 decisions on replay, because fourteen sites minted the
+bare constant behind an `active()` guard that is now true for v1 — every one
+(`premap`, `prelearn`, `coherence`, `prelearning_authority_v2`,
+`question_polishing`, `assessment_source_inventory`,
+`assessment_materialization`, `assessment_item_review`,
+`assessment_master_refiner`, and `assessment_teaching_order`, whose atom
+audit rides into every cell payload) now carries the RECORDED version, and a
+source sweep pins the pattern out. A figure cited in Description or
+learner-analysis prose that no `[img]` caption on the row names is recorded
+as the advisory, never-blocking release-QC issue
+`prose_figure_reference_without_image` — kept as written, never deleted.
+
+**Replay.** A sealed v1 run cleans exactly as before (pinned:
+`tests/test_figure_references_kept.py` runs the reviewers' sentences under
+v1, v2, legacy-unstamped and forced; every old-cleaned section is a fixpoint
+of the new cleaner — a FIXPOINT claim, measured at 0 counterexamples on
+30,000 token strings and 10,000 sections, where the single-pass form is false
+because the old cleaner is not idempotent; a v1-stamped bundle imports and
+keeps v1; the recorded version rides every key). New envelopes freeze the
+current version. Two residuals recorded, not changed: `reviewed_file_input.
+_policies()` mints the LATEST stamp into the paid `reviewed_file.extract`
+key, so a Step 02 interrupted under one stamp and reattached after a bump
+re-decides the extraction at cost (recording the Step 02 stamp once per job
+is the fix, an owner decision); `release_workbook_edits` upgrades an
+UNSTAMPED legacy payload to the latest stamp at a Step 03 edit, which flips
+the v2+ predicates for that job's later Master work (pre-existing pattern).
+
+### Host re-decides its blind creations with every batch visible (policy v3)
+
+**Reproduced.** `phase3/host.host` builds `settled_concepts` once and
+certifies units in parallel batches of eight over that one payload, so no
+batch ever sees another batch's `create_new`: three same-meaning Triangles
+concepts were minted by three batches, and the coherence merger — told
+nothing of the blindness — kept them distinct.
+
+**Decided.** `generation_quality_policy` V3
+(`owner-generation-quality-2026-09-13-v3`, `host_creations_resolved`). Under
+it, after the parallel first pass — whose payloads, keys, rows and output are
+byte-identical to before — every unit whose own verdict was `create_new` is
+re-decided ONCE, sequentially in unit order, through the same closure,
+checker, critic and Fixer, with `settled_concepts` extended by every batch's
+first-pass creation (projected with its `_source_grounding_contract`, the
+batch and the unit that created it), the unit's own creation as
+`first_pass_created`, the verdicts already resolved ahead of it as
+`resolved_units`, and one additive rules sentence placed directly after the
+`create_new` clause it extends. Decision identity: kind `host.units`, unit
+id `units#resolve#<start>`, policy suffixed `RESOLUTION_POLICY_VERSION`, so a
+rule change there re-keys only the resolution. The model names the host; a
+first-pass row no final `host_map`/`qid_map` entry references retires
+verbatim into that unit's `host_resolution` audit and a review flag pinned to
+the unit and its QIDs; a row the model keeps ships as before. Re-minting a
+created row under its exact title is refused by the existing checker
+("duplicates an existing settled concept title"). No similarity rule,
+threshold or keyword list is added: the only new deterministic work is
+identity accounting on the exact `(topic_id, casefold title)` key Assemble,
+coherence and the plan contract already use. Coherence's author and critic
+are told which candidate rows were created blind
+(`api-created-missing-type-host`) and that each topic's rows were settled
+without sight of the others, and asked to name the comparison.
+
+**Replay.** Runs stamped v2 or earlier keep their single blind pass (pinned
+on the unstamped and the v2-stamped golden envelope: no request carries
+`resolved_units`, both created rows ship, no audit). Decide-once holds for the
+new identity (a second `host()` on the same store makes no call and returns
+an equal dict). A run interrupted inside Phase 3 and resumed after this
+deploy re-keys coherence (its prompt digest changed) — the precedent of Q67.
+Spend: one extra Host decision, plus critic, per batch of up to eight
+creating units, only when the first pass created something.
+
+**Not addressed.** Settle authors each topic blind to its siblings
+(`settle.py`: "Topics are independent decision streams"); coherence, now told
+of the blindness, remains the merge point for that case. A same-titled
+creation in two DIFFERENT topics (legal today: Assemble keys on (topic,
+title)) cannot both be named on the resolution pass — the Host protocol names
+hosts by title and `_settled_index` is first-wins — so the later unit's
+`existing` verdict resolves to the first topic's row and its own row retires;
+the unit and its QIDs now carry a flag naming the clash (identity
+accounting, never a decision about which is meant). The pre-existing
+near-match tolerance in `_resolve_host_title` (prefix or difflib >= 0.90) now
+also indexes created titles: measured 0.925 between two of the reviewer's
+three Triangles spellings, so a unique paraphrase resolves and an ambiguous
+one fails closed to a correction. The coherence prompt digest changed, so
+`post.concept_coherence` re-keys for every run resumed inside Phase 3 before
+coherence, whatever its stamp — the Q67 precedent; the stamp bump itself
+re-keys nothing.
+
+### Verification
+
+Offline only. `tests/test_phase3_host_blind_batches.py` (a v3 run re-decides
+exactly the two creating units with both creations visible and retires the
+unreferenced one into its audit; pre-v3 runs replay the single pass; the
+resolution replays for free and identically; a re-mint under the same title
+fails closed; a resolution that keeps both creations retires nothing).
+`tests/test_phase3_settle_golden.py` (the fixture now returns
+the draft as the authored title so the golden replay's (topic, title) keys
+still resolve; a new test renames one culmination and finds the authored
+name on the settled row; two checker tests pin the prefix, mastery,
+repeat and planned-echo refusals),
+`tests/test_prelearning_formation_contract.py` (the two assertions that
+pinned the member-list join are inverted; the refresh checker is pinned),
+`tests/test_concept_validator.py` (the exemption assertion is inverted),
+`tests/test_chapter_topic_quality.py` (renamed; a label-free legacy
+culmination stays byte-identical, a labelled one is canonicalised),
+`tests/test_generation_validation_diagnostics.py` (the strict culmination
+fixtures now carry their line); `tests/test_analysis_correction_policy.py`
+(the golden Post and Pre replays with and without the key, the fail-closed
+"has empty correction" path, the numbered render against every mechanical
+gate, the legacy join, the Refiner pairing gate); `tests/test_phase3_flip_seam.py`
+(the new-envelope metadata lists the key; the historical envelope does
+not). No paid generation was run.
+
+## Q69 — decided — the corrections catalogue's second pass: Settle and the tier author see the chapter's teaching order
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items). **Contract:**
+none changed; §37 / Rule 1 (evidence to the model, judgment stays with it).
+
+**Reproduced.** `settle.author`'s `content_authoring` payload carried
+`"topic": {topic_id, title}` and this topic's concepts only; the topics run
+as independent decision streams. The author of "Gametes, Fertilisation and
+Zygote Formation" (Topic 05) could not know that the chapter first
+introduces flowers in Topic 06, and the critic, seeing the same payload,
+could not flag it. `assessment_grouping.decide_levels` tiered ONE candidate
+against `_concept_payload(concept)` — titles and descriptions — with no
+chapter position, so a Triangles question hosted on an opening concept but
+needing a later theorem was tiered in isolation (the reviewer's "some
+advanced questions are coming in starting concepts").
+
+**Decided.** Evidence, not a rule. `settle.settle` composes
+`chapter_topics_in_teaching_order` once — the sealed graph's topics in their
+own order (a language plan's recorded order, Q67 item 9), each with its
+skeleton concept titles, culminations left out — and every authoring payload
+carries it with `this_topic_position`. The request rules gain one sentence
+beside "Author each concept's learner-facing content in ONE pass…": explain
+with what the learner has met by this point; when a later topic first
+introduces a structure, term or example, do not build on it unless this
+concept's own source_blocks introduce it here. `prompts.CRITIC_SYSTEM`
+flags the reverse, guarded by "when the request carries…" so the topology
+and grounding stages it also serves read nothing new. `decide_levels` accepts
+`chapter_teaching_order` — the release run passes the bridge's `concepts`,
+the accepted Concept file's record order, the same sequence
+`assessment_teaching_order` transports into the Master — and the payload
+carries the projected roster (`ordinal`, `concept_key`, `topic_title`,
+`concept_title`, `is_culmination` where recorded) and `this_concept_ordinal`,
+bound by `concept_key` and refused pre-spend if the home concept is missing;
+`LEVEL_SYSTEM` asks the author to weigh a demand for a later concept's result
+as transfer and to name that concept in the rationale, `LEVEL_CRITIC_SYSTEM`
+mirrors it, and `LEVEL_POLICY_VERSION` is
+`assessment-level-2-teaching-order-2026-09-13`. No "opening concepts carry
+lower tiers" rule exists in code or contract; whether it should is a contract
+question for the owner, recorded here. Moving content between topics stays
+the coherence author's decision (Q47).
+
+**Replay.** Both payloads change shape, so new runs mint new decision keys
+and a stored record is never served under them. A completed run never
+re-enters Settle or the Master's level stage; a run resuming from a
+non-terminal Phase 3 checkpoint re-decides Settle — all three stages, because
+`_policy_version` digests `CRITIC_SYSTEM`, exactly as Q67's own
+`CRITIC_SYSTEM` sentence already caused in this unmerged series — and a
+Master lane resumed mid-run re-decides its level verdicts only.
+`AUTHOR_POLICY_SUFFIX` stays `-q1`. The legacy session caller
+(`build_assessments._recorded_tiers`) passes no roster; its payload keeps
+its shape and re-keys only through the text and version.
+
+**Not taken.** A cross-chapter roster for the legacy session workflow; a lane
+branch for Pre (generated questions authored under Q30 never reach
+`decide_levels`).
+
+### Verification
+
+Offline only: `tests/test_phase3_settle_golden.py` (every authoring request
+carries the same roster, positions 1..N in the graph's order, its own
+position, the skeleton titles; the golden replay's 53 rows are unchanged),
+`tests/test_mes_routing_and_grouping.py` (payload with and without the
+roster, the ordinal binding, the pre-spend refusals, the sentences in both
+prompts and the version), `tests/test_assessment_release_run.py` (the level
+author's roster equals the router's `candidate_concepts` order; the policy
+pin updated), `tests/test_corrections_catalogue_2026_09_13.py` (the critic
+sentence). No paid generation was run.
+
+## Q70 — decided — generated Pre questions declare their options (generation-quality v4)
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items), Q30 (the Pre
+author's response), Q61 (strict schemas). **Contract:** §22 fixes no option
+count; unchanged.
+
+**Reproduced.** A generated Pre MCQ shipped with its fourth option missing
+(Bholi). The Pre author response was `{question_id, question_text, answer,
+rationale, tier}` under a strict schema with no `options` field;
+`_bind_generated_cells` copied six fields plus the tier into the cell; the
+only option-cardinality gate (`assessment_materialization._proposal_defects`)
+read the source atom, which the generated lane never has (`atom=None`), so a
+materializer that projected three of four options shipped unseen.
+
+**Decided.** `generation_quality_policy` V4
+(`owner-generation-quality-2026-09-13-v4`, `declared_pre_options`). Under it:
+a v2 strict author schema `aegis_pre_question_author_v2` with a REQUIRED
+`options: list[str]` (empty when the question offers no choice set; Q61 —
+declared means required); the checker holds it to a list of non-empty,
+non-repeating texts (nothing reads the wording); one additive sentence in
+BOTH author systems and a review sentence for the critic, appended only for
+a v4 payload because the sentence must match the wire schema `_live_author`
+selects for the same payload — deliberately not written into the frozen-core
+`PREQUESTIONS_AUTHOR_SYSTEM`; the authored entry carries `options` exactly as
+it carries the tier; `_bind_generated_cells` carries it into the cell only
+under a v4-stamped profile (a reviewed-file Pre row already carries an
+extraction `options` list, and carrying it onto a pre-v4 cell would move
+that cell's materialization key); the materializer's existing cardinality
+defect applies with the declared count and the generated-lane noun, and one
+gated instruction tells it the declared set is the set to project. The
+author payload has carried the run's recorded stamp since v1 through
+`prelearning_capture_policy.boundary_fields`, so the author key of every
+v1–v3 run already ends with its stamp and `declared_pre_options(payload)`
+reads it directly; only a v4 stamp switches the schema, sentence and checker
+(a redundant spread the first commit added was removed on verification — it
+restated the same key and value and moved no key). Downstream, the Master
+refiner's lock and the marking cardinality hold make materialization the
+single decision point for the declared set.
+
+**Replay.** A v1–v3 or unstamped run keeps the v1 schema, prompt, checker,
+cell shape and every key byte for byte (pinned: the v3 author system equals
+the unstamped one; a v3 materialization payload's key equals the key with
+the predicate forced off). Only a v4 Step 02 or fresh run declares options.
+
+**Recorded for the owner, unchanged from Q67:** whether a generated MCQ must
+carry exactly four options (§22 fixes no count), and whether an Objective
+verdict on a question that declared an EMPTY set should be a mechanical
+defect rather than the advisory critic flag it is now.
+
+### Verification
+
+Offline only: `tests/test_declared_pre_options.py` (the two schemas, the
+checker with and without the flag, a v4 build carrying options and replaying
+for free, a v3 build byte-identical, the live author's schema selection, the
+cell carry under a v4 profile only, the materializer's declared-count refusal
+and its historical skip, the gated instruction and the unchanged pre-v4 key);
+the V4 pin in `tests/test_figure_references_kept.py`. No paid generation.
+
+## Q71 — decided — a repeated Case title inside one mined Type goes back to the model (generation-quality v4)
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"). **Date:** 2026-09-13.
+**Amends:** Q67 (executes one of its "planned next" items), Q13 (the Fixer),
+Q14 (Types as chapter-wide forms). **Contract:** none changed.
+
+**Reproduced.** The CASE WORDING rule ("Two Cases in one chapter never share
+a case_title …") was in `concepts.type_mining.system`, but nothing read it
+back: `_mine_types_from_inventory_via_api` checked only QID coverage
+(`_uncovered_inventory_items`, `_duplicate_inventory_assignments`),
+`_merge_equivalent_mined_types` collapsed two same-titled Cases only when
+every hint also matched, and the consolidation prompt moves "Cases intact"
+so two merged Types' same-titled Cases met there verbatim — the reviewers'
+"Explaining the importance of DNA copying …" titled two Cases of one Type.
+
+**Decided.** Under generation-quality v4 (`duplicate_case_titles_returned`,
+read from the `meta` the miner already receives): (1) a pure detector,
+`_duplicate_case_titles(types)` — Cases of ONE Type whose titles are equal
+under `bi.normalize_question_text` (whitespace and case only, the exact key
+`_merge_equivalent_mined_types` already uses; no punctuation or synonym
+folding, no threshold) — returns the groups; scope is within a Type because a
+Type is a chapter-wide answering form (Q14) and a Q2 split legitimately
+repeats one Case across rows. (2) The miner's existing COVERAGE DEFECTS
+follow-up carries a third key, `duplicate_case_titles`, plus one additive
+sentence; the loop's break conditions include it; acceptance is
+lexicographic — coverage must improve, or hold while title repeats fall — so
+a title repair can never buy its fix with exact-once coverage, and with no
+title defects the test is the old strict-improvement test byte for byte.
+(3) What survives the loop, the focused deltas, the fallbacks and the final
+coverage gate goes to the Fixer through `kernel.decide` (kind
+`fixer.type_mining_case_titles`, `FIXER_POLICY_VERSION`, the run's Fixer
+store, envelope = the canonical inventory's digest): the Fixer returns a
+distinct `case_title` per listed Case — its judgment, applied mechanically;
+code never composes a title — or `accept_with_flag`; a Fixer that cannot
+satisfy the checker, or a deployment with none (dry and test runs), leaves the
+Cases as mined and says so in the saved log — never a new halt, since before
+this change the duplicate shipped silently. (4) The same resort runs once
+more on the accepted consolidation result, and — found by the adversarial
+verification — on the taxonomy adopted from a human-directed consolidation
+after the Type-granularity pause (its `include_case_identity=True` contract
+makes `case_title` immutable to the proposal), resolved before the accepted
+`result_context_hash` is recorded so a resumed checkpoint replays the
+re-titled taxonomy it sealed. Trade-off named: a missed-only residue that
+also repeats a title now takes broad complete-list rounds (guarded by
+exact-once and title counts) before the additive focused deltas. No rule or stage is removed;
+the CASE WORDING sentence, the coverage gate, the backstop, the focused
+deltas and the deterministic fallbacks all stand.
+
+**Replay.** A run stamped v3 or earlier replays the loop, the follow-up bytes,
+the log lines and the tail unchanged (pinned on a v3 stamp and on the
+unstamped historical `meta`). Spend: at most one extra broad follow-up per
+attempt when titles are the only defect, plus one Fixer decision per (Type,
+repeated title) group at each of the two sites; title-clean chapters cost
+nothing new.
+
+**Not taken; recorded for the owner (unchanged from Q67):** whether the gate
+becomes chapter-wide once Types are scoped to the concept they test; whether
+a Q2 per-destination split may re-title its verbatim copy. Two Rule 1
+residues already on the tree can re-mint a repeat after the Fixer at render
+time (`_case_title_needs_definition` → `_semantic_fallback_wording`, and the
+templated `_backfill_type_cases_from_inventory` wording) — named in the
+catalogue as their own item, not widened here. A Type/Case-level review flag
+has no carrier to a Concept-file row today; the record is the durable
+decision store and the saved job log.
+
+### Verification
+
+Offline only: `tests/test_type_mining_duplicate_case_titles.py` (the detector
+folds only whitespace and case and stays within a Type; a v4 run sends the
+repeat back through the follow-up and the log names it; a v3 or unstamped
+run never asks; a title repair that drops a QID is rejected; the Fixer resort
+re-titles exactly the listed Cases, leaves every other field byte-identical,
+replays for free, refuses an answer that still repeats, and ships the Cases
+as mined when there is no Fixer). No paid generation.
+
+## Q72 — decided — no placeholder caption reaches the source the authors read; a repeated image in one row is named
+
+**Status:** decided (owner: "go through all of these properly … you can make
+it better; but dont lose the existing ones"); ONE owner question below.
+**Date:** 2026-09-13. **Amends:** Q67 (executes its last "planned next"
+item). **Contract:** none changed.
+
+**Reproduced.** `canonical_source_phase221_fallback._markdown_image(url, "")`
+returned `![Source visual](url)`; the flat parser records the first non-empty
+markdown alt as `alt_raw` and as `caption_raw`; the live lane then overwrites
+`caption_raw` with the page ACSD's empty `source_caption` (the reconciliation
+that also writes `public_alt` onto the canonical figure), so the literal
+reached the authors through three routes — the pool caption
+(`containers.figure_block_evidence` reads the raw-text alt), the `[Source
+image alt text]` evidence line (`alt_raw`), and the renderer's own fallback
+on an empty `caption_raw` — the visible caption line — with the hub note
+guarded since Q67. And
+`canonical_source_phase3.render_semantic_source` printed `Source visual` as a
+standalone caption line whenever `caption_raw` was empty (the Mathpix
+`![](url)` shape) — that rendered text is exactly what the Settle and
+analysis authors read.
+
+**Decided.** An uncaptioned figure keeps an EMPTY markdown alt (`![](url)`,
+the Mathpix shape the parser already reads; "empty when none is printed" is
+the extraction contract's own meaning). The renderer prints no caption line
+for an empty printed caption — gated by a stamp on the GRAPH
+(`figure_caption_render = unprinted-caption-blank-2026-09-13-v1`, written
+only at compile, outside `semantic_context_hash`), so
+`render_semantic_source(graph, canonical)` stays a pure function of its
+arguments and every sealed graph renders the line it was sealed with: the
+resume path's byte-equality against the stored semantic source holds, the
+migration ladder and the cached-graph loader see nothing new, and no cached
+decision key moves. The `[img]` alt still falls back to the literal as a last
+resort (`kr.image` refuses an empty alt) — that residual is the 2026-09-06
+audit's model-authored-alt item, owner-visible, out of scope here. The hub
+guard `_PLACEHOLDER_FIGURE_CAPTION_RE` STAYS: every already-converted job's
+stored MMD keeps `![Source visual](url)`, so its pool caption is the literal
+whatever `caption_raw` says, and the alt-only task-caption sites still mint
+`Source visual N`. Stored MMDs are never rewritten. The validator
+warning `duplicate_image_url` counts exact URL repeats across canonical
+`[img]` tags and markdown images in one row's `concept_details`; severity
+warning, outside every blocking set, outside `release_refiner._terminal_error_keys`,
+counted in every "validation … N warning(s)" line — recorded, never a drop.
+
+**Owner question (recorded, Option A applied).** The comment above
+`RENDER_VERSION` prescribes a bump "when the renderer changes what the same
+page ACSD looks like as MMD". Changing `![Source visual](url)` to `![](url)`
+does change it — but a bump makes `phase2._load_or_refresh_for_job` refuse
+EVERY already-converted upload at its next generation ("Convert this PDF
+again as a new upload") — as a NEW upload job: the page transcription is
+served from the bundle cache, so the cost is the job identity — the old job's
+sealed decisions and checkpoint are left behind (Q64's stranded class).
+Option A (applied):
+no bump; the exclusion is recorded beside the constant (precedent: the
+decision-only identities excluded from the reader stamp); existing uploads
+keep their stored MMD and stay correct through the graph stamp and the hub
+guard; only new conversions get the empty alt. Option B: bump
+`RENDER_VERSION` to `…-3` so every existing upload must be reconverted before
+it generates again — Q64's stranded class at scale. Which do you want?
+
+**Replay.** The MMD is written once per job and read forever; no code
+re-renders a stored MMD. The paid page-ACSD bundle cache is untouched. Every
+sealed graph lacks the stamp and renders the sealed form. Place's input
+changes only for NEW conversions (pool caption `""` instead of the literal,
+already the Mathpix case). Warning noise: `duplicate_image_url` fires on
+every row where projection puts an activity's picture in both its hub note
+and its Type Example — the reviewer's own criterion made visible; per-row
+routing of warnings is a separate change if wanted.
+
+### Verification
+
+Offline only: `tests/test_placeholder_captions.py` (the empty alt, the
+stamped render without the line, the sealed render with it, the unchanged
+context hash, the warning and its non-blocking status). No paid generation.
+

@@ -29,7 +29,9 @@ def hierarchy_schema(schema: dict[str, Any], *, active: bool) -> dict[str, Any]:
 HIERARCHY_TOPIC_INSTRUCTION = """\
 For each main_topic, set topic_display_name to a specific source-grounded
 teaching name; preserve a meaningful source heading verbatim without its
-section number, but replace a generic container title with the subject it
+section number or any lettered/roman enumerator printed with it ((a), (b),
+(i), (ii)), written in Title Case with genuine acronyms and symbols as
+printed (DNA, pH), but replace a generic container title with the subject it
 actually teaches. For other roles use topic_display_name="". Preserve every
 source section ID, title, block and question: the display name does not edit
 the source. A summary/introduction that only supports other teaching is a

@@ -544,6 +544,9 @@ Block rules:
   required labels, arrows, units, legends, axes, panel letters and dependent
   panels. Tight means removing unrelated margin, never clipping these elements.
   source_caption is the exact printed caption, empty when none is printed;
+  it begins with the printed figure label ("Figure 7.2", "Fig. 13") exactly as
+  printed — the label is part of the printed caption, never dropped and never
+  moved into public_alt;
   caption repeats source_caption for legacy consumers. public_alt is a neutral
   accessibility description, never an answer or an inferred interpretation.
   Keep every visible label/caption in the source even if it reveals an answer;
@@ -614,7 +617,8 @@ task block. Qualified linked_visual_refs/linked_context_refs identify the
 owning page and block and may cross supplied pages; verify them against both
 pages. Table drawings must also have table_cell_visual_refs placing each
 figure in its actual zero-based row and column; textual cells remain verbatim.
-source_caption is immutable printed wording, while public_alt may describe
+source_caption is immutable printed wording (its printed figure label
+included), while public_alt may describe
 the visible figure neutrally. Never erase visible source information to hide
 an answer; flag answer-revealing source apparatus for downstream assessment.
 Compare supplied FIGURE-CROP and TABLE-CROP evidence with its full original page: every
@@ -1298,6 +1302,19 @@ PAGE_EXTRACTION_DECISION_VERSION = "page-extraction-decision-3"
 # when the renderer changes what the same page ACSD looks like as MMD (so
 # already-converted sources are recognized as stale) without invalidating
 # the paid page-transcription caches.
+# Deliberately NOT bumped for the figure-alt default (Q72): an uncaptioned
+# figure now renders ``![](url)`` instead of ``![Source visual](url)``. That
+# is data inside one figure block, not the topic/question structure the
+# staleness refusal protects; a bump would make
+# ``phase2._load_or_refresh_for_job`` refuse every already-converted upload
+# ("Convert this PDF again as a new upload") — as a NEW upload job, whose
+# page transcription is served from the bundle cache, so the cost is the
+# job identity: the old job's sealed decisions and checkpoint are left
+# behind. Stored MMDs keep their literal; the graph stamp
+# ``canonical_source_phase3.FIGURE_CAPTION_RENDER_KEY`` and the hub guard
+# ``generation._PLACEHOLDER_FIGURE_CAPTION_RE`` keep those jobs correct.
+# Whether to bump instead (refusing every existing upload) is the owner's
+# question, recorded under Q72.
 RENDER_VERSION = "task-cues-verbatim-full-table-assets-2"
 # Task cues render as a sub-level heading under an active outline: deep
 # enough not to be read as a chapter topic, still a heading so the
@@ -3507,7 +3524,15 @@ def _markdown_heading(level: int, text: str) -> str:
 
 
 def _markdown_image(url: str, caption: str) -> str:
-    safe = re.sub(r"\s+", " ", str(caption or "Source visual")).strip()
+    # An uncaptioned figure keeps an EMPTY alt (Q72). The flat parser records
+    # the first non-empty markdown alt as the figure's ``caption_raw``, so a
+    # minted "Source visual" became the printed caption of every uncaptioned
+    # figure: the pool caption, the hub note (guarded since Q67) and a visible
+    # caption line in the semantic source the authors read. ``![](url)`` is
+    # the Mathpix shape the parser already reads; an empty caption_raw is the
+    # extraction contract's own meaning ("empty when none is printed").
+    # Stored MMDs are never rewritten (see RENDER_VERSION).
+    safe = re.sub(r"\s+", " ", str(caption or "")).strip()
     safe = safe.replace("[", "(").replace("]", ")")
     return f"![{safe}]({url})"
 

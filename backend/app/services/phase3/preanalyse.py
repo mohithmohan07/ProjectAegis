@@ -60,7 +60,10 @@ one recorded decision (Q13) — it is never dropped.
 ``concept_refiner``'s ``split_sections``/``join_sections`` and
 ``assemble``'s own text join produce the one canonical
 ``// Misconception/ Error Analysis: Misconceptions: …; Error Analysis: …``
-section, and the row-private allotment marker is the SAME
+section (under ``analysis_correction_policy`` each component is the
+numbered ``(n) <text>. Correction: <correction>.`` pairing ``assemble``
+mints; an inventory recorded without ``correction`` keeps the plain
+join), and the row-private allotment marker is the SAME
 ``_aegis_analysis_allotments`` field the Post lane stamps (already
 registered in ``build_concepts_release._RELEASE_AUDIT_FIELDS`` and
 already read by ``concept_validator.analysis_allotted_keys``). This is
@@ -79,6 +82,7 @@ from typing import Any, Callable, Mapping
 from . import envelope as envelope_mod
 from . import kernel
 from ... import config
+from .. import analysis_correction_policy
 from .. import progress
 
 POLICY_VERSION = "pre-analysis-1"
@@ -180,8 +184,11 @@ def build_evidence(
     return {"prerequisites": captured, "pre_concepts": concepts}
 
 
-def _inventory_checker() -> Callable[[Mapping[str, Any]], list[str]]:
-    """Mechanics only: positional ids, kind enum, non-empty text.
+def _inventory_checker(
+    *, require_correction: bool = False,
+) -> Callable[[Mapping[str, Any]], list[str]]:
+    """Mechanics only: positional ids, kind enum, non-empty text — and, when
+    ``require_correction`` (the correction policy), a non-empty ``correction``.
 
     Distinctness and genuineness are the model's authored judgment (the
     advisory critic reviews them); an EMPTY items list is legal — a thin
@@ -216,6 +223,26 @@ def _inventory_checker() -> Callable[[Mapping[str, Any]], list[str]]:
                 defects.append(
                     f"{item_id or expected[position]} has empty text"
                 )
+            if require_correction and not _normal(row.get("correction")):
+                defects.append(
+                    f"{item_id or expected[position]} has empty correction"
+                )
+            if require_correction:
+                # A reserved section label inside either half is a shape the
+                # composer would split on (``normalize_analysis_sections``
+                # tears the pair at it); refusing it judges formatting, not
+                # meaning, and stays gated so historical checkers are
+                # byte-identical.
+                from .. import concept_refiner as cr
+
+                for field in ("text", "correction"):
+                    if cr._INLINE_ANALYSIS_RE.search(_normal(row.get(field))):
+                        defects.append(
+                            f"{item_id or expected[position]} {field} contains "
+                            "a reserved section label (Misconceptions:/Error "
+                            "Analysis:/Common|Possible Error|Mistake:) the "
+                            "composer would split on"
+                        )
         return defects
 
     return check
@@ -272,7 +299,8 @@ def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PREANALYSE_INVENTORY_SYSTEM
-        + capture_policy.boundary_instruction(payload),
+        + capture_policy.boundary_instruction(payload)
+        + analysis_correction_policy.author_instruction(payload),
         prompts.render(payload),
         purpose="concept_mapping",
     )
@@ -296,13 +324,16 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PREANALYSE_CRITIC_SYSTEM
-        + capture_policy.boundary_instruction(payload),
+        + capture_policy.boundary_instruction(payload)
+        + analysis_correction_policy.critic_instruction(payload),
         prompts.render(payload),
         purpose="advisory_critic",
     )
 
 
-def _inventory_rules(rules_suffix: str) -> str:
+def _inventory_rules(
+    rules_suffix: str, correction: Mapping[str, str] | None = None,
+) -> str:
     return (
         "Phase 2.4, PRE-LEARNING lane: build the inventory of DISTINCT "
         "Misconceptions and Error Analyses for this chapter's "
@@ -312,7 +343,8 @@ def _inventory_rules(rules_suffix: str) -> str:
         "belief a learner plausibly holds about the prerequisite itself; "
         "an error analysis is a concrete process error — a faulty action "
         "or reasoning step made while APPLYING the prerequisite. They are "
-        "two distinct meanings; never restate one as the other. Judge "
+        "two distinct meanings; never restate one as the other. "
+        + analysis_correction_policy.rules_sentence(correction) + "Judge "
         "purely from the evidence in this request: the captured "
         "prerequisite set and the pre-learning concepts' own teaching. "
         "The current chapter's own content is deliberately not here — an "
@@ -397,10 +429,12 @@ def analyse(
     qids = list(qids or [])
 
     # ---- 2.4 Build: one decision over the Pre lane's own evidence -----
+    correction = analysis_correction_policy.fields(env)
     build_payload = {
         "stage": "prelearn.analyse.inventory",
         **capture_policy.boundary_fields(env),
-        "rules": _inventory_rules(rules_suffix),
+        **correction,
+        "rules": _inventory_rules(rules_suffix, correction),
         "chapter": premap_mod.chapter_calibration(env),
         "evidence": build_evidence(prerequisites, rows, qids),
     }
@@ -417,12 +451,13 @@ def analyse(
         envelope_sha256=envelope_sha,
         payload=build_payload,
         provider=provider,
-        checker=_inventory_checker(),
+        checker=_inventory_checker(require_correction=bool(correction)),
         critic=critic,
         store=store,
         policy_version=(
             _policy_version("PREANALYSE_INVENTORY_SYSTEM")
             + _foundation_policy_suffix(build_payload)
+            + analysis_correction_policy.suffix(build_payload)
         ),
         fixer=fixer,
     )
@@ -436,6 +471,11 @@ def analyse(
             "text": _normal(row.get("text")),
             "evidence": _normal(row.get("evidence")),
             "rationale": _normal(row.get("rationale")),
+            # Present only when the response carries it (see analyse).
+            **(
+                {"correction": _normal(row.get("correction"))}
+                if "correction" in row else {}
+            ),
         })
     build_flags = list(build_decision.get("review_flags") or [])
     review_flags: dict[str, list[str]] = {}
@@ -497,6 +537,10 @@ def analyse(
                     "kind": item["kind"],
                     "text": item["text"],
                     "evidence": item["evidence"],
+                    **(
+                        {"correction": item["correction"]}
+                        if "correction" in item else {}
+                    ),
                 }
                 for item in batch
             ],
@@ -645,16 +689,14 @@ def stamp(
             # Q1: a pre-concept the inventory allotted nothing to carries
             # no analysis section at all. Not a gap — the design.
             continue
-        misconceptions = assemble_mod._join_analysis_texts([
-            str(item.get("text") or "")
-            for item in items
-            if str(item.get("kind") or "") == "misconception"
-        ])
-        error_analyses = assemble_mod._join_analysis_texts([
-            str(item.get("text") or "")
-            for item in items
-            if str(item.get("kind") or "") == "error_analysis"
-        ])
+        misconceptions = assemble_mod._render_analysis_component(
+            [item for item in items
+             if str(item.get("kind") or "") == "misconception"]
+        )
+        error_analyses = assemble_mod._render_analysis_component(
+            [item for item in items
+             if str(item.get("kind") or "") == "error_analysis"]
+        )
         combined: list[str] = []
         if misconceptions:
             combined.append(f"Misconceptions: {misconceptions}")

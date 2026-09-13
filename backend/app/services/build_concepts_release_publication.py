@@ -14,6 +14,7 @@ from . import (
     assessment_release_snapshot,
     build_concepts,
     concept_cleanup,
+    generation_quality_policy,
     generation_recovery,
     identity,
     uploads,
@@ -436,7 +437,11 @@ def upload_release_to_database(
             # nothing (the cleaner is idempotent), so the note appears only
             # where a human's edit actually won.
             would_be = concept_cleanup.clean_concept_record(
-                copy.deepcopy(rec))
+                copy.deepcopy(rec),
+                # The receipt compares against the normalization THIS
+                # release was staged under (Q68); a v2 row that keeps
+                # "Fig. 7.7" is not a reviewer edit.
+                keep_figures=generation_quality_policy.figure_references_kept(payload))
             diverged = [
                 field
                 for field in (

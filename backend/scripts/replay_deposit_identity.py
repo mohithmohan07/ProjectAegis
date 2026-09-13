@@ -78,7 +78,7 @@ def replay_golden_sealed_rows():
     records = result["rows"]
     inventory = copy.deepcopy(envelope.get("inventory") or {})
     mined_types = copy.deepcopy(envelope.get("mined_types") or {})
-    return records, inventory, mined_types
+    return records, inventory, mined_types, dict(envelope.get("metadata") or {})
 
 
 def identity_diffs(records, attested_by_concept_id) -> list[str]:
@@ -116,8 +116,12 @@ def deposit_chain(chapter_title: str, subject: str, board: str):
     from app.services import concept_validator as cv
     from app.services import generation
 
-    def clean(records, _ctx):  # build_concepts.py:975
-        return [concept_cleanup.clean_concept_record(dict(r))
+    def clean(records, ctx):  # build_concepts.py:843
+        from app.services import generation_quality_policy as quality
+        # Q68: the deposit cleans under the sealed run's recorded stamp; the
+        # golden envelope carries none, so the replay stays legacy.
+        return [concept_cleanup.clean_concept_record(
+                    dict(r), keep_figures=quality.figure_references_kept(ctx["meta"]))
                 for r in records]
 
     def review_filter(records, _ctx):  # :976-978
@@ -186,7 +190,8 @@ def deposit_chain(chapter_title: str, subject: str, board: str):
 def replay(records, inventory, mined_types, certificate, *,
            chapter_title: str, subject: str, board: str,
            json_roundtrip: bool = False,
-           strip_release_qids: bool = False) -> int:
+           strip_release_qids: bool = False,
+           metadata: dict | None = None) -> int:
     from app.services import grounding_certificate as gc
 
     if json_roundtrip:
@@ -205,7 +210,7 @@ def replay(records, inventory, mined_types, certificate, *,
     context = {
         "inventory": inventory,
         "mined_types": mined_types,
-        "meta": {"subject": subject, "board": board,
+        "meta": {**dict(metadata or {}), "subject": subject, "board": board,
                  "chapter_title": chapter_title},
     }
     drifted = 0
@@ -252,13 +257,14 @@ def main() -> int:
     from app.services import grounding_certificate as gc
 
     print("Replaying Settle -> Host -> Assemble over tests/golden ...")
-    records, inventory, mined_types = replay_golden_sealed_rows()
+    records, inventory, mined_types, metadata = replay_golden_sealed_rows()
     print(f"sealed rows: {len(records)}")
     certificate = gc.build_final_certificate(
         records, require_placement_contracts=False)
     print("certificate minted; replaying the deposit-only cleanup chain\n")
     code = replay(
         records, inventory, mined_types, certificate,
+        metadata=metadata,
         chapter_title=args.chapter_title,
         subject=args.subject,
         board=args.board,

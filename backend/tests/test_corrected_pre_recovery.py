@@ -94,7 +94,9 @@ def test_job129_revised_scope_authors_all_eight_and_replays_without_spend(db, mo
         return {"questions": [{"question_id": "PRQ-0001", "tier": "Basic",
                 "question_text": "Give a short example of " + row["concept_title"] + ".",
                 "answer": "A brief example demonstrating the accepted foundation.",
-                "rationale": "Diagnoses the accepted concept in a new example."}]}
+                "rationale": "Diagnoses the accepted concept in a new example.",
+                # Q70: a new run's author declares its choice set (none here).
+                "options": []}]}
 
     def build(env, pre_map, *, store):
         seen_generation.append((copy.deepcopy(env), copy.deepcopy(pre_map)))

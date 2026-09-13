@@ -670,6 +670,52 @@ def initialize_concept_review(
     return state
 
 
+def sweep_markerless_batch_runs(db: Session) -> list[int]:
+    """Give a batch-pushed run the Concept-review marker Step 01 owed it.
+
+    Until Q64 the queue's Step 01 ran without ``pause_for_concept_review``,
+    so it built the Masters from the job's own unreviewed Concept files and
+    never called ``initialize_concept_review`` — the only writer of the
+    marker. Such a job reads ``released``/``generated`` with a staged
+    Concept release and no marker, and the console derives it as
+    ``blocked/no_review_marker`` with every action but "upload source"
+    greyed out: a full paid run nobody can continue.
+
+    Only a job on a batch row can be in that state — the interactive route
+    always pauses — so the sweep is scoped to batch rows. Writing the marker
+    is exactly what the skipped branch would have written; it judges nothing
+    and touches no decision, and the Masters already built stay in history.
+    The row then reads ``pending_review``: the team downloads the Concept
+    files, uploads the reviewed ones, and Step 02 rebuilds from those.
+    """
+
+    from . import reviewed_file_workflow_policy as workflow
+
+    healed: list[int] = []
+    rows = db.query(models.ChapterBatchRow).filter(
+        models.ChapterBatchRow.job_id.isnot(None),
+    ).all()
+    for row in rows:
+        job = db.get(models.UploadJob, int(row.job_id))
+        if job is None or str(job.module or "") != "build_concepts":
+            continue
+        if str(job.status or "") not in {"released", "generated"}:
+            continue
+        if concept_review_state(job):
+            continue
+        post = release_payload(job, lane=LANE_POST)
+        if post is None or not workflow.active(post):
+            continue
+        try:
+            initialize_concept_review(
+                db, job, target_chapter_id=int(row.chapter_id),
+            )
+            healed.append(int(job.id))
+        except Exception:
+            db.rollback()
+    return healed
+
+
 def sweep_interrupted_master_builds(db: Session) -> list[int]:
     """Retire Step 2 runs whose process died mid-build, at startup.
 

@@ -307,9 +307,16 @@ def test_duplicate_activity_rows_are_reconciled_through_model_seam(
         return {
             "topics": [{
                 "topic_id": "TOPIC-1",
+                "culmination_title": (
+                    "Culmination - Beginning Together with Confidence"
+                ),
                 "consolidation": (
                     "Learners connect the poem's fresh beginning with the "
                     "classroom's shared confidence and sustained effort."
+                ),
+                "achieving_mastery": (
+                    "Connect the poem's fresh start to the classroom's "
+                    "shared effort in one explanation."
                 ),
                 "rationale": "The paragraph combines both final concepts.",
             }],
@@ -339,9 +346,54 @@ def test_duplicate_activity_rows_are_reconciled_through_model_seam(
     culmination = next(
         row for row in fixed if row["parent_concept"] == "Culmination"
     )
-    assert duplicate_title in culmination["concept_title"]
-    assert "A Classroom Clan" in culmination["concept_title"]
+    # The title is the authored synthesis name, never the member titles
+    # joined into a list, and the row carries its own authored mastery.
+    assert culmination["concept_title"] == (
+        "Culmination - Beginning Together with Confidence"
+    )
+    assert duplicate_title not in culmination["concept_title"]
+    assert "A Classroom Clan" not in culmination["concept_title"]
     assert "shared confidence" in culmination["concept_details"]
+    assert culmination["concept_details"].endswith(
+        "\nAchieving Mastery: Connect the poem's fresh start to the "
+        "classroom's shared effort in one explanation."
+    )
+    # The request names the current title as a draft and marks the row
+    # unplanned, so the seam's author knows what it may replace.
+    assert culmination_calls[0]["topics"][0]["current_title"].startswith(
+        "Culmination"
+    )
+    assert culmination_calls[0]["topics"][0]["planned"] is False
+
+
+def test_culmination_refresh_checker_requires_title_and_mastery():
+    check = contract._culmination_checker({"TOPIC-1"})
+    good = {
+        "topic_id": "TOPIC-1",
+        "culmination_title": "Culmination - Beginning Together",
+        "consolidation": "Both concepts combine into one account.",
+        "achieving_mastery": "Combine both concepts in one explanation.",
+        "rationale": "Both final concepts are covered.",
+    }
+    assert check({"topics": [good]}) == []
+    assert check({"topics": [{**good, "culmination_title": ""}]}) == [
+        "TOPIC-1 culmination_title must begin with the exact prefix "
+        "'Culmination - '"
+    ]
+    assert check({"topics": [{**good, "achieving_mastery": ""}]}) == [
+        "TOPIC-1 has no achieving_mastery"
+    ]
+    planned = contract._culmination_checker(
+        {"TOPIC-1"}, {"TOPIC-1": "Culmination: Planned close"},
+    )
+    assert planned({"topics": [{
+        **good, "culmination_title": "Culmination: Planned close",
+        "achieving_mastery": "",
+    }]}) == []
+    assert planned({"topics": [good]}) == [
+        "TOPIC-1 is a sealed-plan culmination: culmination_title must be "
+        "returned exactly as supplied"
+    ]
 
 
 def test_unique_rows_do_not_spend_a_reconciliation_call(monkeypatch):
@@ -382,3 +434,49 @@ def test_install_is_reload_safe(monkeypatch):
 
     assert getattr(prelearn.merge, "_FORMATION_CONTRACT_WRAPPER", False)
     assert getattr(settle.settle, "_ROW_IDENTITY_CONTRACT_WRAPPER", False)
+
+
+def test_refresh_keeps_a_planned_culminations_title_and_mastery(monkeypatch):
+    """Q68: the sealed plan owns a planned culmination's title and mastery;
+    the refresh authors only its consolidation."""
+    from app.services import postlearning_formation_contract as post
+
+    monkeypatch.setattr(envelope, "validate", lambda value: copy.deepcopy(value))
+    rows = [
+        _row("Meaning of the poem", "BLK-POEM", "TOPOLOGY-CONCEPT-0001",
+             details="Description: One.\nAchieving Mastery: Explain the meaning."),
+        _row("Form of the poem", "BLK-FORM", "TOPOLOGY-CONCEPT-0002",
+             details="Description: Two.\nAchieving Mastery: Name the form."),
+        {
+            **_row("Culmination: Planned close", "BLK-POEM", "TOPOLOGY-CONCEPT-0003",
+                   details="Description: Old.\nAchieving Mastery: Recite the stanza with its meaning."),
+            "parent_concept": "Culmination",
+            post.PLAN_IDENTITY_FIELD: {"plan_topic_id": "PT-1", "plan_concept_id": "PC-3"},
+            post.SEMANTIC_ROLE_FIELD: "stanza_culmination",
+        },
+    ]
+    requests: list[dict] = []
+
+    def provider(request):
+        requests.append(copy.deepcopy(request))
+        topic = request["topics"][0]
+        return {"topics": [{
+            "topic_id": topic["topic_id"],
+            "culmination_title": topic["current_title"],
+            "consolidation": "Meaning and form together make the poem's invitation.",
+            "achieving_mastery": "",
+            "rationale": "Both final concepts are combined.",
+        }]}
+
+    fixed = contract._refresh_affected_culminations(
+        _env(), rows, {"TOPIC-1"}, provider=provider, store=kernel.DecisionStore(),
+    )
+    culmination = next(row for row in fixed if row["parent_concept"] == "Culmination")
+    assert culmination["concept_title"] == "Culmination: Planned close"
+    assert culmination["concept_details"] == (
+        "Description: Meaning and form together make the poem's invitation."
+        "\nAchieving Mastery: Recite the stanza with its meaning."
+    )
+    assert requests[0]["topics"][0]["planned"] is True
+    assert requests[0]["topics"][0]["current_title"] == "Culmination: Planned close"
+

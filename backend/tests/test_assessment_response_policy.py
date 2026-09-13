@@ -32,11 +32,12 @@ def test_cell_author_and_critic_prompts_carry_the_same_sop() -> None:
     assert "two or more explicit" in assessment_cells.GENERATED_CELL_CRITIC_SYSTEM
     assert "advisory" in assessment_cells.CELL_CRITIC_SYSTEM.lower()
     assert "advisory" in assessment_cells.GENERATED_CELL_CRITIC_SYSTEM.lower()
+    # Q67 versioned the lane-mechanics block; both cell policies moved together.
     assert assessment_cells.CELL_POLICY_VERSION.endswith(
-        "response-mechanism-sop-2026-09-09"
+        "lane-mechanics-2026-09-13"
     )
     assert assessment_cells.GENERATED_CELL_POLICY_VERSION.endswith(
-        "response-mechanism-sop-2026-09-09"
+        "lane-mechanics-2026-09-13"
     )
 
 

@@ -1,6 +1,315 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q57 (reviewed-file reader memory, 13 September 2026).**
+**Latest amendment: Q68 (corrections catalogue, second pass, 13 September 2026).**
+Four of Q67's "planned next" items are executed, each version-gated so a
+sealed run replays byte for byte. (1) **Culminations are authored whole.** The
+Settle authoring response carries `culmination_title` and `achieving_mastery`
+beside `consolidation`; the request names the supplied name
+`draft_culmination_title` (a stale draft to replace) and marks a sealed-plan
+row `planned: true` (its title is echoed, its mastery left to the plan seam).
+The checker requires the exact `Culmination - ` prefix and a non-empty
+mastery that repeats no member's; the row is composed exactly like a normal
+row (`Description: …\nAchieving Mastery: …`). The post-Settle
+duplicate-identity refresh (`prelearning_formation_contract`, a wrapper on
+`settle.settle` for EVERY lane — not "the Pre lane") no longer writes the
+member-list name; `CULMINATION_POLICY_VERSION` is `-2`. The four culmination
+exemptions (refine_chapter, `_ensure_mastery_lines_via_api`, Polish, the
+strict validator) are removed: contract §11.1 requires a real Mastery — but
+the two formatters in the DEPOSIT chain are gated on the run's recorded
+version (`culmination_mastery_formatted`, v2 on): 7 of job 139's 9 sealed
+culminations carry the label INLINE and the final certificate seals the
+text, so an ungated formatter would have refused every pre-Q68 checkpoint
+deposited after deploy. A run resuming from a NON-terminal checkpoint
+re-authors Settle (the ANALYSIS_SYSTEM digest and payload changed);
+completed runs never re-enter Phase 3. (2)
+**Paired corrections.** `analysis_correction_policy` is frozen on NEW
+envelopes; under it every misconception/error-analysis item carries a
+`correction`, the checker refuses an empty one, and the section renders
+`(1) <text>. Correction: <c>.` per component. Every `*_SYSTEM` constant is
+untouched; a sealed envelope without the key keeps the identical payload,
+key, checker and render. The Refiner refuses a refinement that merges, drops
+or renumbers a pair. (3) **Figure references kept.** `generation_quality_policy`
+V2 (`owner-generation-quality-2026-09-13-v2`): the dangling-reference cleaner
+keeps "Fig. 7.7"/"Figure 6.3" in prose and still strips dangling example and
+table references; V1 rows clean exactly as before. The shared constant's
+reach was closed before commit: the checkpoint and routing-record readers
+accept every SUPPORTED version, the database deposit and the publication
+receipt clean under the run's RECORDED version, and every decision key that
+suffixed the bare constant now carries the recorded version. (4) **Blind Host
+batches resolved.** V3 (`owner-generation-quality-2026-09-13-v3`,
+`host_creations_resolved`): after the untouched parallel first pass, every
+unit that answered `create_new` is re-decided once, sequentially, with every
+batch's creation in `settled_concepts` (`units#resolve#<start>`,
+`RESOLUTION_POLICY_VERSION`); the model names the host, an unreferenced
+first-pass row retires into the unit's `host_resolution` audit with a flag.
+Coherence is told which rows were created blind. (5, **Q69**) **Teaching
+order as evidence.** Every Settle authoring payload carries
+`chapter_topics_in_teaching_order` and `this_topic_position` (composed once
+from the sealed graph's order and the skeleton titles) with one additive
+sentence: do not build an explanation on what a LATER topic first introduces
+unless this concept's own source blocks do; the critic flags the reverse.
+The level author receives `chapter_teaching_order` (the bridge's accepted
+concept sequence) and `this_concept_ordinal`, is asked to weigh a later
+concept's result as transfer and name it in the rationale;
+`LEVEL_POLICY_VERSION` is `assessment-level-2-teaching-order-2026-09-13`. No
+positional tier rule exists in code. (6, **Q70**) **Declared Pre options.**
+V4 (`owner-generation-quality-2026-09-13-v4`, `declared_pre_options`): the Pre
+author's v2 strict schema REQUIRES an `options` array (empty when no choice
+set), the checker holds its shape, the cell carries it under a v4 profile,
+and the materializer refuses a projected answers[] whose count differs from
+the declared set. The author payload has carried the recorded stamp since v1
+(`boundary_fields`), so every earlier run's payload and key are unchanged and
+only a v4 stamp switches the schema, sentence and checker. (7, **Q71**) **Repeated
+Case titles go back to the model.** Under V4 the Type miner's coverage
+follow-up carries `duplicate_case_titles` (Cases of ONE Type equal under
+whitespace-and-case folding — the exact key the merger already uses), a title
+repair can never buy its fix with exact-once coverage, and what survives goes
+to the Fixer (`fixer.type_mining_case_titles`) for one recorded decision —
+or ships as mined, named in the log, when there is no Fixer; never a new
+halt. (8, **Q72**) **No placeholder caption in the source the authors
+read.** An uncaptioned figure keeps an empty markdown alt and a NEW graph's
+stamp (`figure_caption_render`) makes the renderer print no caption line for
+an empty printed caption; every sealed graph renders the line it was sealed
+with, so resume byte-equality holds. `duplicate_image_url` is a per-row
+validator warning, never a drop. `RENDER_VERSION` is deliberately NOT bumped
+(a bump refuses every already-converted upload) — **owner question** under
+Q72. **Still with the owner:** Q67's contract questions (a block on every
+non-culmination concept; folding Error Analysis into numbered Misconceptions;
+whether opening concepts should carry lower tiers; four options per MCQ; an
+empty declared set as a mechanical defect; a chapter-wide title gate) and the
+reader-stamp question. Every Q67 "planned next" item is now executed.
+Q68–Q72 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
+The owner: "go through all of these properly … dont lose the technical details
+of writing the columns/rows, the rules … the prompting (you can make it better;
+but dont lose the existing ones)." Every hand correction in `Corrections.docx`
+(Bholi, Print Culture, How Do Organisms Reproduce, Triangles) was traced to its
+origin and adversarially verified. FIXED (code, each reproduced first): Step 02
+dropped the chapter band — the frozen duration (§32.1) now rides the reviewed
+candidate and the chapter/topic descriptions are quoted from the reviewed
+file's own band cells; the code-composed "Covers X, Y, Z." topic description
+is purged (§9.1: a name list is invalid) and an unauthored band is a visible,
+non-blocking QC finding; `chapter_duration_unregistered` no longer blames the
+registry for a value the payload dropped; one `chapter_display_cell` composer
+for both workbooks; keyword cells never mix delimiters; hub figure notes
+carry the caption once and never "Source visual"; bare-number activity labels
+and the stray " . " before a trailing image; leading source ordinals removed
+only when the item's own label records them; the Detailed Analysis topic
+stays LAST (the plan's order, not the earliest cited block); "(a)" enumerators
+are apparatus; Type consolidation no longer rejects a split by count (Rule 1);
+Host receives the miner's difficulty/scope hints. IMPROVED (prompts,
+additive): imperative mastery register; teacher's voice with no author notes
+or evidence narration; grammar in the Refiner's remit; Title Case for names;
+keywords as one `" | "` string; no duplicate case titles; the four Host rules
+that survived only in dead prompts; culmination names as short synthesis
+names (the one rule whose FORM changed — the list template made 368-character
+titles); what the Subjective lane MEANS (versioned cell policy). RECORDED for
+the owner with exact options: the keyword delimiter (contract vs Q33 vs
+reviewer), Pre `concept_source`, Types scoped to the concept they test (the
+Q14 doctrine — the most consequential), culminations hosting Cases,
+misconception coverage/form, figure-reference wording, four-option MCQs,
+locator hints, Descriptive answer_restriction, per-sheet categories, Q47
+referent resolution vs Q51. PLANNED NEXT: culmination mastery and re-authored
+titles, paired misconception corrections, the figure-reference stripper,
+blind Host batches, teaching-order evidence for Settle and tiers, declared
+Pre options. Q67 in `docs/aegis-restructure.md`. PR #318 is not merged:
+"dont deploy yet."
+
+**Previous owner amendment: Q66 (batch console unattended-ready, 13 September 2026).**
+The owner: "go with the best suitable option for all, dont deploy yet … get it
+done with the BATCH API inculcation. Give instructions how to use the BATCH
+API." The batch API is the chapter console (Q53). **Q65** takes the seven open
+calls the best-suited way: the queue refuses to start below the gate it needs
+(`gate >= reserve + workers x 2`, arithmetic in the log) and the dispatcher
+skips, holds cost back and logs instead of `break`ing; a startup sweep recovers
+console rows stranded markerless before Q64; Karnataka stays; hub notes join on
+a newline (Option A); the keyword-weight coupling (`0.5 x K` marks for K
+keywords) is named in the defect and both prompts; an Objective explanation may
+quote a LaTeX answer as a `[Katex]` span; the Master band ends at 98% so 99% is
+only ever finished-incomplete. **Q66** closes the audit's remaining important
+findings: a refunded lock collision on the last attempt is requeued and held
+back one backoff, a Step 01 that returned `run_incomplete` is retried or failed
+honestly and never `done`, Step 02 is not admitted into a volume that cannot
+hold a Master batch, the three pre-spend pauses name themselves
+(`source_review` / `source_topic_recovery` / `type_granularity`) and carry
+their own `decision_question`, `can.upload_concept` says exactly what the route
+accepts, and a selection spanning pages is sent with a bulk Retry.
+`docs/chapter-batch-console-usage.md` is the team's guide. Recorded for the
+owner, not changed: a second Concept round after the Masters exist; a
+wall-clock cap and stopping a running step; the OpenAI Batch-API lane (held).
+**PR #318 is not merged: "dont deploy yet."** Q65 and Q66 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q64 (batch console audit, 13 September 2026).**
+The owner: "let's finish off the remaining work on batch api." Every clause of
+`docs/chapter-batch-console-contract.md` was read against the code and every
+claimed gap adversarially verified: **39 survived, 1 refuted, 3 blocking.**
+FIXED: (1) `chapter_queue_worker._run_step01` omitted
+`pause_for_concept_review=True`, which contract section 5 spells out and the
+interactive route passes. Without it the pause branch is skipped, and — worse
+than "Masters from unreviewed Concepts" — `reviewed_file_input.prepare` takes
+its unchanged-file branch, RENDERS the job's own staged Concept workbook,
+records it as an accepted reviewed input and spends the whole of Step 02 on it,
+against Q49/Q51. `initialize_concept_review` (sole caller: that skipped branch)
+never runs, so the row derives `blocked/no_review_marker` with only "upload
+source" left — a full paid run, stranded, verified end to end. (2)
+`GET /chapter-batches/{chapter_id}` declared no `response_model`, so FastAPI
+encoded loaded COLUMNS only and dropped `source_artifacts`, which is a property
+— the drawer's Concept and Master downloads read undefined in every state,
+forever. **NOT fixed, needs the owner:** Step 02 is inadmissible under every
+configuration but `fly.toml`'s exact 48/16, and even there at zero margin
+(`gate >= 2*workers + 16`; code defaults 8/6 need 28, staging 3/1 needs 18).
+The dispatcher also `break`s on the first inadmissible task instead of skipping
+it, so a queued step02 starves admissible step01s behind it, silently. The
+skip-with-anti-starvation half is mechanics; making a step02 admissible at 8/6
+is a policy choice (raise the floor, lower the reserve, or refuse to start below
+a named gate size). **Also awaiting the owner:** chapters already pushed through
+the old code are stranded and will not self-heal — a data question. Full list in
+`docs/chapter-batch-console-audit-2026-09-13.md`. The deferred OpenAI Batch-API
+lane is not recommended yet: batching fan-out on a queue that cannot admit a
+step02 would measure nothing.
+
+**Previous owner amendment: Q63 (marking containment, 13 September 2026).**
+**A regression Q56 introduced, found in the owner's Triangles run.** Q56 gave
+marking the containment materialization already had — an impossible question
+becomes a BLOCKED row and the lane carries on — then undid it two lines later.
+`assessment_release_run` snapshots the learner-facing text ONCE, above the
+containment; the marking containment removes blocked candidates AFTER that
+snapshot, so each is in the baseline and absent from the candidates, and
+`_assert_learner_text_unchanged` reads the deliberate removal as an altered text
+and RAISES. Materialization's older containment runs BEFORE the snapshot, which
+is why the owner's Pre lane published (5 blocked, `released_with_warnings`) while
+Post died on "assessment grouping altered immutable learner-facing question text"
+naming exactly the 4 candidates marking had blocked. The baseline is now rebased
+onto the survivors, keeping the ORIGINAL snapshot rows — a fresh snapshot there
+would erase a genuine rewrite in that same stage, the one thing the assertion is
+for. The error also names its stage: five stages share it and it said "grouping"
+for all of them. **Reported and NOT fixed, awaiting the owner:** keyword weights
+can be unsatisfiable — each must be a positive multiple of 0.5 AND they must sum
+to the subquestion's marks, so a solution exists only when marks >= 0.5 x
+keywords; the run shows 0.25 x 2 and 0.375 x 4, both impossible, and the defect
+text never names the coupling (the Q58/Q61 family). And the KaTeX explanation
+cycle recorded under Q56 has now cost a real question (`PRC-0021-PRQ-0001`),
+refused both for not beginning with the exact LaTeX answer and for raw_latex.
+Q63 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q62 (paired-break quote view, 13 September 2026).**
+**This CORRECTS Q60.** Q60 claimed `concept_question_quote.locate` "recovers 100
+of the 100 failing quotes"; that measurement fed `locate` the output of
+`view(raw_slice)` — by construction the one form `view(source)` already contains.
+A tautology, not what a model produces. Q38 writes a break as a PAIR (the `<br>`
+marker beside the line break it renders as) and says a paired break imports as
+ONE logical break, but `view` mapped `<br>` to a newline WITHOUT consuming its
+partner, so `A<br>\nB` viewed as `A\n\nB` — two breaks for one. Neither
+transcription a model can actually write matched the cell: marker-kept
+(`…<br>Case…`) and break-kept (`…\nCase…`) were BOTH refused; only the exact
+bytes or the double-newline form nothing produces got through. Measured on the
+owner's files, per paired break: job 130 0 of 13 recovered, job 139 0 of 87 —
+for both realistic forms. `_BR_PAIR` now consumes the marker with its line
+ending, in `view` AND in the `_view_with_raw_offsets` map `locate` indexes the
+raw slice through (they must agree or a quote is cut at the wrong byte). All
+three forms resolve to the SAME raw cell slice, so Rule 0's `<br>` markers
+survive into the Master; a paragraph keeps its two breaks; a paraphrase is still
+refused. Suite 4905 passed. **Reported and NOT fixed, awaiting the owner:** the
+`visual` escape lets a wholly fabricated question and option pass with zero
+defects off a 17-character "Embedded image" block, and a cross-cell frankenspan
+passes because `quoted_source` newline-joins a row's cells. Tightening either
+sends more to `kernel.ContractError`, which kills the whole lane — so Q56's
+contained BLOCKED row comes first, and that is the owner's call. Q62 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q61 (strict request schemas, 13 September 2026).**
+The adversarial review of Q58 found a worse variant of the same defect class,
+twice. OpenAI Structured Outputs refuses the WHOLE request with 400
+`invalid_schema` when a `"strict": True` schema declares a property it leaves
+out of `required` — the contradiction is in the REQUEST, so no retry, no Fixer
+and no model change can help. `release_review._instruction_schema` (missing
+`parent_concept`, `keywords`) made every reviewer instruction round a 502, and
+`concept_revisions._edit_schema` (missing `concept_display_name`,
+`parent_concept`, `keywords`) made every revision round a recorded
+`status="failed"` that read as a flaky provider. Both have been so since they
+were written; both are gated to legacy non-three-step jobs, so neither touched
+the current path. Both consumers already read those fields with `or ""`, so
+requiring them changes nothing but acceptance. The repo had paid for this rule
+once already (commit `d857f8a`, comment at `concept_question_review.py:203`).
+An AST sweep — walking the tree, not evaluating the literal — judges 48 object
+schemas under a `strict: True` schema: 2 problems before, 0 after, and the sweep
+is kept as a test that NAMES a dynamically-built `required` instead of skipping
+it. Two corrections to Q58's own fix: `_fixer_artifact` reported the LAST
+shape's defects, so a rationale-REQUIRING caller was told "response has no
+rationale" about an artifact that sent one — it now reports the shorter refusal,
+by length only; and `FIXER_SYSTEM`'s claim that "the contract and blocked_check
+name it" of the response schema was false (the contract carries only kind,
+unit_id, policy_version). Adopted as a NON-change: the Fixer's rationale stays
+unconditional, because omitting it would save no attempt and would degrade the
+Q13 record to a stock sentence. Q61 in `docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q60 (reviewed-file quote transport, 13 September 2026).**
+Job 130's Step 2 was stopped by the quoting gate, NOT by images. The Fixer's
+rationale in the owner's log ends "cited reviewed blocks." — the tail of
+`_checker`'s *"Question/context/answer/option text must be quoted from its cited
+reviewed blocks."* The reviewed files carry no embedded pictures at all (no
+`xl/media`, no drawings; the figures are `[img src="…"]` TEXT tags), and an image
+would have DISABLED that gate through its `not visual` escape. What failed: a
+reviewed cell carries the contract's PAIRED form — the `<br>` import marker beside
+the native line break it displays as (Q38) — and a model copying what the cell
+SHOWS writes the break, not the marker. Measured on the owner's own files, every
+display-view quote spanning a `<br>` fails the raw comparison: 13 of 13 in job
+130, 87 of 87 in job 139; the Corrected Triangles file has zero `<br>` and its
+extraction passed — the control. `concept_question_quote.locate` — the repo's
+existing transport, already trusted by the edited-workbook review path — bridges
+CRLF/LF and `<br>` and NOTHING else, so it is representation, not judgment
+(Rule 1); it recovers 100 of those 100 quotes. The gate accepts what it can place;
+the author and Fixer are wrapped so every candidate reaches the gate in the file's
+raw wording, keeping the `<br>` markers Rule 0 requires in the Master. An invented
+quote is still refused. `VERSION` is deliberately NOT bumped — it is the `active()`
+marker on an extracted payload — while the `RULES` change mints new decision keys
+by itself. **The owner's wider instruction — "it should be a pretty simple job post
+reviewing… just put down the questions in master file as it is, in the bulk import
+format required" — is NOT yet implemented:** it is a pipeline removal and needs the
+owner's decision. The measured facts behind it are recorded in Q60 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q59 (reviewed-file images, 13 September 2026).**
+The owner: "I need all images extracted and uploaded to project aegis fly
+server and those links should be there." A generated Concept file shows a
+chapter figure as the canonical text tag `[img src="https://…"]` in a cell, not
+as a picture, so a reviewer pastes the real figures in — and a pasted picture
+became a base64 `data:` URI that was stored inline in `question_inventory`,
+copied again into the upload history on every re-upload, sent inline on all
+three author attempts and the critic, hashed into the decision key, and
+**dropped outright unless a question cited it** (a `data:` URI can never be a
+canonical `[img]` tag, which requires `https://`). Every picture is now pinned
+to the content-addressed asset store as the file is read — cited or not — and
+the document carries the signed `/source-assets` URL. Measured on six pasted
+screenshots: the durable document goes 10.35 MB -> 4.3 KB (20.69 MB -> 8.6 KB
+after one re-upload), with 2.76 MB of JPEG on the volume. Transparency
+composites onto WHITE, not the black a bare `RGB` conversion gives; JPEG
+normalisation also stops a pasted BMP/TIFF reaching the vision API in a format
+it refuses. `reviewed_file_images` is the complete manifest; concept and
+question rows carry the pictures they cite. Placement stays the extraction's
+judgment, projected mechanically (Rule 1). Q57 had moved image blocks out of
+their sheet's position — it was verified on four files with no `xl/media` —
+so the media pass now runs before the cell pass and each sheet's pictures sit
+among its rows; output is byte-identical to the pre-Q57 reader. Q59 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q58 (the Fixer and strict schemas, 13 September 2026).**
+Job 130's Step 2 died after the reviewed file was read and paid for.
+`prompts.FIXER_SYSTEM` instructs the Fixer to return the caller's schema "plus
+a `rationale` field", and `kernel.decide` validates that candidate with the
+CALLER's checker — `extra="forbid"` with no such field. The Fixer was told to
+emit a field its own checker had to reject, so it could never succeed on any
+strict-schema stage and Q13's safety net was structurally dead there.
+`_fixer_artifact` offers the checker the candidate as-is, then without the
+protocol field; the CHECKER decides, so a contract that wants a rationale keeps
+it and nothing judges what the Fixer said. A Fixer failure now names the
+ORIGINAL block first — the raise carried `fixer_defects or blocked`, which hid
+it completely, and a failed author leaves no other durable record. Q58 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q57 (reviewed-file reader memory, 13 September 2026).**
 Job 139's Step 2 failed with a bare 502 after ~1h39m. The files were fine — the
 importer reports zero issues on both. The server process had died: the
 "Step 2 stopped" badge needs `master_building` AND a false `generation_running`,

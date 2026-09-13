@@ -354,6 +354,62 @@ def test_publication_never_rewrites_a_reviewer_edited_title(db):
     assert any("house normalization" in flag for flag in flags), flags
 
 
+def test_publication_receipt_does_not_report_a_kept_figure_as_house_normalization(db):
+    """Q68: a release staged under generation-quality v2 keeps "See Fig.
+    2.1" by policy, so the T7.2 receipt must not read the kept figure as a
+    reviewer edit; the recased title still is one."""
+    from app.services import generation_quality_policy as quality
+
+    chapter = _chapter(db, "06CBSC_S10Fig")
+    title = "pH and its meaning"
+    details = "See Fig. 2.1 for the pH scale."
+    job = models.UploadJob(
+        owner_sub=OWNER,
+        module="build_concepts",
+        upload_type="textbook",
+        filename="ch.mmd",
+        mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
+        status="generated",
+        source_book="NCERT",
+        deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id],
+        question_inventory=copy.deepcopy(_INVENTORY),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    _stage_synthetic_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=[{
+            "topic": "Acids and Bases",
+            "concept_title": title,
+            "concept_details": details,
+            "keywords": "pH, scale",
+        }],
+        inventory=_INVENTORY,
+        reason="Q68 publication fixture",
+        generation_policy={quality.KEY: quality.V2},
+    )
+    db.refresh(job)
+    staged = release.release_payload(job)
+    assert quality.figure_references_kept(staged)
+    staged_details = staged["records"][0]["concept_details"]
+    assert staged_details.startswith(details)
+
+    result = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="post")
+    row = db.get(models.Concept, result["created_concept_ids"][0])
+    assert row.concept_details == staged_details
+
+    flags = release.release_payload(job)["summary"].get("identity_review_flags") or []
+    normalization = [flag for flag in flags if "house normalization" in flag]
+    assert normalization, flags
+    assert all("concept_title" in flag for flag in normalization), normalization
+    assert not any("concept_details" in flag for flag in normalization), normalization
+
+
 # --------------------------------------------------------------------------- #
 # 2. Same title, two topics, two rows — T11.3
 # --------------------------------------------------------------------------- #

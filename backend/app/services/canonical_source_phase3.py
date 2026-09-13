@@ -91,6 +91,16 @@ _SOURCE_REVIEW_KEY = "human_source_review"
 _DOWNSTREAM_INVALIDATION_KEY = "downstream_invalidation_required"
 _MACHINE_METADATA_MIGRATION_KEY = "machine_metadata_sanitization"
 _MACHINE_METADATA_MIGRATION_VERSION = 1
+
+# Q72: a figure with no printed caption renders NO caption line (the literal
+# "Source visual" used to be printed as one, and that rendered text is what
+# the concept authors read). The stamp lives on the GRAPH so
+# ``render_semantic_source(graph, canonical)`` stays a pure function of its
+# arguments: a graph sealed without it renders the line it was sealed with,
+# so the resume path's byte-equality against ``source.semantic.mmd`` holds
+# and no cached decision key moves. Not part of ``semantic_context_hash``.
+FIGURE_CAPTION_RENDER_KEY = "figure_caption_render"
+FIGURE_CAPTION_RENDER_VERSION = "unprinted-caption-blank-2026-09-13-v1"
 _ADJUDICATED_HEADING_MIGRATION_KEY = (
     "adjudicated_heading_validation_migration"
 )
@@ -102,6 +112,11 @@ _NUMBERED_TOPIC_PATCH_VERSION = "phase3-canonical-topic-patch-1"
 _SPACE_RE = re.compile(r"\s+")
 _NUMBER_PREFIX_RE = re.compile(
     r"^\s*(?:chapter\s+)?(?P<number>\d+(?:[.．]\d+)*)\s*"
+    # A lettered or roman enumerator printed with the number — "7.3.3 (a)
+    # Male Reproductive System" — is structural apparatus like the number
+    # itself, never part of the title (Q67); it is not captured into
+    # ``number``, so the structural roles read off it are unchanged.
+    r"(?:\(?(?:[a-z]|[ivx]{1,4})\)\s*)?"
     r"(?:[-:–—]\s*|\s+)?(?P<title>.*)$",
     re.IGNORECASE,
 )
@@ -195,7 +210,19 @@ def _semantic_title_key(value: object) -> str:
         text = title
     else:
         text = re.sub(r"^\s*\d+(?:[.．]\d+)*\s+", "", text)
+        text = _without_leading_enumerator(text)
     return _normal(text)
+
+
+def _without_leading_enumerator(text: str) -> str:
+    """Drop a leading "(a)"/"(iv)" enumerator when a title remains (Q67).
+
+    The same structural apparatus ``_NUMBER_PREFIX_RE`` already skips when it
+    follows a section number; a bare enumerator with no number reaches the
+    fallbacks here. Never empties a title.
+    """
+    stripped = re.sub(r"^\s*\(?(?:[a-z]|[ivx]{1,4})\)\s+", "", text, flags=re.IGNORECASE)
+    return stripped if stripped.strip() else text
 
 
 def _plain_title(
@@ -226,6 +253,7 @@ def _plain_title(
         text = title
     else:
         text = re.sub(r"^\s*(?:chapter\s+)?\d+(?:[.．]\d+)*\s+", "", text, flags=re.I)
+        text = _without_leading_enumerator(text)
     return _SPACE_RE.sub(" ", text).strip(" -:–—\t\n")
 
 
@@ -1355,8 +1383,9 @@ def _language_plan_topics(
     the skeleton and Settle iterate, not advice beside heading-derived
     ones. Mechanics only: spans come from the plan's own evidence blocks
     (falling back to its concepts' blocks when a topic records no direct
-    evidence), ordering is source order, ids are the graph's ordinary
-    positional TOPIC-#### mints. An unreadable plan or a topic with no
+    evidence), ordering is the plan's own recorded order (the author decides
+    it and ``plan_defects`` validates the final Detailed Analysis topic),
+    ids are the graph's ordinary positional TOPIC-#### mints. An unreadable plan or a topic with no
     resolvable blocks fails closed — this is sealed configuration, and a
     silent fall-back to heading topology is exactly the under-delivery
     the audit named.
@@ -1428,9 +1457,13 @@ def _language_plan_topics(
                 if block.get("section_id")
             }),
         })
-    rows.sort(key=lambda row: (
-        int(row["source_start"]), int(row["_plan_order"])
-    ))
+    # The plan's OWN order, never the earliest cited block: the plan author
+    # puts the whole-work Detailed Analysis topic LAST and ``plan_defects``
+    # validates exactly that, but sorting by ``source_start`` moved it to the
+    # front whenever one of its lenses cited the opening block — the Bholi
+    # one-position shift the reviewer undid across 27 rows (13 September
+    # 2026). The spans still bound block ownership and the Settle iteration.
+    rows.sort(key=lambda row: int(row["_plan_order"]))
     for index, row in enumerate(rows, start=1):
         row["topic_id"] = f"TOPIC-{index:04d}"
         row["order"] = index
@@ -1745,15 +1778,28 @@ def compile_semantic_graph(
         for topic in topics:
             for sid in topic.pop("_plan_section_ids", []):
                 topic_by_section.setdefault(sid, topic)
-        for index, topic in enumerate(topics):
+        # The plan's own order decides ids, ``order`` and the export (Q67),
+        # but "which topic owns this position" is a question about the
+        # TEXT, so the span chain and the positional fallback read a
+        # source-ordered VIEW of the same rows. Chaining in plan order gave
+        # a whole-work Detailed Analysis topic — last in the plan, citing the
+        # opening block — the whole text and its predecessor a negative span,
+        # and made the fallback return it for every position.
+        positional = sorted(
+            topics, key=lambda row: (int(row["source_start"]), int(row["order"]))
+        )
+        for index, topic in enumerate(positional):
             topic["source_end"] = (
-                topics[index + 1]["source_start"] if index + 1 < len(topics)
+                positional[index + 1]["source_start"]
+                if index + 1 < len(positional)
                 else len(str(source_text or ""))
             )
+    else:
+        positional = topics
 
     def topic_for_position(position: int) -> dict[str, Any]:
-        prior = [row for row in topics if int(row["source_start"]) <= position]
-        return prior[-1] if prior else topics[0]
+        prior = [row for row in positional if int(row["source_start"]) <= position]
+        return prior[-1] if prior else positional[0]
 
     def topic_for_declared_ancestry(section_id: str) -> dict[str, Any] | None:
         """Follow only recorded parent IDs, never heading text or proximity."""
@@ -1941,6 +1987,7 @@ def compile_semantic_graph(
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
+        FIGURE_CAPTION_RENDER_KEY: FIGURE_CAPTION_RENDER_VERSION,
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "phase": PHASE,
         "status": "ready" if not suspicious_blocks else "review_required",
@@ -2300,6 +2347,9 @@ def render_semantic_source(
     emitted_sections: set[str] = set()
     pieces: list[str] = []
     pending_text: list[str] = []
+    unprinted_caption_blank = (
+        graph.get(FIGURE_CAPTION_RENDER_KEY) == FIGURE_CAPTION_RENDER_VERSION
+    )
     virtual_sections = sorted(
         [
             row for row in graph.get("sections") or []
@@ -2390,8 +2440,14 @@ def render_semantic_source(
         if kind == "figure":
             flush_pending()
             figure = figure_by_id.get(str(block.get("figure_id") or ""), {})
+            # A stamped graph prints NO caption line for a figure whose
+            # printed caption is empty; an unstamped (sealed) graph keeps the
+            # "Source visual" line it was sealed with. The [img] alt in the
+            # loop below still falls back to the literal as a last resort:
+            # kr.image refuses an empty alt ("image alt text is required").
             caption = _clean_public_text(
-                figure.get("caption_raw") or "Source visual",
+                figure.get("caption_raw")
+                or ("" if unprinted_caption_blank else "Source visual"),
                 strip_machine_metadata=strip_machine_metadata,
                 preserve_markdown_code=preserve_markdown_code,
             )

@@ -114,17 +114,28 @@ def test_mastery_formatting_leaves_plain_descriptions_alone():
     assert cr.format_mastery_statement(details) == details
 
 
-def test_refine_chapter_formats_mastery_but_not_culminations():
+def test_refine_chapter_formats_mastery_on_culminations_too():
     records = [
         _rec("A", "Description: body. Achieving Mastery: applying the rule. // "
                   "Types: Type 01: X Case 01: q"),
         _rec("Culmination - Topic A", "Description: An authored synthesis.",
              parent="Culmination"),
+        _rec("Culmination - Topic B",
+             "Description: An authored synthesis. Achieving Mastery: "
+             "combining both ideas.",
+             parent="Culmination"),
     ]
     out = cr.refine_chapter(records)
     assert "\nAchieving Mastery: applying the rule." in out[0]["concept_details"]
-    # The authored culmination Description is left exactly as authored.
+    # A label-free legacy culmination Description is left exactly as
+    # authored: the formatter only canonicalises a label it finds.
     assert out[1]["concept_details"] == "Description: An authored synthesis."
+    # A culmination carrying its mastery (contract §11.1) gets the same
+    # line-broken canonical form every other row gets.
+    assert out[2]["concept_details"] == (
+        "Description: An authored synthesis.\nAchieving Mastery: "
+        "combining both ideas."
+    )
 
 
 def test_description_refine_prompt_requires_mastery_line():
@@ -722,7 +733,10 @@ def test_sync_chapter_topic_summary_authors_nothing_without_meta(db):
     build_concepts._sync_chapter_topic_summary(chapter)
     assert not (chapter.chapter_description or "")
     assert not (chapter.chapter_duration or "")
-    assert topic.topic_description == "Covers A."
+    # Q67: the "Covers A." name list is gone too — contract §9.1 declares a
+    # name list invalid, so an unauthored topic ships blank and release QC
+    # names it (``topic_description_unauthored``).
+    assert topic.topic_description == ""
 
 
 def test_mastery_line_pass_normalizes_format_and_never_backfills(monkeypatch):

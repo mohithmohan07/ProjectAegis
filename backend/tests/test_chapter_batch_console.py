@@ -721,8 +721,17 @@ def test_a_filtered_page_reports_a_true_total(session):
 
 
 def test_the_worker_starts_and_stops_and_reports_itself(monkeypatch):
-    """It is off in tests by default; this pins that it still comes up."""
+    """It is off in tests by default; this pins that it still comes up.
+
+    Under a gate that can pay for its dearest step. Below that the worker
+    now refuses to start by design (Q65) — pinned separately.
+    """
     monkeypatch.setenv("AEGIS_QUEUE_WORKER", "1")
+    monkeypatch.setattr(
+        chapter_queue_worker.config, "OPENAI_MAX_CONCURRENCY", 48, raising=False,
+    )
+    monkeypatch.setattr(chapter_queue_worker.config, "phase3_decision_workers", lambda: 16)
+    monkeypatch.delenv("AEGIS_QUEUE_PROVIDER_RESERVE", raising=False)
     chapter_queue_worker.shutdown_chapter_queue()
     worker = chapter_queue_worker.initialize_chapter_queue(SessionLocal)
     try:

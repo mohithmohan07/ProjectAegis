@@ -304,6 +304,42 @@ def _lease_expired(task: models.ChapterBatchTask | None, now: datetime) -> bool:
     )
 
 
+# Each pause records the ``kind`` of the decision it raises, and contract
+# section 6 requires the row to carry that pause's own name
+# (``blocked/<pause>``), not one shared ``human_decision``, so a person
+# reading the board can tell a source-review pause from a Type-granularity
+# one before opening the drawer. This is a transcription of a label the pause
+# itself recorded, never a judgment: an unrecognised kind stays the plain
+# ``human_decision`` it always was.
+_PENDING_KIND_TO_BLOCKED_KIND = {
+    "phase3_source_graph_review": "source_review",
+    "source_topic_coverage_review": "source_topic_recovery",
+    "type_granularity_review": "type_granularity",
+}
+
+
+def blocked_kind_for_pending(pending: Mapping[str, Any] | None) -> str:
+    """The ``blocked_kind`` a recorded pending decision names for itself."""
+    kind = str((pending or {}).get("kind") or "")
+    return _PENDING_KIND_TO_BLOCKED_KIND.get(kind, "human_decision")
+
+
+def pending_reason(pending: Mapping[str, Any] | None) -> str:
+    """The pause's own question, in the words it recorded.
+
+    Every pause writes ``decision_question``. ``question`` and ``prompt`` are
+    the spellings this read used to look for — and found on none of the three
+    pre-spend pauses, so each rendered the generic sentence instead of the
+    question the person has to answer.
+    """
+    source = pending or {}
+    for key in ("decision_question", "question", "prompt", "conflict"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    return "the run needs a recorded decision before it can continue"
+
+
 def derive_state(
     signals: Mapping[str, Any] | None,
     task: models.ChapterBatchTask | None,
@@ -364,12 +400,8 @@ def derive_state(
     if pending:
         return {
             "state": "blocked",
-            "blocked_kind": "human_decision",
-            "blocked_reason": str(
-                pending.get("question")
-                or pending.get("prompt")
-                or "the run needs a recorded decision before it can continue"
-            ),
+            "blocked_kind": blocked_kind_for_pending(pending),
+            "blocked_reason": pending_reason(pending),
             "error_message": "",
         }
 
@@ -498,16 +530,21 @@ def _can(
                     and str(task.failure_code or "") != "non_resumable")
             )
         ),
-        # Also open once the Masters exist: a team that spots a Concept error
-        # only after seeing the Master files would otherwise be stranded. The
-        # engine supports it — a reviewed upload returns the marker to
-        # ``reviewed``, which makes Step 02 pushable again.
+        # Exactly the states the reviewed-Concept route accepts. It refuses
+        # ``master_ready`` and ``published`` with a 409 ("Master authoring has
+        # started or completed for this upload; start a new run to submit
+        # different Concept inputs" — build_concepts_release_api_contract.py),
+        # so offering the upload at master_review handed the row one action
+        # the server then rejected (verified audit, 13 September 2026). The
+        # server is the authority; the flag now says what it will accept.
+        # Whether a second Concept round after the Masters exist should be
+        # allowed at all is an engine-policy question recorded for the owner
+        # (Q66), not something this flag may decide.
         "upload_concept": (
             has_job and not live and not dead
             and marker_status in {
                 release_svc.CONCEPT_REVIEW_PENDING,
                 release_svc.CONCEPT_REVIEW_REVIEWED,
-                release_svc.CONCEPT_REVIEW_MASTER_READY,
             }
         ),
         "upload_master": (
@@ -557,9 +594,9 @@ def _pending_decision_view(signals: Mapping[str, Any] | None) -> dict | None:
     return {
         "decision_id": str(pending.get("decision_id") or pending.get("id") or ""),
         "kind": str(pending.get("kind") or ""),
-        "question": str(
-            pending.get("question") or pending.get("prompt") or ""
-        ),
+        # The pauses record ``decision_question``; reading only ``question``
+        # left the drawer's decision card blank for all three of them.
+        "question": pending_reason(pending),
         "companions": len(companions) if isinstance(companions, list) else 0,
     }
 

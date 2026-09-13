@@ -455,6 +455,56 @@ def _pending_author_key(key: str, provider, checker, critic, fixer) -> str:
     }).encode("utf-8")).hexdigest()
 
 
+def _fixer_artifact(
+    candidate: Any, checker: Checker,
+) -> tuple[Any, list[str]]:
+    """Separate the Fixer's protocol field from the artifact it repaired.
+
+    ``prompts.FIXER_SYSTEM`` REQUIRES a top-level ``rationale`` — "one or two
+    sentences stating what was blocked, what you decided, and why" — and
+    ``decide`` reads it below for the recorded review flag. But a caller's
+    checker is typically a strict ``extra="forbid"`` schema with no such field,
+    so the artifact the Fixer is instructed to return is one the checker must
+    reject. The Fixer was therefore structurally unable to succeed on ANY
+    strict-schema stage: three attempts, three identical "Extra inputs are not
+    permitted" defects, then ContractError — which is exactly how a reviewed
+    file that had already been read stopped a whole Step 2 (owner report, job
+    130, 13 September 2026). Q13 leans on the Fixer to guarantee a run
+    completes; it could not.
+
+    The rationale is protocol, not content. Offer the checker the candidate
+    AS-IS first, so a caller whose own contract carries a top-level rationale
+    is untouched, then the same candidate without it. The CHECKER decides which
+    shape is valid — nothing here judges what the Fixer said, and no field is
+    dropped from an artifact the caller's contract actually wants.
+    """
+
+    shapes: list[Any] = [candidate]
+    if isinstance(candidate, Mapping) and "rationale" in candidate:
+        shapes.append({
+            key: value for key, value in candidate.items() if key != "rationale"
+        })
+    refused: list[list[str]] = []
+    for shape in shapes:
+        defects = [
+            str(row) for row in checker(shape or {}) if str(row).strip()
+        ]
+        if not any(
+            not defect.startswith("[confidence] ") for defect in defects
+        ):
+            return shape, defects
+        refused.append(defects)
+    # Neither shape passed. Report the shorter refusal, ties keeping the
+    # as-is one. Trying the stripped shape must not invent a defect the
+    # Fixer did not have: a checker that REQUIRES a top-level rationale
+    # answers the stripped shape with "response has no rationale", and
+    # feeding that back would both misname the block in the recorded issue
+    # (the honesty Q56 and Q60 are about) and spend a bounded attempt
+    # telling the Fixer to add a field it already sent. Length only —
+    # nothing here reads what a defect says.
+    return candidate, min(refused, key=len) if refused else []
+
+
 def decide(
     *,
     kind: str,
@@ -573,12 +623,10 @@ def decide(
                 request["attempt"] = attempt
                 request["max_attempts"] = attempts
                 request["response_contract_feedback"] = list(fixer_defects)
-                candidate = fixer(request)
-                fixer_defects = [
-                    str(row)
-                    for row in checker(candidate or {})
-                    if str(row).strip()
-                ]
+                raw_candidate = fixer(request)
+                candidate, fixer_defects = _fixer_artifact(
+                    raw_candidate, checker,
+                )
                 if not any(
                     not defect.startswith("[confidence] ")
                     for defect in fixer_defects
@@ -587,8 +635,11 @@ def decide(
                     defects = list(fixer_defects)
                     confidence_only = bool(defects)
                     fixer_engaged = True
+                    # Read the rationale from what the Fixer actually sent:
+                    # ``candidate`` may be the same object with the protocol
+                    # field removed so the caller's strict contract accepts it.
                     rationale = " ".join(
-                        str((candidate or {}).get("rationale") or "").split()
+                        str((raw_candidate or {}).get("rationale") or "").split()
                     )[:240] or "corrected by the Fixer's best judgment"
                     fixer_flags = [
                         f"fixer: blocked={defect}; decided={rationale}"
@@ -596,13 +647,19 @@ def decide(
                     ]
                     break
             if not fixer_engaged:
+                # Name what BLOCKED the run, not only how the Fixer's own
+                # attempt fell short. Reporting the Fixer's defects alone
+                # hides the original block completely — the console then
+                # shows a Fixer protocol failure for a run that was stopped
+                # by something else entirely, and the person reading it
+                # cannot tell what to correct.
                 raise ContractError(
                     f"{kind} decision for {unit_id} failed its mechanical "
                     f"response contract after {attempts} bounded correction "
-                    "attempt(s), and the Fixer could not produce a "
-                    "contract-satisfying decision either: "
-                    + "; ".join((fixer_defects or blocked)[:8]),
-                    defects=fixer_defects or blocked,
+                    "attempt(s): " + "; ".join(blocked[:8])
+                    + ". The Fixer could not produce a contract-satisfying "
+                    "decision either: " + "; ".join((fixer_defects or blocked)[:8]),
+                    defects=[*blocked, *fixer_defects],
                 )
         elif defects:
             raise ContractError(

@@ -27,7 +27,10 @@ from typing import Any, Mapping
 CONTRACT_VERSION = 1
 PREREQUISITE_POLICY_VERSION = "prelearn-adjudication-1"
 ROW_IDENTITY_POLICY_VERSION = "settle-row-identity-reconciliation-1"
-CULMINATION_POLICY_VERSION = "settle-row-identity-culmination-1"
+# -2: the refresh also authors culmination_title and achieving_mastery from
+# the final members; a -1 record (consolidation only) must never replay
+# past the new checker (kernel.decide serves a cache hit unchecked).
+CULMINATION_POLICY_VERSION = "settle-row-identity-culmination-2"
 
 PREREQUISITE_DISPOSITIONS = (
     "chapter_taught",
@@ -120,14 +123,27 @@ resolved by a recorded model decision. For each supplied topic, author one short
 learner-facing consolidation paragraph that ties the FINAL member concepts
 together—what a learner can now understand or do with them combined. Do not list
 concept names, repeat one member's description, introduce a new concept, or
-recreate a disposed activity as teaching content. Return
-{topics: [{topic_id, consolidation, rationale}]} and decide every supplied topic
-exactly once."""
+recreate a disposed activity as teaching content. Also return culmination_title:
+a short learner-facing synthesis name beginning with the exact prefix
+"Culmination - " naming what the FINAL member concepts achieve together—never
+the member names joined into a list, never a concept outside the topic or one
+that no longer exists in it (current_title is a stale draft to replace, not to
+echo)—and achieving_mastery: ONE imperative sentence, verb first, naming what
+the learner can now do with the member concepts combined, distinct from every
+member's own mastery and never restated inside the consolidation. A topic marked
+planned: true carries the sealed plan's own title and mastery: return its
+current_title exactly as supplied as culmination_title and an empty
+achieving_mastery. Return
+{topics: [{topic_id, culmination_title, consolidation, achieving_mastery,
+rationale}]} and decide every supplied topic exactly once."""
 
 CULMINATION_CRITIC_SYSTEM = """\
 Audit refreshed culmination paragraphs against the final topic members. Dissent
 when a paragraph is a title list, repeats one concept, omits a member, revives a
-disposed activity as a concept, or adds unsupported teaching. Return the
+disposed activity as a concept, or adds unsupported teaching; dissent likewise
+when the culmination_title is the member names joined into a list or names a
+concept outside the topic, or when achieving_mastery is missing, restates one
+member's mastery, or is not in the imperative register. Return the
 standard critic object {verdict, confidence, issues}; dissent is advisory."""
 
 
@@ -665,7 +681,12 @@ def _union_list(rows: list[Mapping[str, Any]], field: str) -> list[Any]:
     return result
 
 
-def _culmination_checker(expected_topic_ids: set[str]):
+def _culmination_checker(
+    expected_topic_ids: set[str],
+    planned_titles: Mapping[str, str] | None = None,
+):
+    planned = dict(planned_titles or {})
+
     def check(response: Mapping[str, Any]) -> list[str]:
         rows = response.get("topics")
         if not isinstance(rows, list):
@@ -683,6 +704,21 @@ def _culmination_checker(expected_topic_ids: set[str]):
             seen.add(topic_id)
             if not _normal(row.get("consolidation")):
                 defects.append(f"{topic_id} has no consolidation")
+            title = _normal(row.get("culmination_title"))
+            if topic_id in planned:
+                if title != planned[topic_id]:
+                    defects.append(
+                        f"{topic_id} is a sealed-plan culmination: "
+                        "culmination_title must be returned exactly as supplied"
+                    )
+            else:
+                if not title.startswith("Culmination - "):
+                    defects.append(
+                        f"{topic_id} culmination_title must begin with the "
+                        "exact prefix 'Culmination - '"
+                    )
+                if not _normal(row.get("achieving_mastery")):
+                    defects.append(f"{topic_id} has no achieving_mastery")
             if not _normal(row.get("rationale")):
                 defects.append(f"{topic_id} has no rationale")
         missing = sorted(expected_topic_ids - seen)
@@ -708,6 +744,7 @@ def _refresh_affected_culminations(
     from .phase3 import envelope as envelope_mod
     from .phase3 import fixer as fixer_mod
     from .phase3 import kernel
+    from .phase3 import settle as settle_mod
 
     by_topic: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -743,6 +780,8 @@ def _refresh_affected_culminations(
         requests.append({
             "topic_id": topic_id,
             "topic_title": str(concepts[0].get("topic") or ""),
+            "current_title": _normal(culminations[0].get("concept_title")),
+            "planned": settle_mod._is_planned_culmination(culminations[0]),
             "final_concepts": [
                 {
                     "concept_title": str(row.get("concept_title") or ""),
@@ -779,7 +818,14 @@ def _refresh_affected_culminations(
         envelope_sha256=str(env.get("envelope_sha256") or ""),
         payload=payload,
         provider=provider,
-        checker=_culmination_checker(expected),
+        checker=_culmination_checker(
+            expected,
+            {
+                topic_id: _normal(culm.get("concept_title"))
+                for topic_id, culm in culmination_by_topic.items()
+                if settle_mod._is_planned_culmination(culm)
+            },
+        ),
         critic=critic,
         store=store,
         policy_version=CULMINATION_POLICY_VERSION,
@@ -801,10 +847,23 @@ def _refresh_affected_culminations(
         ]
         titles = [str(row.get("concept_title") or "") for row in topic_rows]
         decided = response[topic_id]
-        culmination["concept_title"] = "Culmination - " + ", ".join(titles)
+        if settle_mod._is_planned_culmination(culmination):
+            # The sealed plan owns this row's title and mastery; only the
+            # consolidation is refreshed from the final members.
+            mastery = _description_and_mastery(
+                culmination.get("concept_details")
+            )[1]
+        else:
+            culmination["concept_title"] = _normal(
+                decided.get("culmination_title")
+            )
+            mastery = settle_mod._FIELD_LABEL.sub(
+                "", _normal(decided.get("achieving_mastery"))
+            )
         culmination["parent_concept"] = "Culmination"
         culmination["concept_details"] = (
             "Description: " + _normal(decided.get("consolidation"))
+            + ("\nAchieving Mastery: " + mastery if mastery else "")
         )
         culmination["keywords"] = ", ".join(titles)
         culmination["_source_block_ids"] = _union_list(

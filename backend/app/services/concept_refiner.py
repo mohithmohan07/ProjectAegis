@@ -158,6 +158,22 @@ def strip_analysis_label_echo(text: str) -> str:
     return _ANALYSIS_LABEL_ECHO_RE.sub("", str(text or ""), count=1).strip()
 
 
+_CORRECTION_LABEL_ECHO_RE = re.compile(r"^correction\s*:\s*", re.IGNORECASE)
+
+
+def strip_correction_label_echo(text: str) -> str:
+    """Drop a leading ``Correction:`` echo from ONE item's correction.
+
+    The composer writes the ``Correction:`` marker itself
+    (``assemble._join_analysis_pairs``); a correction that already begins
+    with it would render "Correction: Correction: …". The same mechanics as
+    ``strip_analysis_label_echo``: one exact leading label token, nothing
+    else, idempotent — the correction's content is not re-judged.
+    """
+
+    return _CORRECTION_LABEL_ECHO_RE.sub("", str(text or ""), count=1).strip()
+
+
 def split_sections(details: str) -> list[tuple[str, str]]:
     """Split ``Label: content // Label: content`` into ordered (label, content)."""
     out: list[tuple[str, str]] = []
@@ -1081,7 +1097,15 @@ def append_activity_hub(details: str, hub_text: str) -> str:
             existing = (content or "").strip()
             if text in existing:
                 return details
-            merged = f"{existing} {text}".strip() if existing else text
+            # One note per line. Space-joining put five "Figure —" notes on
+            # a single 4,134-character line in the owner's job 139 file — the
+            # dominant cause of the unreadable Concept Details cell, measured
+            # against the reviewer's hand-restructured target (Q59 review,
+            # docs/structured-concept-details-review-2026-09-13.md). The
+            # writer pairs this break into <br> + LF at the workbook seam;
+            # the parsers split sections on " // " and never on a newline
+            # inside a section, so nothing downstream reads it differently.
+            merged = f"{existing}\n{text}".strip() if existing else text
             sections[i] = (_ACTIVITY_HUB_LABEL, merged)
             return join_sections(sections)
 
@@ -1191,8 +1215,17 @@ def ensure_misconceptions(records: list[dict]) -> list[dict]:
     return ensure_analysis_sections(records)
 
 
-def refine_chapter(records: list[dict]) -> list[dict]:
-    """Full deterministic refinement pass over a chapter's ordered records."""
+def refine_chapter(
+    records: list[dict], *, format_culminations: bool = True,
+) -> list[dict]:
+    """Full deterministic refinement pass over a chapter's ordered records.
+
+    ``format_culminations`` is the run's recorded generation-quality answer
+    (``generation_quality_policy.culmination_mastery_formatted``): a run
+    sealed before v2 was assembled with this formatter skipping culminations
+    and its final certificate seals ``concept_details``, so its deposit
+    replays the skip and the sealed rows stay a fixpoint.
+    """
     for rec in records:
         if rec.get("concept_details"):
             details = split_merged_description_blocks(rec["concept_details"])
@@ -1205,7 +1238,11 @@ def refine_chapter(records: list[dict]) -> list[dict]:
                     if flag not in flags:
                         flags.append(flag)
             details = reduce_type_sections(details)
-            if not is_culmination(rec.get("concept_title", "")):
+            # Culminations carry a mastery line too (contract §11.1). A run
+            # sealed before generation-quality v2 was assembled with this
+            # formatter skipping culminations; its deposit replays the skip
+            # (format_culminations=False) so the sealed rows stay a fixpoint.
+            if format_culminations or not is_culmination(rec.get("concept_title", "")):
                 details = format_mastery_statement(details)
             details = normalize_analysis_sections(details)
             rec["concept_details"] = details

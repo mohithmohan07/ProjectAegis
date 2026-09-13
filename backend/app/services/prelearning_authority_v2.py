@@ -280,7 +280,7 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
     lookup = legacy._capture_lookup(merged)
     refined = quality.active(env)
     policy_version = (
-        VERSION + (";" + quality.VERSION if refined else "")
+        VERSION + quality.suffix(env)
         + (";" + repair.VERSION if repair.active(env) else "")
     )
     evidence_index, demands = _evidence(merged, complete_demands=refined)

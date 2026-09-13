@@ -183,13 +183,32 @@ def bind_metadata(metadata: Mapping[str, Any], profile: Mapping[str, Any]) -> di
 
 
 def keyword_cell(value: Any, policy: Mapping[str, Any]) -> str:
-    """Project an already-authored list; do not choose or rewrite terms."""
+    """Project an already-authored list; do not choose or rewrite terms.
+
+    A keyword string the prompts declare as a pipe list is the same list
+    whatever spacing the model used: ``"a | b"``, ``"a |b| c"`` and
+    ``"a|b|c"`` are three spellings of one list. ``split_multi`` treats a
+    bare glued pipe as content (right for a cell read back from a workbook),
+    so only the exact ``" | "`` spelling was re-delimited and every other
+    spelling shipped verbatim — one file mixing comma-space rows with pipe
+    rows, which the reviewer re-delimited by hand on three chapters (13
+    September 2026). Re-tokenising a declared list field is formatting; the
+    terms are still the model's.
+    """
     from .. import bulk_import as bi
 
     text = str(value or "")
+    if "|" in text:
+        tokens = [token.strip() for token in text.split("|")]
+    else:
+        tokens = [str(token).strip() for token in bi.split_multi(text, legacy_commas=False)]
+    seen: list[str] = []
+    for token in tokens:
+        if token and token not in seen:
+            seen.append(token)
     if policy.get("keywords_separator") == ", ":
-        return ", ".join(bi.split_multi(text, legacy_commas=False))
-    return bi.join_multi(bi.split_multi(text, legacy_commas=False))
+        return ", ".join(seen)
+    return bi.join_multi(seen)
 
 
 def keyword_defects(value: Any, policy: Mapping[str, Any]) -> list[str]:

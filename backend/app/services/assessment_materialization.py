@@ -210,6 +210,11 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "content twice. workbook_capacities also gives the aggregate parent "
     "projection capacity: it is the sum of every child keyword, not a fresh "
     "allowance per child. Plan atomic criteria with this visible capacity. "
+    "Marking later pays every keyword a positive multiple of 0.5 out of its "
+    "subquestion's marks, so a subquestion with K keywords must be able to "
+    "carry at least 0.5 x K marks of the cell total; author only as many "
+    "keywords as the marks can pay, never one keyword per phrase of a "
+    "short answer. "
     "If the genuine source demand exceeds it, retain every child and criterion "
     "and name parent_projection_capacity in rationale; never omit content, "
     "merge independently earned credit, or split the source task to fit. "
@@ -314,6 +319,21 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     '{"answer_type":"Phrases","keyword":""}]}],'
     '"answer_explanation":"",'
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
+)
+
+# Generation-quality v4 (Q70), generated lane only: appended to the rules by
+# ``_decision_payload`` when the payload's RECORDED stamp is v4 or later, so
+# a pre-v4 payload's rules — and its decision key — are byte-identical.
+DECLARED_OPTIONS_INSTRUCTION = (
+    "DECLARED OPTIONS (generated lane): blueprint_cell.generated_question.options "
+    "is the complete choice set the Pre author declared for this question, in "
+    "display order. For an Objective cell project exactly those entries into "
+    "answers[], one object per declared option in that order, with the declared "
+    "text as answer_content (an Equation medium only where the entry is "
+    "mathematics); never add, drop, merge or split an option, and never take "
+    "the set from question_text instead. A count that differs from the "
+    "declared set is refused. An empty declared array means the author offered "
+    "no choices."
 )
 
 MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
@@ -657,17 +677,29 @@ def _proposal_defects(
                 "one correct option and \"0\" on the rest"
             )
         source_options = atom.get("options") if isinstance(atom, Mapping) else None
+        option_owner = "the source"
+        if atom is None:
+            # The generated lane (Q70, generation-quality v4): the Pre
+            # author's declared choice set rides the cell, and it is the
+            # count to hold. A historical generated cell carries no
+            # ``options`` and keeps the skip it always had.
+            generated = cell.get("generated_question")
+            source_options = (
+                generated.get("options") if isinstance(generated, Mapping) else None
+            )
+            option_owner = "the generated question's declared options"
         # New SOP-bound Objective cells carry an explicit selection mode. A
         # missing mode is a historical sealed cell and keeps its old replay
         # contract, including source rows that used ``options`` as answer
         # evidence rather than as a complete visible choice set.
         if selection_mode and isinstance(source_options, list) and source_options:
-            # Option cardinality is source-owned wire evidence. It is safe to
-            # check mechanically, while option meaning and the correct set
-            # remain the author's judgment.
+            # Option cardinality is declared wire evidence — the source's or
+            # the Pre author's. It is safe to check mechanically, while
+            # option meaning and the correct set remain the author's
+            # judgment.
             if len(answers) != len(source_options):
                 defects.append(
-                    "objective option cardinality must preserve the source "
+                    f"objective option cardinality must preserve {option_owner} "
                     f"({len(source_options)} supplied, {len(answers)} returned)"
                 )
         contents = [
@@ -1111,7 +1143,7 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
             "frozen_task_text": copy.deepcopy(atom.get("frozen_task_text")),
             "normalized_source_text": copy.deepcopy(atom.get("normalized_source_text")),
             "polish_audit": copy.deepcopy(atom.get("polish_audit")),
-            **({quality.KEY: quality.VERSION,
+            **({**quality.fields(atom),
                 **({"learner_context": copy.deepcopy(atom["learner_context"])}
                    if "learner_context" in atom else {}),
                 **({"reviewed_context": copy.deepcopy(atom["reviewed_context"])}
@@ -1204,6 +1236,16 @@ def _decision_payload(
     if response_review:
         payload["critic_rules"] = (
             str(payload.get("critic_rules") or critic_rules) + response_review
+        )
+    if atom is None and quality.declared_pre_options(payload):
+        # Generation-quality v4 (Q70), generated lane only: the declared
+        # choice set is the set to project. The payload already carries the
+        # recorded stamp, so this branch is never taken for a pre-v4 payload
+        # and its rules stay byte for byte.
+        payload["rules"] += "\n" + DECLARED_OPTIONS_INSTRUCTION
+        payload["critic_rules"] = (
+            str(payload.get("critic_rules") or critic_rules)
+            + "\n" + DECLARED_OPTIONS_INSTRUCTION
         )
     return visual_evidence.bind(payload, atom if atom is not None else cell)
 

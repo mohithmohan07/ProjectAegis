@@ -517,13 +517,13 @@ def test_full_pipeline_publishes_a_ready_release(db):
         authority = candidate[
             "_aegis_assessment_level_verdict"]["authority"]
         assert authority["decision_key"]
-        assert authority["policy_version"] == "assessment-level-1-column-spec"
+        assert authority["policy_version"] == "assessment-level-2-teaching-order-2026-09-13"
         assert "created_at" not in authority
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
         ] == (
-            "assessment-cell-4-response-mechanism-sop-2026-09-09;"
+            "assessment-cell-5-lane-mechanics-2026-09-13;"
             "assessment-output-vocabulary-2026-09-11-v2"
         )
         assert candidate["_aegis_assessment_materialization"]["authority"][
@@ -1352,4 +1352,135 @@ def test_explicit_subjective_cell_binds_under_its_profile_contract():
     assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
     assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert bound[0]["source_policy"] == "reuse"
-    assert bound[0]["authority"]["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-5-lane-mechanics-2026-09-13"
+
+
+def test_a_question_blocked_at_marking_does_not_take_the_lane_with_it(db):
+    """Q56's marking containment was undone two lines after it ran.
+
+    The immutability baseline is snapshotted ONCE, above the containment.
+    Removing a blocked candidate then left it present in the baseline and
+    absent from the candidates, so ``_assert_learner_text_unchanged`` read
+    the deliberate removal as an altered text and RAISED — killing the whole
+    lane and every finished, paid-for question in it, which is exactly what
+    the containment exists to prevent.
+
+    Measured on the owner's Triangles run (13 September 2026): four questions
+    blocked at marking produced "assessment grouping altered immutable
+    learner-facing question text: [4 candidate ids]" and took Output 04 with
+    them, while the Pre lane published — because materialization's older
+    containment runs BEFORE the snapshot is taken.
+    """
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    authorities, _ = _authorities(db, chapter, calls={}, qa_payloads=[])
+
+    marking_author, marking_critic = authorities["marking"]
+    blocked_ids: set[str] = set()
+
+    def illegal_descriptive_marking(payload):
+        """Exhaust marking for the Descriptive question only."""
+        verdict = marking_author(payload)
+        cell = payload["blueprint_evidence"]["explicit_blueprint_cell"]
+        if cell["sheet_kind"] != "descriptive":
+            return verdict
+        blocked_ids.add(str(payload["candidate"]["candidate_id"]))
+        # A weight no bounded correction can legalise: the contract permits a
+        # positive multiple of 0.5 AND requires the sum to equal the marks.
+        for answer in verdict["answers"]:
+            answer["answer_weightage"] = 0.25
+        return verdict
+
+    authorities = {
+        **authorities,
+        "marking": (illegal_descriptive_marking, marking_critic),
+    }
+
+    release = run.run_release_for_job(
+        db, job.id, owner_sub=OWNER, authorities=authorities,
+        **_decision_context())
+
+    assert blocked_ids, "the fixture never reached the Descriptive marking"
+    # The lane SURVIVED, which is the whole point: before the fix this raised
+    # GroupingError and no release existed at all.
+    directory = Path(release.publication["directory"])
+    master = aw.parse_workbook((directory / svc.MASTER_FILENAME).read_bytes())
+    objective_rows = [
+        row for row in master["sheets"]["Objective"]["rows"]
+        if row.get("question_label")]
+    descriptive_rows = [
+        row for row in master["sheets"]["Descriptive"]["rows"]
+        if row.get("question_label")]
+    # The Objective question, which marked cleanly, still shipped...
+    assert len(objective_rows) == 1
+    # ...and the unmarkable Descriptive one is out of the Master, recorded as
+    # blocked rather than dragging the lane down with it.
+    assert descriptive_rows == []
+
+
+def test_the_immutability_error_names_the_stage_that_rewrote_the_text(db):
+    """Five stages shared one message that always said "grouping"."""
+    before = run._learner_text_snapshot([
+        {"candidate_id": "CAND-1", "question": "Original?",
+         "question_text": "Original?", "sheet_kind": "descriptive"},
+    ])
+    rewritten = [
+        {"candidate_id": "CAND-1", "question": "Rewritten?",
+         "question_text": "Rewritten?", "sheet_kind": "descriptive"},
+    ]
+
+    with pytest.raises(Exception) as raised:
+        run._assert_learner_text_unchanged(before, rewritten, stage="marking")
+
+    assert "assessment marking altered" in str(raised.value)
+    assert "CAND-1" in str(raised.value)
+
+
+def test_a_removed_candidate_is_not_a_rewritten_one(db):
+    """Rebasing the baseline is what makes containment survive the gate."""
+    before = run._learner_text_snapshot([
+        {"candidate_id": "CAND-1", "question": "Kept?",
+         "question_text": "Kept?", "sheet_kind": "descriptive"},
+        {"candidate_id": "CAND-2", "question": "Blocked?",
+         "question_text": "Blocked?", "sheet_kind": "descriptive"},
+    ])
+    survivors = [
+        {"candidate_id": "CAND-1", "question": "Kept?",
+         "question_text": "Kept?", "sheet_kind": "descriptive"},
+    ]
+
+    # The stale baseline is what raised in production.
+    with pytest.raises(Exception):
+        run._assert_learner_text_unchanged(before, survivors, stage="marking")
+
+    # Rebased onto the survivors, the deliberate removal is not an alteration.
+    kept = {row[0] for row in before if row[0] in {"CAND-1"}}
+    rebased = [row for row in before if str(row[0]) in kept]
+    run._assert_learner_text_unchanged(rebased, survivors, stage="marking")
+
+
+def test_level_author_receives_the_release_concept_sequence(db):
+    """Q69: every level payload carries the bridge's concept order (the same
+    sequence the router saw) and the home concept's ordinal in it."""
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    calls: dict = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    run.run_release_for_job(
+        db, job.id, owner_sub=OWNER, authorities=authorities,
+        **_decision_context(),
+    )
+    assert calls["level"]
+    routed = [c["concept_key"] for c in calls["route"][0]["candidate_concepts"]]
+    rosters = set()
+    for payload in calls["level"]:
+        order = payload["chapter_teaching_order"]
+        assert [e["ordinal"] for e in order] == list(range(1, len(order) + 1))
+        assert order[payload["this_concept_ordinal"] - 1]["concept_key"] == (
+            payload["concept"]["concept_key"]
+        )
+        assert [e["concept_key"] for e in order] == routed
+        assert all(e["concept_title"] and "topic_title" in e for e in order)
+        rosters.add(json.dumps(order, sort_keys=True))
+    assert len(rosters) == 1
+

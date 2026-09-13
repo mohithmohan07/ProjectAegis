@@ -61,6 +61,70 @@ def provider_reserve() -> int:
     return _int_env("AEGIS_QUEUE_PROVIDER_RESERVE", 16)
 
 
+def _volume_can_hold_a_master_batch() -> bool:
+    """Whether the Pre+Post Master batch reservation would be granted now."""
+    from . import storage_capacity
+
+    try:
+        snapshot = storage_capacity.capacity_snapshot()
+    except OSError:
+        return True   # an unreadable volume is the reservation's to refuse
+    lanes = 2
+    required_bytes = (
+        lanes * storage_capacity.master_reservation_bytes()
+        + storage_capacity.ledger_headroom_bytes()
+    )
+    required_inodes = (
+        lanes * storage_capacity.master_reservation_inodes()
+        + storage_capacity.ledger_headroom_inodes()
+    )
+    free_bytes = snapshot.available_bytes - snapshot.reserved_bytes
+    if free_bytes < required_bytes:
+        return False
+    if snapshot.available_inodes is not None:
+        free_inodes = snapshot.available_inodes - snapshot.reserved_inodes
+        if free_inodes < required_inodes:
+            return False
+    return True
+
+
+def admission_shortfall() -> str:
+    """Why this deployment can never admit the queue's most expensive step.
+
+    Empty when the gate can pay for every step kind. The budget is
+    ``(gate - reserve) // workers``, floored at 1, and a Step 02 costs 2 —
+    so with the code defaults (gate 8, reserve 16, workers 6) the floor
+    hides a reserve that exceeds the whole gate, a step01 is admitted, and a
+    step02 sits "Queued for Step 02" forever with no error, no log line and
+    no badge (verified audit, 13 September 2026: every configuration but
+    fly.toml's exact 48/16 was dead, and that one at zero margin). Refusing
+    to start, with the arithmetic in the message, is the honest answer.
+    """
+    workers = max(1, config.phase3_decision_workers())
+    reserve = provider_reserve()
+    gate = int(config.OPENAI_MAX_CONCURRENCY)
+    dearest = max(_STEP_COST.values())
+    needed = reserve + workers * dearest
+    if gate >= needed:
+        return ""
+    return (
+        f"AEGIS_OPENAI_MAX_CONCURRENCY={gate} cannot admit a step costing "
+        f"{dearest} fan-out(s): with AEGIS_QUEUE_PROVIDER_RESERVE={reserve} "
+        f"and {workers} decision worker(s) the queue needs a gate of at "
+        f"least {needed}. Raise the gate, lower the reserve, or set "
+        "AEGIS_QUEUE_WORKER=0 to run without the batch console."
+    )
+
+
+def collision_backoff_seconds() -> float:
+    """How long a task refunded for a per-job lock collision waits."""
+    try:
+        return max(1.0, float(os.environ.get(
+            "AEGIS_QUEUE_COLLISION_BACKOFF_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def poll_seconds() -> float:
     try:
         return max(1.0, float(os.environ.get("AEGIS_QUEUE_POLL_SECONDS", "5")))
@@ -97,6 +161,11 @@ class ChapterQueueWorker:
         #: must never reclaim a task this process is actually running.
         self._in_flight: dict[int, str] = {}
         self._started_at = 0.0
+        #: task ids whose wait has been logged once; cleared on claim.
+        self._denied_logged: set[int] = set()
+        #: task id -> epoch seconds before which a refunded task is not
+        #: re-claimed, so a per-job lock collision cannot spin the loop.
+        self._backoff_until: dict[int, float] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -167,7 +236,9 @@ class ChapterQueueWorker:
         usable = max(0, config.OPENAI_MAX_CONCURRENCY - provider_reserve())
         return max(1, usable // workers)
 
-    def admits(self, kind: str) -> bool:
+    def admits(self, kind: str, *, reserved: int = 0) -> bool:
+        """Whether one more ``kind`` fits, with ``reserved`` fan-outs held back
+        for an older task this pass could not admit."""
         with self._lock:
             in_flight = dict(self._in_flight)
         if kind in _PUBLISH_KINDS:
@@ -186,8 +257,14 @@ class ChapterQueueWorker:
             masters = [value for value in generation if value == "step02"]
             if len(masters) >= max_concurrent_masters():
                 return False
+            if not _volume_can_hold_a_master_batch():
+                # Contract section 7: a full volume refuses admission instead
+                # of burning an attempt. The batch reservation inside
+                # _build_master_siblings still decides for real; this only
+                # keeps a task queued while the answer is plainly no.
+                return False
         spent = sum(_STEP_COST.get(value, 1) for value in generation)
-        return spent + _STEP_COST.get(kind, 1) <= self._provider_budget()
+        return spent + reserved + _STEP_COST.get(kind, 1) <= self._provider_budget()
 
     # -- loops -------------------------------------------------------------
 
@@ -213,6 +290,16 @@ class ChapterQueueWorker:
             running = set(self._in_flight_ids())
             chapter_queue.reclaim_orphans(db, in_flight=running)
             for kinds in (_PUBLISH_KINDS, _GENERATION_KINDS):
+                # The oldest task this pass could not admit. Its cost is held
+                # back from everything enqueued after it, so a steady supply
+                # of cheap step01s cannot cut in front of a step02 forever —
+                # it gets its turn as soon as the in-flight work drains.
+                # Before this the scan simply STOPPED at the first
+                # inadmissible task, so a queue of [step02, step01, step01]
+                # started nothing while two admissible steps waited behind
+                # it (verified against the real dispatcher, 13 September
+                # 2026). Ordering mechanics only; no content is judged.
+                held: models.ChapterBatchTask | None = None
                 for task in chapter_queue.claimable(db, kinds=kinds):
                     if self._stopping:
                         return started
@@ -223,16 +310,45 @@ class ChapterQueueWorker:
                         # late heartbeat. Claiming it again would start a second
                         # thread on the same chapter and charge it twice.
                         continue
-                    if not self.admits(str(task.kind)):
-                        break
+                    until = self._backoff_until.get(int(task.id), 0.0)
+                    if until > time.time():
+                        continue
+                    self._backoff_until.pop(int(task.id), None)
+                    kind = str(task.kind)
+                    reserved = _STEP_COST.get(str(held.kind), 1) if held is not None else 0
+                    if not self.admits(kind, reserved=reserved):
+                        if held is None and kind in _GENERATION_KINDS:
+                            held = task
+                        self._note_denied(task, reserved=reserved)
+                        continue
                     claimed = chapter_queue.claim(db, int(task.id))
                     if claimed is None:
                         continue
+                    self._denied_logged.discard(int(claimed.id))
                     self._launch(int(claimed.id), str(claimed.kind))
                     started += 1
         finally:
             db.close()
         return started
+
+    def _note_denied(self, task, *, reserved: int) -> None:
+        """One log line per task per wait, naming the arithmetic."""
+        task_id = int(task.id)
+        if task_id in self._denied_logged:
+            return
+        self._denied_logged.add(task_id)
+        with self._lock:
+            in_flight = dict(self._in_flight)
+        spent = sum(
+            _STEP_COST.get(value, 1) for value in in_flight.values()
+            if value in _GENERATION_KINDS
+        )
+        log.info(
+            "chapter queue: task %s (%s, cost %s) waits — %s fan-out(s) in "
+            "flight, %s held for an older task, budget %s",
+            task_id, task.kind, _STEP_COST.get(str(task.kind), 1),
+            spent, reserved, self._provider_budget(),
+        )
 
     def _in_flight_ids(self) -> list[int]:
         with self._lock:
@@ -291,10 +407,25 @@ class ChapterQueueWorker:
             task = db.get(models.ChapterBatchTask, int(task_id))
             attempts = int(task.attempt or 0) if task else 0
             budget = int(task.max_attempts or 0) if task else 0
-            if attempts < budget:
+            refund = bool(outcome.get("refund_attempt"))
+            if refund:
+                # A refunded attempt was never a try — another route held
+                # the per-job lock — so it cannot be the one that exhausts
+                # the budget. Before this, a collision on the LAST attempt
+                # was recorded failed/attempts_exhausted for a step that
+                # never ran, with an error text saying the opposite (verified
+                # audit, 13 September 2026). And re-queueing it at once made
+                # the dispatcher claim it again on the next poll, collide
+                # again, and spin at 60-100 cycles/s for the whole of the
+                # conflicting run: hold it back for one backoff interval
+                # first. Process-local is enough — a restart retries once.
+                self._backoff_until[int(task_id)] = (
+                    time.time() + collision_backoff_seconds()
+                )
+            if attempts < budget or refund:
                 chapter_queue.requeue(
                     db, task_id, error=str(outcome.get("error") or ""),
-                    refund_attempt=bool(outcome.get("refund_attempt")),
+                    refund_attempt=refund,
                 )
                 return
             chapter_queue.finish(
@@ -385,8 +516,16 @@ def classify_exception(exc: BaseException) -> dict[str, Any]:
         from . import semantic_recovery
 
         if isinstance(exc, semantic_recovery.HumanDecisionRequired):
+            from . import chapter_batches
+
+            # The pause names itself (contract section 6): the kind it
+            # recorded on its pending decision, not one shared label.
+            pending = getattr(exc, "pending_decision", None)
             return {
-                "state": "blocked", "blocked_kind": "human_decision",
+                "state": "blocked",
+                "blocked_kind": chapter_batches.blocked_kind_for_pending(
+                    pending if isinstance(pending, Mapping) else None
+                ),
                 "error": str(exc),
             }
     except ImportError:  # pragma: no cover - the module is always present
@@ -460,6 +599,21 @@ def _run_step01(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
             job_id,
             lambda: release_contract.generate_post_learning(
                 db, job_id, int(row.chapter_id), owner_sub=owner_sub,
+                # Contract section 5 spells this call out with the kwarg, and
+                # the interactive route passes it
+                # (build_concepts_release_api_contract.py:143). Without it the
+                # flag defaults to False, the pause branch is skipped, and
+                # step01 falls through to _build_master_siblings: it renders
+                # the job's OWN staged Concept workbook, records it as an
+                # accepted "unchanged" reviewed input, and spends the whole of
+                # Step 02 on machine-authored content the team never saw —
+                # against Q49/Q51, which exist to keep Step 02 reading only a
+                # file a person reviewed. It also never calls
+                # initialize_concept_review, whose sole caller is that skipped
+                # branch, so the row ends with no marker and the console
+                # derives it as blocked/no_review_marker with every action but
+                # "upload source" greyed out. A full paid run, stranded.
+                pause_for_concept_review=True,
             ),
             owner_sub=owner_sub,
         )
@@ -516,14 +670,40 @@ def _after_generation(db, job_id: int, result: Any) -> dict[str, Any]:
                 blocked.get("recovery_action") or blocked.get("message") or ""
             ),
         }
+    from . import chapter_batches
+
     pending = job.pending_decision
     if pending:
         return {
-            "state": "blocked", "blocked_kind": "human_decision",
-            "error": str(
-                pending.get("question") or pending.get("prompt")
-                or "this run needs a recorded decision before it can continue"
-            ),
+            "state": "blocked",
+            "blocked_kind": chapter_batches.blocked_kind_for_pending(pending),
+            "error": chapter_batches.pending_reason(pending),
+        }
+    # Step 01's failure wrapper (``_stage_generation_release``) catches the
+    # exception, stages whatever the run had already paid for, and RETURNS a
+    # result carrying ``run_incomplete`` — so a provider failure mid-way never
+    # reaches ``classify_exception``. Reading only the exception path settled
+    # that return as a clean ``done`` for a row with no Concept files and no
+    # review marker (verified audit, 13 September 2026). The marker is the
+    # wrapper's own honest verdict: a resumable one is the contract's "any
+    # other exception" row — queued while attempts remain, since a re-run
+    # resumes from the saved checkpoint — and a non-resumable one is over.
+    incomplete = (
+        result.get("run_incomplete") if isinstance(result, Mapping) else None
+    )
+    if isinstance(incomplete, Mapping):
+        message = str(
+            incomplete.get("message") or incomplete.get("error")
+            or "generation did not complete"
+        )
+        if incomplete.get("resume_allowed") is False:
+            return {
+                "state": "failed", "failure_code": "non_resumable",
+                "error": str(incomplete.get("recovery") or message),
+            }
+        return {
+            "state": "retry", "failure_code": "run_incomplete",
+            "error": message,
         }
     # Step 02 returns normally even when a Master lane was refused — the
     # Concept files are finished and must stay available (Q13), so the failure
@@ -621,11 +801,28 @@ def _run_publish(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
 _worker: ChapterQueueWorker | None = None
 
 
+_disabled_reason = ""
+
+
+def disabled_reason() -> str:
+    """Why the worker is not running, for the console; empty when it is."""
+    return _disabled_reason
+
+
 def initialize_chapter_queue(session_factory) -> ChapterQueueWorker | None:
-    global _worker
+    global _worker, _disabled_reason
     if not enabled():
+        _disabled_reason = "disabled by AEGIS_QUEUE_WORKER"
         log.info("chapter queue worker disabled by AEGIS_QUEUE_WORKER")
         return None
+    shortfall = admission_shortfall()
+    if shortfall:
+        # Starting anyway would admit step01s and leave every step02 queued
+        # forever, silently. Loud and stopped beats quiet and stuck.
+        _disabled_reason = shortfall
+        log.error("chapter queue worker NOT started: %s", shortfall)
+        return None
+    _disabled_reason = ""
     if _worker is not None:
         return _worker
     _worker = ChapterQueueWorker(session_factory)

@@ -179,7 +179,9 @@ def _strict_culmination(*, question: str = "") -> dict:
     )
     return _row(
         "Culmination - Electric Current Relationship",
-        "Description: Recap of Electric Current Relationship." + types,
+        "Description: Recap of Electric Current Relationship."
+        "\nAchieving Mastery: Combine the current, voltage and resistance "
+        "relationships in one circuit calculation." + types,
         topic="Electric Current",
         parent="Culmination",
     )
@@ -1280,6 +1282,8 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
             (
                 "Description: Recap of Use the Finite-sum Formula "
                 r"S_n = \frac{n}{2}(a+l)."
+                "\nAchieving Mastery: Combine the finite-sum formula with "
+                "its terms in one calculation."
             ),
             topic="T",
             parent="Culmination",
@@ -1333,6 +1337,8 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
             (
                 "Description: Recap of Use the Finite-sum Formula "
                 r"[Katex] S_n = \frac{n}{2}(a+l) [/Katex]."
+                "\nAchieving Mastery: Combine the finite-sum formula with "
+                "its terms in one calculation."
             ),
             topic="T",
             parent="Culmination",
@@ -2233,3 +2239,16 @@ def test_rejected_types_rewrite_keeps_non_type_repairs():
     assert "Example: Use the formula." not in accepted[0]["concept_details"]
     assert not g._rendered_inventory_coverage_defects(
         accepted, inventory)["missing"]
+
+
+def test_final_validation_flags_a_culmination_without_mastery():
+    """Q68 (contract §11.1): a culmination without its Achieving Mastery line
+    is flagged on its own row and never halts the run."""
+    culmination = _strict_culmination()
+    culmination["concept_details"] = "Description: Recap of Electric Current Relationship."
+    g._validate_final_or_raise([_strict_normal_row(), culmination])
+    assert any(
+        "validation: missing_mastery_statement" in flag
+        for flag in culmination.get("review_flags") or []
+    )
+

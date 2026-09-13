@@ -926,6 +926,8 @@ def test_strict_mastery_requires_one_canonical_terminal_description_line():
     }
     assert not (_codes(valid_report) & mastery_codes)
 
+    # Contract §11.1: a Culmination carries a real Description and Mastery,
+    # so the strict gate no longer exempts it.
     culmination_report = cv.validate_concept_rows(
         [_rec(
             "Culmination - Linear Equations",
@@ -934,7 +936,20 @@ def test_strict_mastery_requires_one_canonical_terminal_description_line():
         )],
         strict_mastery_statement=True,
     )
-    assert not (_codes(culmination_report) & mastery_codes)
+    assert _codes(culmination_report) & mastery_codes == {
+        "missing_mastery_statement"
+    }
+    complete_culmination_report = cv.validate_concept_rows(
+        [_rec(
+            "Culmination - Linear Equations",
+            "Description: Together these let the learner solve any linear "
+            "equation.\nAchieving Mastery: Solve a linear equation by "
+            "choosing and applying the right method.",
+            parent="Culmination",
+        )],
+        strict_mastery_statement=True,
+    )
+    assert not (_codes(complete_culmination_report) & mastery_codes)
 
 
 def test_strict_mastery_reports_missing_malformed_duplicate_and_stray_markers():

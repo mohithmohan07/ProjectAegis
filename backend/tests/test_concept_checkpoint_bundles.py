@@ -721,3 +721,23 @@ def test_versioned_attempt_and_mechanical_telemetry_round_trip_without_repricing
     _, raw_bytes = checkpoints.export_bundle(db, original.id)
     restored = checkpoints.import_bundle(db, raw_bytes)
     assert restored.openai_usage == historical
+
+
+def test_a_v1_stamped_bundle_still_imports_and_keeps_its_version(client, db):
+    """Q68: the generation-quality stamp has two supported versions; a bundle
+    exported under v1 imports and its routing record keeps v1, never v2."""
+    from app.services import generation_quality_policy as quality
+    from app.services import model_routing_run
+
+    original = _job(db)
+    _, raw_bytes = checkpoints.export_bundle(db, original.id)
+    bundle = json.loads(raw_bytes)
+    bundle["payload"][quality.KEY] = quality.V1
+    _resign(bundle)
+    checkpoints._validate_payload(bundle["payload"])
+    response = _post_bundle(client, bundle)
+    assert response.status_code == 200, response.text
+    restored = db.get(models.UploadJob, response.json()["id"])
+    record = json.loads(model_routing_run._record_path(restored).read_text())
+    assert record[quality.KEY] == quality.V1
+

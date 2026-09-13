@@ -1725,7 +1725,8 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
         model_provider.validate_profile(profile)
     if (
         generation_quality_policy.KEY in payload
-        and payload[generation_quality_policy.KEY] != generation_quality_policy.VERSION
+        and payload[generation_quality_policy.KEY]
+        not in generation_quality_policy.SUPPORTED
     ):
         raise ValueError("Unknown saved generation quality policy")
     if reviewed_file_workflow_policy.KEY in payload and payload[reviewed_file_workflow_policy.KEY] not in reviewed_file_workflow_policy.VERSIONS:

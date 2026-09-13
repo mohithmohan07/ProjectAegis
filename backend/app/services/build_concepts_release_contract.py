@@ -593,7 +593,7 @@ def _build_master_siblings(
     *,
     owner_sub: str | None = None,
     progress_start: float = 0.955,
-    progress_end: float = 0.990,
+    progress_end: float = 0.98,
 ) -> dict[str, dict[str, Any] | None]:
     """Outputs 02 and 04, in the same run that produced 01 and 03.
 
@@ -695,16 +695,20 @@ def _build_master_siblings(
                 "Building Master files (Outputs 02/04)",
                 value=progress_start,
             )
-            # The Master builds own the caller's fixed band (0.955 → 0.990
-            # for legacy runs; 0.70 → 0.99 after Concept review) and fill it
+            # The Master builds own the caller's fixed band (0.955 → 0.98
+            # for legacy runs; 0.70 → 0.98 after Concept review) and fill it
             # as their stages (and the long fan-outs' units) finish, so
             # the console no longer freezes on one value for the entire
             # build — the "97% for hours" report. One shared span, one
             # equal-weight tracker per lane; emission is monotone, so the
-            # two concurrent lanes cannot walk the bar backward. Keep the
-            # ceiling at 0.990, not 0.995: the phone UI rounds to a whole
-            # percentage, and 99.5% rendered as the same misleading 100% as
-            # a genuinely complete four-output set.
+            # two concurrent lanes cannot walk the bar backward. The
+            # ceiling is 0.98, not 0.99: the phone UI rounds to a whole
+            # percentage, and 0.99 is what a run that FINISHED with fewer
+            # than four outputs ready reports, so a build near its end and
+            # a finished-incomplete run used to render identically — the
+            # owner could not tell whether Step 2 was still running or
+            # done (13 September 2026). Now 98% is building, 99% is
+            # finished-incomplete, 100% is all four outputs.
             span = progress.Span(
                 progress_start, progress_end,
                 label="Building Master files (Outputs 02/04)"
@@ -1452,7 +1456,7 @@ def build_review_masters(
             db, job_id, int(state.get("target_chapter_id") or 0),
             owner_sub=owner_sub,
             progress_start=0.70,
-            progress_end=0.99,
+            progress_end=0.98,
         )
     except Exception as exc:
         db.rollback()
