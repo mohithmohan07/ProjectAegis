@@ -4791,10 +4791,14 @@ extraction `options` list, and carrying it onto a pre-v4 cell would move
 that cell's materialization key); the materializer's existing cardinality
 defect applies with the declared count and the generated-lane noun, and one
 gated instruction tells it the declared set is the set to project. The
-design review claimed the author key already carried the stamp; it did not
-— the author payload carried only the capture-boundary fields — so the
-payload now carries `quality.fields(env)` under v4 only, which is what makes
-the schema, sentence, checker, critic and key read one answer.
+author payload has carried the run's recorded stamp since v1 through
+`prelearning_capture_policy.boundary_fields`, so the author key of every
+v1–v3 run already ends with its stamp and `declared_pre_options(payload)`
+reads it directly; only a v4 stamp switches the schema, sentence and checker
+(a redundant spread the first commit added was removed on verification — it
+restated the same key and value and moved no key). Downstream, the Master
+refiner's lock and the marking cardinality hold make materialization the
+single decision point for the declared set.
 
 **Replay.** A v1–v3 or unstamped run keeps the v1 schema, prompt, checker,
 cell shape and every key byte for byte (pinned: the v3 author system equals

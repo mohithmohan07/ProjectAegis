@@ -3005,9 +3005,10 @@ def run_release_for_job(
         store=store,
         fixer=fixer,
         # The release's accepted concept sequence, in the bridge's own
-        # order — the staged release's record order, the same sequence
-        # assessment_teaching_order transports into the Master — so the
-        # tier author sees where a home concept sits (Q69). Evidence only.
+        # order — the staged release's record order, the root order
+        # assessment_teaching_order also reads (through each record's
+        # _aegis_release_qids) — so the tier author sees where a home
+        # concept sits (Q69). Evidence only.
         chapter_teaching_order=concept_payload,
     )
     expected_level_ids = [

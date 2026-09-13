@@ -1300,14 +1300,11 @@ def build(
         plan = plans[concept_id]
         payload = {
             "stage": "prequestions.author",
+            # ``boundary_fields`` carries the run's RECORDED generation-quality
+            # stamp (since v1), so the wire schema, the rules sentence, the
+            # checker and the critic all read one answer from this payload and
+            # the author key ends with it through ``_foundation_policy_suffix``.
             **capture_policy.boundary_fields(env),
-            # Generation-quality v4 (Q70): the author payload carries the
-            # run's RECORDED stamp so the wire schema, the rules sentence,
-            # the checker and the critic all read one answer, and the
-            # decision key carries it through ``_policy_version``. Gated
-            # on v4 so every earlier stamped run's payload — and key — is
-            # byte-identical to what it recorded.
-            **(quality.fields(env) if quality.declared_pre_options(env) else {}),
             "rules": _author_rules(rules_suffix, rule),
             "chapter": calibration,
             "coverage_plan": plan,

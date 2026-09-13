@@ -57,8 +57,9 @@ V4 (`owner-generation-quality-2026-09-13-v4`, `declared_pre_options`): the Pre
 author's v2 strict schema REQUIRES an `options` array (empty when no choice
 set), the checker holds its shape, the cell carries it under a v4 profile,
 and the materializer refuses a projected answers[] whose count differs from
-the declared set. The author payload carries the stamp under v4 only, so
-every earlier run's payload and key are unchanged. (7, **Q71**) **Repeated
+the declared set. The author payload has carried the recorded stamp since v1
+(`boundary_fields`), so every earlier run's payload and key are unchanged and
+only a v4 stamp switches the schema, sentence and checker. (7, **Q71**) **Repeated
 Case titles go back to the model.** Under V4 the Type miner's coverage
 follow-up carries `duplicate_case_titles` (Cases of ONE Type equal under
 whitespace-and-case folding — the exact key the merger already uses), a title
