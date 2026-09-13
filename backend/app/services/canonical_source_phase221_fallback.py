@@ -1307,8 +1307,10 @@ PAGE_EXTRACTION_DECISION_VERSION = "page-extraction-decision-3"
 # is data inside one figure block, not the topic/question structure the
 # staleness refusal protects; a bump would make
 # ``phase2._load_or_refresh_for_job`` refuse every already-converted upload
-# ("Convert this PDF again as a new upload") until it is reconverted at
-# cost. Stored MMDs keep their literal; the graph stamp
+# ("Convert this PDF again as a new upload") — as a NEW upload job, whose
+# page transcription is served from the bundle cache, so the cost is the
+# job identity: the old job's sealed decisions and checkpoint are left
+# behind. Stored MMDs keep their literal; the graph stamp
 # ``canonical_source_phase3.FIGURE_CAPTION_RENDER_KEY`` and the hub guard
 # ``generation._PLACEHOLDER_FIGURE_CAPTION_RE`` keep those jobs correct.
 # Whether to bump instead (refusing every existing upload) is the owner's

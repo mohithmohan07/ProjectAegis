@@ -4904,10 +4904,14 @@ item). **Contract:** none changed.
 
 **Reproduced.** `canonical_source_phase221_fallback._markdown_image(url, "")`
 returned `![Source visual](url)`; the flat parser records the first non-empty
-markdown alt as the figure's `caption_raw`, so the placeholder became the
-PRINTED CAPTION of every uncaptioned figure in every gpt-pdf-to-acsd
-conversion — the pool caption, the hub note (guarded since Q67), the
-`[Source image alt text]` evidence line and a visible caption line. And
+markdown alt as `alt_raw` and as `caption_raw`; the live lane then overwrites
+`caption_raw` with the page ACSD's empty `source_caption` (the reconciliation
+that also writes `public_alt` onto the canonical figure), so the literal
+reached the authors through three routes — the pool caption
+(`containers.figure_block_evidence` reads the raw-text alt), the `[Source
+image alt text]` evidence line (`alt_raw`), and the renderer's own fallback
+on an empty `caption_raw` — the visible caption line — with the hub note
+guarded since Q67. And
 `canonical_source_phase3.render_semantic_source` printed `Source visual` as a
 standalone caption line whenever `caption_raw` was empty (the Mathpix
 `![](url)` shape) — that rendered text is exactly what the Settle and
@@ -4926,11 +4930,13 @@ migration ladder and the cached-graph loader see nothing new, and no cached
 decision key moves. The `[img]` alt still falls back to the literal as a last
 resort (`kr.image` refuses an empty alt) — that residual is the 2026-09-06
 audit's model-authored-alt item, owner-visible, out of scope here. The hub
-guard `_PLACEHOLDER_FIGURE_CAPTION_RE` STAYS: sealed canonicals still carry
-the literal as `caption_raw`. Stored MMDs are never rewritten. The validator
+guard `_PLACEHOLDER_FIGURE_CAPTION_RE` STAYS: every already-converted job's
+stored MMD keeps `![Source visual](url)`, so its pool caption is the literal
+whatever `caption_raw` says, and the alt-only task-caption sites still mint
+`Source visual N`. Stored MMDs are never rewritten. The validator
 warning `duplicate_image_url` counts exact URL repeats across canonical
 `[img]` tags and markdown images in one row's `concept_details`; severity
-warning, outside every blocking set, ignored by the Refiner's error keys,
+warning, outside every blocking set, outside `release_refiner._terminal_error_keys`,
 counted in every "validation … N warning(s)" line — recorded, never a drop.
 
 **Owner question (recorded, Option A applied).** The comment above
@@ -4938,7 +4944,10 @@ counted in every "validation … N warning(s)" line — recorded, never a drop.
 page ACSD looks like as MMD". Changing `![Source visual](url)` to `![](url)`
 does change it — but a bump makes `phase2._load_or_refresh_for_job` refuse
 EVERY already-converted upload at its next generation ("Convert this PDF
-again as a new upload") until it is reconverted at cost. Option A (applied):
+again as a new upload") — as a NEW upload job: the page transcription is
+served from the bundle cache, so the cost is the job identity — the old job's
+sealed decisions and checkpoint are left behind (Q64's stranded class).
+Option A (applied):
 no bump; the exclusion is recorded beside the constant (precedent: the
 decision-only identities excluded from the reader stamp); existing uploads
 keep their stored MMD and stay correct through the graph stamp and the hub
