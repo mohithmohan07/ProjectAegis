@@ -60,6 +60,9 @@ def test_the_policy_keeps_every_recorded_version_and_mints_only_the_latest():
     assert quality.declared_pre_options({"metadata": {quality.KEY: quality.V4}}) is True
     assert quality.declared_pre_options({"profile": {quality.KEY: quality.V4}}) is True
     assert quality.declared_pre_options({}) is False
+    assert quality.duplicate_case_titles_returned({quality.KEY: quality.V3}) is False
+    assert quality.duplicate_case_titles_returned({"metadata": {quality.KEY: quality.V4}}) is True
+    assert quality.duplicate_case_titles_returned({}) is False
     # v3 is monotone: it keeps v2's figure references and adds the Host resolution.
     assert quality.figure_references_kept({quality.KEY: quality.V3}) is True
     assert quality.host_creations_resolved({quality.KEY: quality.V2}) is False

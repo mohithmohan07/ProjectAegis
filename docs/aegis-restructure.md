@@ -4857,8 +4857,14 @@ code never composes a title — or `accept_with_flag`; a Fixer that cannot
 satisfy the checker, or a deployment with none (dry and test runs), leaves the
 Cases as mined and says so in the saved log — never a new halt, since before
 this change the duplicate shipped silently. (4) The same resort runs once
-more on the accepted consolidation result, the one other producer of a
-within-Type repeat before `type_taxonomy_ready`. No rule or stage is removed;
+more on the accepted consolidation result, and — found by the adversarial
+verification — on the taxonomy adopted from a human-directed consolidation
+after the Type-granularity pause (its `include_case_identity=True` contract
+makes `case_title` immutable to the proposal), resolved before the accepted
+`result_context_hash` is recorded so a resumed checkpoint replays the
+re-titled taxonomy it sealed. Trade-off named: a missed-only residue that
+also repeats a title now takes broad complete-list rounds (guarded by
+exact-once and title counts) before the additive focused deltas. No rule or stage is removed;
 the CASE WORDING sentence, the coverage gate, the backstop, the focused
 deltas and the deterministic fallbacks all stand.
 

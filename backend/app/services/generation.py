@@ -11481,7 +11481,7 @@ def _mine_types_from_inventory_via_api(
     progress.log(f"Type Mining produced {len(types)} reusable Type(s).")
     from . import generation_quality_policy
     # A repeated Case title inside one Type is a coverage-class defect the
-    # model is asked to correct (Q68 second pass). A run stamped v3 or earlier
+    # model is asked to correct (Q71). A run stamped v3 or earlier
     # keeps the loop it was sealed with: with the gate off, every string,
     # branch and log line below is byte-identical to the previous release.
     check_titles = generation_quality_policy.duplicate_case_titles_returned(meta)
@@ -21928,6 +21928,21 @@ def _run_live_concept_pre_final_stages(
                     **preserved,
                     "types": copy.deepcopy(consolidated.get("types") or []),
                 }
+                from . import generation_quality_policy as _quality_policy
+                if _quality_policy.duplicate_case_titles_returned(meta):
+                    # The human-directed merge moves Cases intact and binds
+                    # case_title as an immutable per-QID contract
+                    # (include_case_identity=True), so two merged Types'
+                    # same-titled Cases meet here too (Q71). Resolve BEFORE
+                    # the accepted result_context_hash is recorded below —
+                    # _type_identity binds case_title — so a resumed
+                    # checkpoint replays the re-titled taxonomy it sealed.
+                    mined_types["types"] = _resolve_duplicate_case_titles_via_fixer(
+                        list(mined_types["types"]),
+                        inventory=question_task_inventory, meta=meta,
+                        stage="type_consolidation_human_directed",
+                        attempts_note="human-directed Type consolidation",
+                    )
                 review["type_count"] = len(mined_types["types"])
                 inventory_count = int(review.get("inventory_count") or 0)
                 review["consolidation_merged_count"] = max(

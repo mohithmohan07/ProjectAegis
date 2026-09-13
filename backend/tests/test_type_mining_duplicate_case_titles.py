@@ -201,3 +201,88 @@ def test_a_fixer_answer_that_still_repeats_or_renames_the_wrong_case_is_refused(
     assert [c["case_title"] for c in resolved[0]["case_prompts"]] == [TITLE, TITLE, "Another case"]
     assert any("the Fixer could not resolve it" in line for line in lines)
     assert attempts
+
+
+def test_a_fixer_accept_with_flag_keeps_both_titles_visibly(monkeypatch):
+    repeated = [_type([(TITLE, ["QINV-0001"]), (TITLE, ["QINV-0002"])])]
+
+    def accepting(payload):
+        return {"accept_with_flag": True,
+                "rationale": "Both Examples are one variety; the coincidence is real."}
+
+    lines = _logs(monkeypatch)
+    resolved = g._resolve_duplicate_case_titles_via_fixer(
+        copy.deepcopy(repeated), inventory=INVENTORY, meta=g._metadata(subject="Science"),
+        stage="type_mining", attempts_note="test", fixer=accepting, store=kernel.DecisionStore(),
+    )
+    assert [c["case_title"] for c in resolved[0]["case_prompts"]] == [TITLE, TITLE]
+    assert any("accepted" in line and "with a flag" in line for line in lines)
+
+
+def test_consolidation_outputs_take_the_same_final_resort(monkeypatch):
+    """Both consolidation sites (the model's and the human-directed one) send
+    a merged Type's repeated titles through the same recorded resort."""
+    import inspect
+
+    merged = [_type([(TITLE, ["QINV-0001"]), (TITLE, ["QINV-0002"])])]
+    seen: list[str] = []
+
+    def fixer(payload):
+        seen.append(payload["stage"])
+        return {"cases": [{"case_index": 0, "case_title": TITLE + " (new cells)"},
+                          {"case_index": 1, "case_title": TITLE + " (offspring)"}],
+                "rationale": "distinct outcomes"}
+
+    for stage in ("type_consolidation", "type_consolidation_human_directed"):
+        store = kernel.DecisionStore()
+        out = g._resolve_duplicate_case_titles_via_fixer(
+            copy.deepcopy(merged), inventory=INVENTORY, meta=g._metadata(subject="Science"),
+            stage=stage, attempts_note="consolidation", fixer=fixer, store=store,
+        )
+        assert [c["case_title"] for c in out[0]["case_prompts"]] == [
+            TITLE + " (new cells)", TITLE + " (offspring)",
+        ]
+        assert any("TYPE-0001#cases0-1" in key for key in store.keys()) or store.keys()
+    assert seen == ["type_consolidation", "type_consolidation_human_directed"]
+    source = inspect.getsource(g)
+    assert 'stage="type_consolidation"' in source
+    assert 'stage="type_consolidation_human_directed"' in source
+
+
+def test_a_coverage_improvement_that_introduces_a_repeat_is_still_accepted(monkeypatch):
+    calls: list[str] = []
+    # Call 1: a duplicate ASSIGNMENT (QINV-0001 placed twice), titles distinct.
+    duplicated = {"types": [_type([("Case A", ["QINV-0001"]), ("Case B", ["QINV-0001", "QINV-0002"])])]}
+    # Call 2: fixes the assignment but repeats a title -> coverage improved, accepted.
+    repeat = {"types": [_type([(TITLE, ["QINV-0001"]), (TITLE, ["QINV-0002"])])]}
+    # Call 3: the repeat is asked about and fixed.
+    fixed = {"types": [_type([(TITLE + " A", ["QINV-0001"]), (TITLE + " B", ["QINV-0002"])])]}
+    monkeypatch.setattr(g, "_openai_json", _fake_miner([duplicated, repeat, fixed], calls))
+    monkeypatch.setattr(p3_fixer, "default_provider", lambda: None)
+    _logs(monkeypatch)
+    mined = g._mine_types_from_inventory_via_api(
+        meta=g._metadata(subject="Science"), inventory=INVENTORY, max_coverage_attempts=3,
+    )
+    assert len(calls) == 3
+    # Round 1 was about the assignment: the follow-up lists no title group.
+    assert '"duplicate_case_titles": []' in calls[1]
+    # Round 2 asks about the repeat the accepted coverage repair introduced.
+    assert '"duplicate_case_titles": [{' in calls[2]
+    assert [c["case_title"] for c in mined["types"][0]["case_prompts"]] == [TITLE + " A", TITLE + " B"]
+
+
+def test_existing_live_miner_fixtures_stay_title_clean_under_v4():
+    """The miner tests that run with the gate ON (a fresh unbound run mints v4)
+    carry title-clean fixtures, so their call counts did not move."""
+    from tests import test_concept_mapping_reviews as reviews
+
+    types = [
+        {"type_id": "TYPE-0001", "type_title": "Pattern One",
+         "source_question_ids": ["QINV-0001"],
+         "case_prompts": [{"case_title": "Defined case",
+                           "examples": [{"source_question_id": "QINV-0001",
+                                         "example_prompt": "Question one"}]}]},
+    ]
+    inventory = {"items": [{"qid": "QINV-0001", "raw_task": "Question one"}], "stats": {}}
+    assert g._duplicate_case_titles(g._normalize_mined_type_candidate(types, inventory)) == []
+    assert hasattr(reviews, "test_type_mining_retries_duplicate_assignments_with_complete_list")
