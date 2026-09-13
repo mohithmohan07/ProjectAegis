@@ -11,9 +11,11 @@ and the sheets declare 201,580 cells (Excel's formatted-but-empty rows) to hold
 machine running two lanes. The cell pass now streams with `read_only`; the
 cached-value load is deferred until a formula is actually seen; a full load
 happens only for a workbook whose zip holds `xl/media`. Byte-identical output on
-all four real files; +140 MB becomes +2 MB. `fly.toml` memory is 10240 MB — that
-block only sizes machines a deploy CREATES, so the existing machine still needs
-`fly scale vm shared-cpu-2x --memory 10240 -a projectaegis` run out of band.
+all four real files; +140 MB becomes +2 MB. `fly.toml` memory is 4096 MB: 10240 was
+attempted and Fly refused it, because a SHARED vm is capped at 2048MB per CPU
+(2 CPUs allow at most 4096MB; 10240MB needs shared-cpu-8x). 4096 doubles the
+ceiling that OOMed and the streaming reader removed the pressure rather than
+merely surviving it. The live machine is scaled to shared-cpu-2x / 4096MB.
 Q57 in `docs/aegis-restructure.md`.
 
 **Previous owner amendment: Q56 (Step 2 failure reporting, 13 September 2026).**

@@ -3518,13 +3518,17 @@ pass.
 
 Output is **byte-identical** on all four; the serialised documents were diffed.
 
-`fly.toml` `memory_mb` 2048 -> **10240** is the second half, so an OOM is not one
-large upload away. That block only applies to machines a deploy CREATES; the
-existing machine still needs, out of band:
+`fly.toml` `memory_mb` 2048 -> **4096** is the second half, so an OOM is not one
+large upload away.
 
-```
-fly scale vm shared-cpu-2x --memory 10240 -a projectaegis
-```
+10240 was asked for and attempted; Fly refused it: *"For shared VMs with 2 CPUs,
+10240MiB of memory is too high"*. A **shared** vm is capped at 2048MB per CPU,
+so memory and CPUs are not independent here — 2 CPUs allow at most 4096MB, and
+10240MB would require `shared-cpu-8x`. 4096 is double the ceiling that OOMed,
+and against a reader that now needs single-digit MB per lane instead of 306MB
+the original pressure is gone rather than merely survivable, so the extra CPUs
+were not bought for headroom nobody needs. The live machine was scaled to
+`shared-cpu-2x / 4096MB` and this file now matches it.
 
 ### On the test
 
