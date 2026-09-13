@@ -1,6 +1,31 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q61 (strict request schemas, 13 September 2026).**
+**Latest owner amendment: Q62 (paired-break quote view, 13 September 2026).**
+**This CORRECTS Q60.** Q60 claimed `concept_question_quote.locate` "recovers 100
+of the 100 failing quotes"; that measurement fed `locate` the output of
+`view(raw_slice)` — by construction the one form `view(source)` already contains.
+A tautology, not what a model produces. Q38 writes a break as a PAIR (the `<br>`
+marker beside the line break it renders as) and says a paired break imports as
+ONE logical break, but `view` mapped `<br>` to a newline WITHOUT consuming its
+partner, so `A<br>\nB` viewed as `A\n\nB` — two breaks for one. Neither
+transcription a model can actually write matched the cell: marker-kept
+(`…<br>Case…`) and break-kept (`…\nCase…`) were BOTH refused; only the exact
+bytes or the double-newline form nothing produces got through. Measured on the
+owner's files, per paired break: job 130 0 of 13 recovered, job 139 0 of 87 —
+for both realistic forms. `_BR_PAIR` now consumes the marker with its line
+ending, in `view` AND in the `_view_with_raw_offsets` map `locate` indexes the
+raw slice through (they must agree or a quote is cut at the wrong byte). All
+three forms resolve to the SAME raw cell slice, so Rule 0's `<br>` markers
+survive into the Master; a paragraph keeps its two breaks; a paraphrase is still
+refused. Suite 4905 passed. **Reported and NOT fixed, awaiting the owner:** the
+`visual` escape lets a wholly fabricated question and option pass with zero
+defects off a 17-character "Embedded image" block, and a cross-cell frankenspan
+passes because `quoted_source` newline-joins a row's cells. Tightening either
+sends more to `kernel.ContractError`, which kills the whole lane — so Q56's
+contained BLOCKED row comes first, and that is the owner's call. Q62 in
+`docs/aegis-restructure.md`.
+
+**Previous owner amendment: Q61 (strict request schemas, 13 September 2026).**
 The adversarial review of Q58 found a worse variant of the same defect class,
 twice. OpenAI Structured Outputs refuses the WHOLE request with 400
 `invalid_schema` when a `"strict": True` schema declares a property it leaves

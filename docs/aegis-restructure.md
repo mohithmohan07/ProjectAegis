@@ -3808,3 +3808,71 @@ attempt, and an omitted rationale degrades the Q13 record to the stock
 "corrected by the Fixer's best judgment" on exactly the blocks a human must
 audit.
 
+## Q62 — decided — one logical break is one break, however the model writes it
+
+**This entry corrects a claim made in Q60.** Q60 reported that
+`concept_question_quote.locate` "recovers 100 of the 100 failing quotes". That
+measurement fed `locate` the output of `view(raw_slice)` — by construction the
+one form `view(source)` already contains. It was a tautology, and it is not
+what a model produces. The adversarial review of Q58 caught it; it reproduces.
+
+### The defect is one layer below the gate
+
+Q38 writes a break in a workbook cell as a **pair**: the `<br>` import marker
+beside the native line break it renders as, and states that a paired prose
+break imports as **one** logical break. `view` mapped `<br>` to a newline
+without consuming its partner, so `A<br>\nB` viewed as `A\n\nB` — two breaks
+for one. Neither faithful transcription a model can actually write therefore
+matched the cell it copied from:
+
+| what the model writes | before | after |
+| --- | --- | --- |
+| the cell's exact bytes, `…diagram<br>\nCase…` | accepted | accepted |
+| the marker, break dropped, `…diagram<br>Case…` | **refused** | accepted |
+| the break, marker dropped, `…diagram\nCase…` | **refused** | accepted |
+
+Only the exact bytes, or the double-newline form nothing produces, got through.
+
+Measured on the owner's real files, per paired break, for each realistic form:
+
+| file | paired breaks | before | after |
+| --- | --- | --- | --- |
+| job 130 reviewed Pre | 13 | **0 recovered** | 13 |
+| job 139 reviewed file | 87 | **0 recovered** | 87 |
+
+### Decided
+
+`_BR_PAIR` consumes the marker together with the line ending it renders as, in
+`view` and in the `_view_with_raw_offsets` map that `locate` indexes the raw
+slice through — the two must agree or a quote is cut at the wrong byte. All
+three written forms of one break now resolve to the **same raw cell slice**, so
+the `<br>` markers Rule 0 requires in the Master still survive; a paragraph
+still keeps its two breaks, because each pair collapses to one; a bare marker
+and a bare break are unchanged; KaTeX row separators are untouched. A
+paraphrase is still refused — the transport bridges representation, never
+wording (Rule 1).
+
+This is the same transport `concept_question_review` has relied on since v4,
+so the correction reaches the edited-workbook review path too. Full backend
+suite: 4905 passed.
+
+### Two anti-invention holes, reported and NOT fixed, awaiting the owner
+
+Both were verified by the review against the live checker, and both let
+invented content through TODAY, independent of any redesign:
+
+* **The `visual` escape.** `_checker` skips containment entirely for a question
+  citing any block with an image (`if span not in text and not visual`). A
+  wholly fabricated question text AND option pass with zero defects off a
+  17-character "Embedded image" block. Narrowing it is not free: a question a
+  reviewer pasted as a screenshot has its wording in no cell, and refusing it
+  fails the WHOLE lane rather than one question.
+* **Cross-cell frankenspans.** `quoted_source` joins a row's cells with
+  newlines, so a span welded from the end of one cell and the start of another
+  is a valid substring and passes with zero defects.
+
+Fixing either tightens what reaches `kernel.ContractError`, which kills the
+lane and every finished, paid-for question in it — so the safe order is Q56's
+contained BLOCKED row first, and that is a pipeline change for the owner to
+decide.
+
