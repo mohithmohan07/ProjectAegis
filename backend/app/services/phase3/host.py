@@ -5,6 +5,12 @@ existing settled concept for it (or, rarely, defines a new source-grounded
 concept when no settled row can host a distinct durable idea). The unit's
 example QIDs inherit its host. One decision per unit, through the kernel:
 bounded mechanical corrections, advisory critic, dissent as flags.
+
+Units are certified in parallel batches over one concept payload, so a batch
+never sees another batch's create_new. Under generation-quality v3 every unit
+that created a concept is re-decided once more, sequentially, with every
+batch's first-pass creation visible (``_resolve_blind_creations``); the first
+pass is untouched, so earlier runs replay it byte for byte.
 """
 from __future__ import annotations
 
@@ -16,10 +22,17 @@ from . import envelope as envelope_mod
 from . import kernel
 from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from ... import config
+from .. import generation_quality_policy as quality
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
 _BATCH_SIZE = 8
+
+#: Identity of the v3 second Host pass. Its decisions are keyed apart from
+#: the first pass (unit_id ``units#resolve#<start>`` and this suffix on the
+#: policy), so a rule change here re-keys only the resolution, never the
+#: recorded first-pass batches.
+RESOLUTION_POLICY_VERSION = "host-blind-batch-resolution-2026-09-13-v1"
 
 
 def _normal(value: object) -> str:
@@ -104,6 +117,30 @@ _MINING_HINT_FIELDS = (
 
 def _mining_hints(row: Mapping[str, Any]) -> dict[str, str]:
     return {field: _normal(row.get(field)) for field in _MINING_HINT_FIELDS}
+
+
+#: The one additive sentence of the resolution pass. It is spliced directly
+#: after the first-pass rule it extends ("create_new only when no existing
+#: row can host … complete source-grounded concept.") and is empty on the
+#: first pass, whose rules string every sealed run recorded byte for byte.
+_RESOLUTION_RULE = (
+    "RESOLUTION PASS: every unit in this request answered create_new in "
+    "its first-pass batch, which decided in parallel with the other "
+    "batches and could not see the concepts they created. "
+    "settled_concepts now also lists every concept created by any "
+    "first-pass batch (rows whose _source_grounding_contract is "
+    "api-created-missing-type-host, each naming the batch and unit that "
+    "created it), and each unit carries its own first-pass creation as "
+    "first_pass_created. Decide the unit again with all of them visible: "
+    "when one of those created rows — yours or a sibling batch's — "
+    "teaches this unit's durable source idea, decide existing and name "
+    "it EXACTLY; when several created rows describe one capability, host "
+    "every unit of that capability on the SAME one of them; create_new "
+    "again only when no settled row and no created row can host the "
+    "idea, never to re-mint a created row under a new wording. "
+    "resolved_units lists the verdicts this pass already returned ahead "
+    "of this request; stay consistent with them. "
+)
 
 
 def _settled_index(
@@ -399,6 +436,161 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _identity(row: Mapping[str, Any]) -> tuple[str, str]:
+    """The exact host identity Assemble, coherence and the plan contract key on."""
+    return (
+        str(row.get("topic_id") or row.get("_semantic_topic_id") or ""),
+        _normal(row.get("concept_title")).casefold(),
+    )
+
+
+def _created_projection(
+    row: Mapping[str, Any], *, batch_id: str, unit_id: str,
+) -> dict[str, Any]:
+    """How a Host-created row appears in a resolution request."""
+    return {
+        "concept_title": row.get("concept_title"),
+        "parent_concept": row.get("parent_concept"),
+        "topic": row.get("topic"),
+        "_semantic_topic_id": row.get("_semantic_topic_id"),
+        "concept_details": row.get("concept_details"),
+        "_source_grounding_contract": row.get("_source_grounding_contract"),
+        "created_by_host_batch": batch_id,
+        "created_for_unit": unit_id,
+    }
+
+
+def _resolve_blind_creations(
+    *,
+    units: list[dict[str, Any]],
+    host_map: dict[str, dict[str, Any]],
+    qid_map: dict[str, dict[str, Any]],
+    new_concepts: list[dict[str, Any]],
+    created_by: Mapping[str, tuple[str, dict[str, Any]]],
+    settled_rows: list[Mapping[str, Any]],
+    concepts_payload: list[dict[str, Any]],
+    decide: Callable[..., tuple[dict, dict, list, dict]],
+) -> tuple[
+    dict[str, dict[str, Any]], dict[str, dict[str, Any]],
+    list[dict[str, Any]], int, list[dict[str, Any]],
+]:
+    """Re-decide every creating unit once, with every batch's creation visible.
+
+    Mechanics only: which units are re-decided (those whose first-pass
+    verdict was create_new — no other verdict can reference a creation),
+    the sequential order, the projection of the created rows into the
+    request, the exact-identity index the checker resolves against, and
+    the accounting of which created rows a final verdict still hosts on.
+    Which row hosts a unit is the model's verdict, critic-advised and
+    Fixer-backed exactly as on the first pass.
+    """
+    creating = [
+        unit for unit in units if str(unit["unit_id"]) in created_by
+    ]
+    first_pass: dict[str, dict[str, Any]] = {}
+    visible_rows: list[Mapping[str, Any]] = list(settled_rows)
+    projected: list[dict[str, Any]] = []
+    for unit in creating:
+        unit_id = str(unit["unit_id"])
+        batch_id, row = created_by[unit_id]
+        first_pass[unit_id] = _created_projection(
+            row, batch_id=batch_id, unit_id=unit_id,
+        )
+        visible_rows.append(row)
+        projected.append(first_pass[unit_id])
+    progress.log(
+        f"Host: {len(creating)} unit(s) created a concept in parallel "
+        "batches that could not see one another; re-deciding each once "
+        f"with every first-pass creation visible ({len(projected)} "
+        "created row(s))."
+    )
+    resolved_units: list[dict[str, Any]] = []
+    resolved_hosts: dict[str, dict[str, Any]] = {}
+    resolved_qids: dict[str, dict[str, Any]] = {}
+    second_pass_rows: list[dict[str, Any]] = []
+    for start in range(0, len(creating), _BATCH_SIZE):
+        batch = creating[start:start + _BATCH_SIZE]
+        batch_id = f"units#resolve#{start}"
+        batch_hosts, batch_qids, batch_new, batch_created_by = decide(
+            batch,
+            unit_id=batch_id,
+            concepts=[*concepts_payload, *projected],
+            titles=_settled_index(visible_rows),
+            resolution={
+                "first_pass": {
+                    str(unit["unit_id"]): first_pass[str(unit["unit_id"])]
+                    for unit in batch
+                },
+                "resolved_units": list(resolved_units),
+            },
+        )
+        resolved_hosts.update(batch_hosts)
+        resolved_qids.update(batch_qids)
+        second_pass_rows.extend(batch_new)
+        for unit_id, row in batch_created_by.items():
+            visible_rows.append(row)
+            projected.append(
+                _created_projection(row, batch_id=batch_id, unit_id=unit_id)
+            )
+        resolved_units.extend(
+            {
+                "unit_id": unit_id,
+                "decision": entry.get("decision"),
+                "host_concept_title": entry.get("concept_title"),
+            }
+            for unit_id, entry in batch_hosts.items()
+        )
+    host_map = {**host_map, **resolved_hosts}
+    qid_map = {**qid_map, **resolved_qids}
+    referenced = {
+        _identity(entry)
+        for entry in [*host_map.values(), *qid_map.values()]
+    }
+    # First-pass rows keep the order they were minted in (batch order, the
+    # order new_concepts already had); second-pass rows follow.
+    kept: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in [*new_concepts, *second_pass_rows]:
+        key = _identity(row)
+        if key in referenced and key not in seen:
+            kept.append(row)
+            seen.add(key)
+    retired: list[dict[str, Any]] = []
+    for unit in creating:
+        unit_id = str(unit["unit_id"])
+        batch_id, first_row = created_by[unit_id]
+        retained = any(row is first_row for row in kept)
+        if not retained:
+            retired.append(first_row)
+        entry = dict(host_map[unit_id])
+        entry["host_resolution"] = {
+            "policy_version": RESOLUTION_POLICY_VERSION,
+            "first_pass_batch": batch_id,
+            "first_pass_created": copy.deepcopy(first_row),
+            "first_pass_retained": retained,
+            "decision": str(entry.get("decision") or ""),
+        }
+        flag = (
+            f"{unit_id}: Host re-decided this unit with every batch's "
+            f"creation visible — its first-pass batch ({batch_id}) created "
+            f"'{_normal(first_row.get('concept_title'))[:60]}' without "
+            "sight of the other batches; final host "
+            f"'{_normal(entry.get('concept_title'))[:60]}' "
+            f"({entry.get('decision')}); the first-pass row is "
+            + ("retained" if retained else "retired into this unit's audit")
+        )
+        entry["review_flags"] = [*(entry.get("review_flags") or []), flag]
+        host_map[unit_id] = entry
+        for qid in unit["qids"]:
+            if qid in qid_map:
+                qid_entry = dict(qid_map[qid])
+                qid_entry["review_flags"] = [
+                    *(qid_entry.get("review_flags") or []), flag,
+                ]
+                qid_map[qid] = qid_entry
+    return host_map, qid_map, kept, len(creating), retired
+
+
 def host(
     env: Mapping[str, Any],
     settled_rows: list[Mapping[str, Any]],
@@ -521,14 +713,27 @@ def host(
             "text": text,
         }
 
-    def _decide_units_batch(
-        start: int,
-    ) -> tuple[dict[str, dict], dict[str, dict], list[dict]]:
-        """Certify one unit batch; outputs merge in batch order."""
+    def _decide_units(
+        batch: list[dict[str, Any]],
+        *,
+        unit_id: str,
+        concepts: list[dict[str, Any]],
+        titles: Mapping[str, Mapping[str, Any]],
+        resolution: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, dict], dict[str, dict], list[dict], dict[str, dict]]:
+        """Certify one unit batch against ``concepts``/``titles``.
+
+        ``resolution`` is None on the first pass — its payload is byte-
+        identical to the one every sealed run recorded — and, on the v3
+        second pass, carries the first-pass creations each unit is
+        re-decided against (an additive rule, per-unit evidence, and the
+        verdicts already resolved ahead of this batch).
+        """
         batch_hosts: dict[str, dict[str, Any]] = {}
         batch_qids: dict[str, dict[str, Any]] = {}
         batch_new: list[dict[str, Any]] = []
-        batch = units[start:start + _BATCH_SIZE]
+        batch_created_by: dict[str, dict[str, Any]] = {}
+        resolution_rule = "" if resolution is None else _RESOLUTION_RULE
         payload = {
             "stage": "host",
             "rules": (
@@ -536,7 +741,8 @@ def host(
                 "existing settled concept whenever it teaches the unit's "
                 "durable source idea; create_new only when no existing row "
                 "can host a distinct durable idea, and then define the "
-                "complete source-grounded concept. State your honest "
+                "complete source-grounded concept. " + resolution_rule
+                + "State your honest "
                 "confidence; a low-confidence decision ships flagged for "
                 "review. Separately, place EVERY qid in qid_placements "
                 "by understanding the whole question against the settled "
@@ -625,26 +831,42 @@ def host(
                         for qid in row["qids"]
                         if qid in question_info
                     ],
+                    # Resolution pass only: what this unit's own batch
+                    # minted blind. Absent on the first pass, whose
+                    # payload every sealed run already recorded.
+                    **({} if resolution is None else {
+                        "first_pass_created": copy.deepcopy(
+                            resolution["first_pass"][row["unit_id"]]
+                        ),
+                    }),
                 }
                 for row in batch
             ],
-            "settled_concepts": concepts_payload,
+            "settled_concepts": concepts,
             "source_blocks": blocks_payload,
+            **({} if resolution is None else {
+                "resolved_units": copy.deepcopy(
+                    resolution["resolved_units"]
+                ),
+            }),
         }
         decision = decide_with_visual_evidence(
             kind="host.units",
-            unit_id=f"units#{start}",
+            unit_id=unit_id,
             envelope_sha256=envelope_sha,
             payload=payload,
             provider=provider,
             checker=_host_checker(
                 batch,
-                settled_titles=settled_titles,
+                settled_titles=titles,
                 known_block_ids=known_blocks,
             ),
             critic=critic,
             store=store,
-            policy_version=policy,
+            policy_version=(
+                policy if resolution is None
+                else policy + ";" + RESOLUTION_POLICY_VERSION
+            ),
             fixer=fixer,
         )
         assigned = {
@@ -684,11 +906,12 @@ def host(
                     ),
                 }
                 batch_new.append(created)
+                batch_created_by[unit["unit_id"]] = created
                 entry_source: Mapping[str, Any] = created
             else:
-                entry_source = settled_titles[
+                entry_source = titles[
                     _resolve_host_title(
-                        verdict.get("host_concept_title"), settled_titles
+                        verdict.get("host_concept_title"), titles
                     )
                 ]
             try:
@@ -719,9 +942,9 @@ def host(
             placements = verdict.get("qid_placements")
 
             def _resolve_row(title: object) -> Mapping[str, Any] | None:
-                key = _resolve_host_title(title, settled_titles)
+                key = _resolve_host_title(title, titles)
                 if key is not None:
-                    return settled_titles[key]
+                    return titles[key]
                 if (
                     str(verdict.get("decision")) == "create_new"
                     and _normal(title).casefold()
@@ -794,7 +1017,18 @@ def host(
                 if qid_flags:
                     qid_entry["review_flags"] = qid_flags
                 batch_qids[qid] = qid_entry
-        return batch_hosts, batch_qids, batch_new
+        return batch_hosts, batch_qids, batch_new, batch_created_by
+
+    def _decide_units_batch(
+        start: int,
+    ) -> tuple[dict[str, dict], dict[str, dict], list[dict], dict[str, dict]]:
+        """Certify one first-pass unit batch; outputs merge in batch order."""
+        return _decide_units(
+            units[start:start + _BATCH_SIZE],
+            unit_id=f"units#{start}",
+            concepts=concepts_payload,
+            titles=settled_titles,
+        )
 
     # Unit batches are independent decisions (the concept payload is built
     # once and never grows mid-run), so they overlap up to the shared
@@ -805,14 +1039,21 @@ def host(
     workers = config.phase3_decision_workers()
     batch_total = max(1, (len(units) + _BATCH_SIZE - 1) // _BATCH_SIZE)
     batches_done = 0
-    for batch_hosts, batch_qids, batch_new in kernel.parallel_map_in_order(
+    # unit_id -> (first-pass batch unit_id, the row that batch created).
+    created_by: dict[str, tuple[str, dict[str, Any]]] = {}
+    for start, (batch_hosts, batch_qids, batch_new, batch_created_by) in zip(
         range(0, len(units), _BATCH_SIZE),
-        _decide_units_batch,
-        max_workers=workers,
+        kernel.parallel_map_in_order(
+            range(0, len(units), _BATCH_SIZE),
+            _decide_units_batch,
+            max_workers=workers,
+        ),
     ):
         host_map.update(batch_hosts)
         qid_map.update(batch_qids)
         new_concepts.extend(batch_new)
+        for created_unit, row in batch_created_by.items():
+            created_by[created_unit] = (f"units#{start}", row)
         batches_done += 1
         # The Host band is 0.86 → 0.88, the slice runner.py allocates.
         progress.set_progress(
@@ -823,12 +1064,38 @@ def host(
             ),
         )
 
+    resolved = 0
+    retired: list[dict[str, Any]] = []
+    if created_by and quality.host_creations_resolved(env):
+        # v3 second pass: the first-pass batches decided in parallel over
+        # ONE concept payload, so no batch saw another's create_new and
+        # three same-meaning concepts were minted for Triangles. Every
+        # unit that created a concept is re-decided ONCE, sequentially,
+        # with every first-pass creation in settled_concepts; the model
+        # chooses the host, and a first-pass row nobody hosts on retires
+        # into the unit's audit. Pass-one decisions and payloads are
+        # untouched, so their keys — and every pre-v3 run — replay as is.
+        host_map, qid_map, new_concepts, resolved, retired = (
+            _resolve_blind_creations(
+                units=units, host_map=host_map, qid_map=qid_map,
+                new_concepts=new_concepts, created_by=created_by,
+                settled_rows=settled_rows, concepts_payload=concepts_payload,
+                decide=_decide_units,
+            )
+        )
+
     flagged = sum(
         1 for entry in host_map.values() if entry.get("review_flags")
     )
     progress.log(
         f"Host: {len(host_map)} unit(s) certified, {len(qid_map)} QID(s) "
         f"mapped, {len(new_concepts)} new concept(s) created"
+        + (
+            f"; {resolved} creating unit(s) re-decided with every batch's "
+            f"creation visible, {len(retired)} blind creation(s) retired "
+            "into their unit's audit"
+            if resolved else ""
+        )
         + (f"; {flagged} unit(s) carrying review flags." if flagged else "."),
         level="success",
     )

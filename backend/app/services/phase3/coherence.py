@@ -58,7 +58,13 @@ Every candidate row ID must occur exactly once across source_row_ids. Every
 order array must be an exact permutation of its supplied identity list.
 Consolidate semantically equivalent capabilities into one group even when
 worded differently or repeated in separate source locations; preserve distinct
-capabilities despite similar labels. Repeated examples, practice, facts and
+capabilities despite similar labels. Candidate rows whose
+_source_grounding_contract is api-created-missing-type-host were created by
+Host batches that decided in parallel without sight of one another, and every
+topic's settled rows were authored without sight of the other topics: compare
+each such row against every other candidate before keeping it distinct, and
+name in its rationale the candidate rows you compared and why they differ.
+Repeated examples, practice, facts and
 representations do not themselves create new concepts. Do not impose a count.
 Use one original representative row ID as the surviving topic/home. A singleton
 keeps its exact title and teaching prose: return empty description and mastery.
@@ -87,9 +93,13 @@ progression follows the supplied source. Check the Type/Case/question order is
 coherent with each assigned concept and the source's local sequence, without
 moving ownership by printed location. Check merged prose teaches one capability
 without repeated chapter extracts. Do not approve two differently worded copies
-of one concept merely because titles differ. Preserve recorded literary plans
-and culminations. Return {"verdict":"verified|dissent", "confidence":0.0,
-"issues":[]} with specific ROW-/Type/Case/QID identities for any dissent.
+of one concept merely because titles differ. Rows whose
+_source_grounding_contract is api-created-missing-type-host were created by
+Host batches blind to one another: check that each was compared against every
+other candidate and that its rationale names that comparison. Preserve recorded
+literary plans and culminations. Return {"verdict":"verified|dissent",
+"confidence":0.0, "issues":[]} with specific ROW-/Type/Case/QID identities for
+any dissent.
 """
 
 

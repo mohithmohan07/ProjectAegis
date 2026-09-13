@@ -11,14 +11,18 @@ from contextvars import ContextVar
 
 KEY = "generation_quality_policy"
 #: v1 (11 September 2026): the Post description / question-context
-#: instruction below. v2 (13 September 2026, Q67 second pass): everything in
-#: v1, plus ``figure_references_kept`` — the deterministic cleaner no longer
-#: deletes a figure reference from learner prose. A run keeps the version it
-#: recorded; only newly stamped work adopts the latest.
+#: instruction below. v2 (13 September 2026, Q68): everything in v1, plus
+#: ``figure_references_kept`` — the deterministic cleaner no longer deletes a
+#: figure reference from learner prose. v3 (13 September 2026, Q68):
+#: everything in v2, plus ``host_creations_resolved`` — a Host unit that
+#: minted a concept in a parallel batch is re-decided once with every
+#: batch's creation visible. A run keeps the version it recorded; only newly
+#: stamped work adopts the latest.
 V1 = "owner-generation-quality-2026-09-11-v1"
 V2 = "owner-generation-quality-2026-09-13-v2"
-SUPPORTED: tuple[str, ...] = (V1, V2)
-VERSION = V2
+V3 = "owner-generation-quality-2026-09-13-v3"
+SUPPORTED: tuple[str, ...] = (V1, V2, V3)
+VERSION = V3
 POST_DESCRIPTION_INSTRUCTION = """POST CONCEPT DESCRIPTION AND QUESTION CONTEXT
 Teach the concept in coherent, original, source-faithful language. Do not copy
 large chapter extracts into a concept description merely to supply context for
@@ -128,3 +132,18 @@ def bound_figure_references_kept() -> bool:
     """
     value = _run_policy.get()
     return value is not _UNBOUND and figure_references_kept({KEY: value})
+
+
+def host_creations_resolved(value: Mapping[str, Any] | None) -> bool:
+    """v3: Host re-decides its create_new units with every batch's creation visible.
+
+    ``phase3.host.host`` certifies units in parallel batches over ONE concept
+    payload built before any batch returns, so a batch never sees another
+    batch's ``create_new`` and three same-meaning concepts were minted for
+    Triangles (the reviewers' corrections catalogue, 13 September 2026). A
+    run stamped v2 or earlier replays the single blind pass it was sealed
+    with; only v3 work takes the second, sequential resolution pass.
+    """
+    recorded = version_of(value)
+    return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V3)
+

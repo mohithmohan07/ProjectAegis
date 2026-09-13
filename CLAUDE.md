@@ -1,7 +1,7 @@
 # Aegis — working rules
 
 **Latest amendment: Q68 (corrections catalogue, second pass, 13 September 2026).**
-Three of Q67's "planned next" items are executed, each version-gated so a
+Four of Q67's "planned next" items are executed, each version-gated so a
 sealed run replays byte for byte. (1) **Culminations are authored whole.** The
 Settle authoring response carries `culmination_title` and `achieving_mastery`
 beside `consolidation`; the request names the supplied name
@@ -26,11 +26,22 @@ key, checker and render. The Refiner refuses a refinement that merges, drops
 or renumbers a pair. (3) **Figure references kept.** `generation_quality_policy`
 V2 (`owner-generation-quality-2026-09-13-v2`): the dangling-reference cleaner
 keeps "Fig. 7.7"/"Figure 6.3" in prose and still strips dangling example and
-table references; V1 rows clean exactly as before. **Still with the owner:**
+table references; V1 rows clean exactly as before. The shared constant's
+reach was closed before commit: the checkpoint and routing-record readers
+accept every SUPPORTED version, the database deposit and the publication
+receipt clean under the run's RECORDED version, and every decision key that
+suffixed the bare constant now carries the recorded version. (4) **Blind Host
+batches resolved.** V3 (`owner-generation-quality-2026-09-13-v3`,
+`host_creations_resolved`): after the untouched parallel first pass, every
+unit that answered `create_new` is re-decided once, sequentially, with every
+batch's creation in `settled_concepts` (`units#resolve#<start>`,
+`RESOLUTION_POLICY_VERSION`); the model names the host, an unreferenced
+first-pass row retires into the unit's `host_resolution` audit with a flag.
+Coherence is told which rows were created blind. **Still with the owner:**
 Q67's contract questions (a block on every non-culmination concept; folding
 Error Analysis into numbered Misconceptions) and the remaining planned items
-(blind Host batches, teaching order, declared Pre options, duplicate case
-titles, placeholder captions). Q68 in `docs/aegis-restructure.md`.
+(teaching order, declared Pre options, duplicate case titles, placeholder
+captions). Q68 in `docs/aegis-restructure.md`.
 
 **Previous owner amendment: Q67 (the reviewers' corrections catalogue, 13 September 2026).**
 The owner: "go through all of these properly … dont lose the technical details

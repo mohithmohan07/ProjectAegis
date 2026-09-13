@@ -52,7 +52,12 @@ def test_a_v2_row_keeps_its_figures_and_an_older_row_does_not():
 
 
 def test_the_policy_keeps_every_recorded_version_and_mints_only_the_latest():
-    assert quality.VERSION == quality.V2 and quality.SUPPORTED == (quality.V1, quality.V2)
+    assert quality.VERSION == quality.V3 and quality.SUPPORTED == (quality.V1, quality.V2, quality.V3)
+    # v3 is monotone: it keeps v2's figure references and adds the Host resolution.
+    assert quality.figure_references_kept({quality.KEY: quality.V3}) is True
+    assert quality.host_creations_resolved({quality.KEY: quality.V2}) is False
+    assert quality.host_creations_resolved({"metadata": {quality.KEY: quality.V3}}) is True
+    assert quality.host_creations_resolved({}) is False
     v1 = {quality.KEY: quality.V1}
     assert quality.is_current(v1) and quality.active(v1)
     assert quality.fields(v1) == {quality.KEY: quality.V1}          # never upgraded

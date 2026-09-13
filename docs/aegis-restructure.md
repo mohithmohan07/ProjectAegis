@@ -4316,7 +4316,7 @@ place where a rule's FORM changed is named below.
   identically. — DONE, see Q68.
 * **Host `create_new` across blind parallel batches** (three same-meaning
   Triangles concepts): a second sequential pass that sees every first-pass
-  creation; provenance sentence for the coherence merger.
+  creation; provenance sentence for the coherence merger. — DONE, see Q68.
 * **Settle and the tier author see the chapter's teaching order** (Topic 05
   using flowers before Topic 06 introduces them; advanced tiers on opening
   concepts).
@@ -4373,13 +4373,14 @@ pinned the old behaviour were updated with the reason in place ("Covers A."
 and the delivery-integrity name list; the cell policy version pins). No paid
 generation was run. Nothing here changes what a sealed run replays.
 
-## Q68 — decided — the corrections catalogue's second pass: culminations authored whole, corrections paired, figure references kept
+## Q68 — decided — the corrections catalogue's second pass: culminations authored whole, corrections paired, figure references kept, blind Host batches resolved
 
 **Status:** decided (owner: "go through all of these first and then set up a
 proper workflow … you can make it better; but dont lose the existing ones").
-**Date:** 2026-09-13. **Amends:** Q67 (executes two of its "planned next"
-items), Q1 (mastery on every concept), Q13 (the Fixer). **Contract:** §11.1
-("A Culmination MUST contain a real Description and Mastery.").
+**Date:** 2026-09-13. **Amends:** Q67 (executes four of its "planned next"
+items), Q1 (mastery on every concept), Q13 (the Fixer), Q14 (Host units).
+**Contract:** §11.1 ("A Culmination MUST contain a real Description and
+Mastery."), §10 (the two learner-analysis kinds).
 
 ### Culmination title and Achieving Mastery are authored from the FINAL members
 
@@ -4551,9 +4552,60 @@ v1, v2, legacy-unstamped and forced; every old-cleaned section is a fixpoint
 of the new cleaner; a v1-stamped bundle imports and keeps v1; the recorded
 version rides every key). New envelopes freeze V2.
 
+### Host re-decides its blind creations with every batch visible (policy v3)
+
+**Reproduced.** `phase3/host.host` builds `settled_concepts` once and
+certifies units in parallel batches of eight over that one payload, so no
+batch ever sees another batch's `create_new`: three same-meaning Triangles
+concepts were minted by three batches, and the coherence merger — told
+nothing of the blindness — kept them distinct.
+
+**Decided.** `generation_quality_policy` V3
+(`owner-generation-quality-2026-09-13-v3`, `host_creations_resolved`). Under
+it, after the parallel first pass — whose payloads, keys, rows and output are
+byte-identical to before — every unit whose own verdict was `create_new` is
+re-decided ONCE, sequentially in unit order, through the same closure,
+checker, critic and Fixer, with `settled_concepts` extended by every batch's
+first-pass creation (projected with its `_source_grounding_contract`, the
+batch and the unit that created it), the unit's own creation as
+`first_pass_created`, the verdicts already resolved ahead of it as
+`resolved_units`, and one additive rules sentence placed directly after the
+`create_new` clause it extends. Decision identity: kind `host.units`, unit
+id `units#resolve#<start>`, policy suffixed `RESOLUTION_POLICY_VERSION`, so a
+rule change there re-keys only the resolution. The model names the host; a
+first-pass row no final `host_map`/`qid_map` entry references retires
+verbatim into that unit's `host_resolution` audit and a review flag pinned to
+the unit and its QIDs; a row the model keeps ships as before. Re-minting a
+created row under its exact title is refused by the existing checker
+("duplicates an existing settled concept title"). No similarity rule,
+threshold or keyword list is added: the only new deterministic work is
+identity accounting on the exact `(topic_id, casefold title)` key Assemble,
+coherence and the plan contract already use. Coherence's author and critic
+are told which candidate rows were created blind
+(`api-created-missing-type-host`) and that each topic's rows were settled
+without sight of the others, and asked to name the comparison.
+
+**Replay.** Runs stamped v2 or earlier keep their single blind pass (pinned
+on the unstamped and the v2-stamped golden envelope: no request carries
+`resolved_units`, both created rows ship, no audit). Decide-once holds for the
+new identity (a second `host()` on the same store makes no call and returns
+an equal dict). A run interrupted inside Phase 3 and resumed after this
+deploy re-keys coherence (its prompt digest changed) — the precedent of Q67.
+Spend: one extra Host decision, plus critic, per batch of up to eight
+creating units, only when the first pass created something.
+
+**Not addressed.** Settle authors each topic blind to its siblings
+(`settle.py`: "Topics are independent decision streams"); coherence, now told
+of the blindness, remains the merge point for that case.
+
 ### Verification
 
-Offline only. `tests/test_phase3_settle_golden.py` (the fixture now returns
+Offline only. `tests/test_phase3_host_blind_batches.py` (a v3 run re-decides
+exactly the two creating units with both creations visible and retires the
+unreferenced one into its audit; pre-v3 runs replay the single pass; the
+resolution replays for free and identically; a re-mint under the same title
+fails closed; a resolution that keeps both creations retires nothing).
+`tests/test_phase3_settle_golden.py` (the fixture now returns
 the draft as the authored title so the golden replay's (topic, title) keys
 still resolve; a new test renames one culmination and finds the authored
 name on the settled row; two checker tests pin the prefix, mastery,
