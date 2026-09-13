@@ -91,8 +91,14 @@ primary_region = 'ams'
   # 306MB on a 0.48MB file, and two lanes doing that on 2048MB killed the
   # process mid-run — the machine restarted and the console got a bare 502.
   # The reader now streams (a few MB), and this headroom is the second half:
-  # an OOM must not be one large upload away. Applies to machines a deploy
-  # CREATES — an existing machine is resized once, out of band:
-  #   fly scale vm shared-cpu-2x --memory 10240 -a projectaegis
+  # an OOM must not be one large upload away.
+  #
+  # Fly caps a SHARED vm at 2048MB per CPU, so this pair is not free to choose
+  # independently: 2 CPUs allow at most 4096MB ("memory size for config is too
+  # high", measured 13 September 2026 when 10240 was attempted here). 4096 is
+  # double the ceiling that OOMed, and the streaming reader now needs single
+  # -digit MB per lane rather than 306MB, so the pressure this guarded against
+  # is gone rather than merely survivable. More than this needs more CPUs too:
+  # 10240MB requires shared-cpu-8x.
   cpus = 2
-  memory_mb = 10240
+  memory_mb = 4096
