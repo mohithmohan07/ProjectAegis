@@ -137,3 +137,42 @@ def test_a_task_without_the_attribute_at_all_is_not_a_cohort(monkeypatch):
 
     with chapter_queue_worker._cohort_session(None):
         assert batch_broker.bound() is None
+
+
+# --------------------------------------------------------------------------- #
+# One slot, one cohort, whoever pushed
+# --------------------------------------------------------------------------- #
+
+def test_three_reviewers_pushing_to_the_same_slot_are_one_cohort():
+    """The slot is the appointment. Aathira, Ravi and Shubham each push their
+    own subject's chapters for 12:30 and the queue treats all of them as one
+    group that starts together — which is what makes their first stage one
+    wave rather than three."""
+    from datetime import datetime as dt
+
+    from app.api import chapter_batches as api
+
+    slot = dt(2026, 9, 14, 12, 30)
+    ids = {api._cohort_id_for(step="step01", cohort=True, start_after=slot)
+           for _ in range(3)}
+    assert ids == {"slot-20260914T1230"}
+
+
+def test_a_cohort_with_no_slot_is_only_its_own_push():
+    from app.api import chapter_batches as api
+
+    first = api._cohort_id_for(step="step01", cohort=True, start_after=None,
+                               push_group_id="push-a")
+    second = api._cohort_id_for(step="step01", cohort=True, start_after=None,
+                                push_group_id="push-b")
+    assert first == "push-a" and second == "push-b"
+
+
+def test_publish_and_an_ordinary_push_carry_no_cohort():
+    from datetime import datetime as dt
+
+    from app.api import chapter_batches as api
+
+    slot = dt(2026, 9, 14, 12, 30)
+    assert api._cohort_id_for(step="publish", cohort=True, start_after=slot) == ""
+    assert api._cohort_id_for(step="step01", cohort=False, start_after=slot) == ""

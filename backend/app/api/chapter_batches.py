@@ -230,6 +230,29 @@ async def stage_source(
     return _row_or_404(db, chapter_id)
 
 
+def _cohort_id_for(
+    *, step: str, cohort: bool, start_after: datetime | None,
+    push_group_id: str = "",
+) -> str:
+    """Which batch cohort this push joins, if any (register Q73).
+
+    A cohort that names a SLOT is identified by that slot, not by the push:
+    three reviewers each pushing their own subject's chapters for 12:30 are
+    ONE group that starts together, which is the whole point of naming a
+    time. Their stage fan-outs then meet in the same wave instead of three
+    narrower ones.
+
+    A cohort with no slot starts now and can only be the pusher's own rows,
+    so it is identified by the push. Publishing never joins a cohort: it
+    spends nothing and serializes on one shared workbook.
+    """
+    if not cohort or step == "publish":
+        return ""
+    if start_after is not None:
+        return "slot-" + start_after.strftime("%Y%m%dT%H%M")
+    return str(push_group_id or "")
+
+
 @router.post("/push")
 def push(
     payload: PushRequest,
@@ -245,12 +268,13 @@ def push(
             + ", ".join(chapter_batches.models.CHAPTER_BATCH_STEPS),
         )
     group = chapter_queue.new_push_group_id()
-    # Publishing spends nothing and writes a shared workbook one at a time, so
-    # it has nothing to gain from a wave and nothing to wait for.
-    cohort_id = group if (payload.cohort and step != "publish") else ""
     start_after = payload.start_at
     if start_after is not None and start_after.tzinfo is not None:
         start_after = start_after.astimezone(timezone.utc).replace(tzinfo=None)
+    cohort_id = _cohort_id_for(
+        step=step, cohort=bool(payload.cohort), start_after=start_after,
+        push_group_id=group,
+    )
     results: list[dict[str, Any]] = []
     for item in payload.rows:
         outcome = chapter_queue.enqueue_one(

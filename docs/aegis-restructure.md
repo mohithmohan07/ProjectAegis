@@ -5049,6 +5049,12 @@ The binding is a **contextvar**, not a thread local, because
 caller's context — those sixteen siblings ARE the wave, and a thread local
 would have bound only the orchestrator.
 
+**A cohort is identified by its SLOT, not by the push** (`_cohort_id_for`).
+Three reviewers each pushing their own subject's chapters for 12:30 are one
+group that starts on the same tick, so their stage fan-outs meet in the same
+wave instead of three narrower ones. A cohort with no slot starts now and can
+only be the pusher's own rows, so it is identified by the push.
+
 **The cohort.** `chapter_batch_tasks` gains `cohort_id` and `start_after`
 (additive `ALTER TABLE`; every task already queued reads cohort-less and
 claimable, which is what it was). `claimable` will not return a task before

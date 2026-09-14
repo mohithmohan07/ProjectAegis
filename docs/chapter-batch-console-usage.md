@@ -340,6 +340,13 @@ than trickling in push order.
     {"step": "step01", "cohort": true, "start_at": "2026-09-14T12:30:00Z",
      "rows": [{"chapter_id": 12}, {"chapter_id": 13}, {"chapter_id": 14}]}
 
+**Three reviewers, one group.** A cohort is identified by its slot. Everyone
+who pushes for the same slot is in the same group, whoever they are and
+whichever subject they filtered — which is what makes the three reviewers'
+chapters share waves instead of forming three narrower ones. Push before the
+slot arrives; a push after it starts immediately and may miss the group's
+first batches.
+
 **What happens then.** Each chapter runs the same seventy to a hundred
 sequential seams it always ran. At each seam the broker collects every
 request the cohort produced, submits them as one batch, and answers each
