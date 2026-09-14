@@ -2303,6 +2303,19 @@ def _graph_block_text(
         resolved = str(override.get("resolved_text") or "")
         if override.get("resolved_sha256") == _sha256_text(resolved):
             return resolved
+    # A rich-text repair may legitimately resolve to NOTHING: the commonest
+    # real defect is a block whose entire content is a stray display-math
+    # closer, and its only faithful repair is to emit nothing (register Q74).
+    # The truthy branch above cannot express that, so suppression is its own
+    # branch — still hash-pinned, so an empty resolution is as tamper-evident
+    # as any other.
+    if (
+        isinstance(override, dict)
+        and override.get("mode") == _REPAIR_MODE
+        and override.get("suppressed") is True
+        and override.get("resolved_sha256") == _sha256_text("")
+    ):
+        return ""
     source = canonical_block or {}
     return str(source.get("display_text") or source.get("raw_text") or "")
 
@@ -2752,6 +2765,207 @@ def _critic_source_anomaly_via_openai(
         purpose="advisory_critic",
         max_tokens=4000,
     )
+
+
+# --------------------------------------------------------------------------- #
+# The rich-text repair (register Q74)
+# --------------------------------------------------------------------------- #
+#
+# ``validate_graph`` refuses a graph whose semantic source carries non-canonical
+# rich text, and until Q74 nothing could repair it. The converter lane above
+# selects a DIFFERENT verified page block, which cannot help here: the MMD was
+# rendered from those same page blocks, so the defect lives in the block's own
+# transcription and every candidate carries it. Two owner chapters died that
+# way (BLK-00312, BLK-00348).
+#
+# So this lane adds the one move the defect needs — the model re-expresses the
+# block's text in the canonical form, with the verified page evidence in hand —
+# behind the same independent critic and SOURCE_CRITICAL floor the selector
+# uses. It runs INSIDE Phase 3, whose caches are job-scoped, so no page is
+# re-read and no already-converted PDF is touched (the owner's constraint of
+# 14 September 2026).
+#
+# The acceptance gates below are what make this safe to do at all: this is the
+# first place in the source lane where a model produces source BYTES rather
+# than selecting an opaque evidence id.
+
+#: A repair that changes nothing but the refused markup. Every token the block
+#: already carried must survive, so a fluent paraphrase is refused even when it
+#: is canonical.
+_REPAIR_MODE = "api_canonicalized_rich_text"
+
+
+def _rich_text_repair_schema() -> dict[str, Any]:
+    """Every declared property is required: OpenAI refuses the whole request
+    with 400 ``invalid_schema`` otherwise, and no retry or Fixer can help
+    (register Q61)."""
+    return {
+        "name": "aegis_phase3_rich_text_repair",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["canonicalize", "suppress", "review_required"],
+                },
+                "canonical_text": {"type": "string"},
+                "suppressed": {"type": "boolean"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reason": {"type": "string"},
+            },
+            "required": [
+                "decision", "canonical_text", "suppressed", "confidence",
+                "reason",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _rich_text_repair_critic_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_rich_text_repair_verification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string", "enum": ["verified", "rejected"],
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+            "required": ["verdict", "confidence", "issues", "reason"],
+            "additionalProperties": False,
+        },
+    }
+
+
+_REPAIR_SYSTEM = (
+    "You are the Aegis source rich-text canonicalizer. One ACSD block's text "
+    "carries markup the Aegis rich-text contract refuses, and the block is "
+    "shown to you beside the original PDF pages it was transcribed from. "
+    "Re-express THAT SAME CONTENT in the canonical form.\n\n"
+    "This is a transcription repair, never an edit. Preserve every word, "
+    "number, symbol, unit and URL the block already carries, in its order. Do "
+    "not summarise, rephrase, complete, correct or extend the source. Do not "
+    "invent a caption, a table cell or an asset URL. If the printed page and "
+    "the block disagree, follow the page.\n\n"
+    "Choose 'suppress' only when the block's entire content is refused markup "
+    "carrying no readable text at all — a stray display-math closer, for "
+    "instance — so that the correct repair is to emit nothing. Choose "
+    "'review_required' whenever you cannot do this faithfully; a refused "
+    "repair is recorded honestly and costs far less than a plausible rewrite."
+)
+
+_REPAIR_CRITIC_SYSTEM = (
+    "You are the independent Aegis rich-text repair verifier. You are given "
+    "one ACSD block's original text, a proposed canonical re-expression, and "
+    "the original PDF pages. Verify that the proposal says exactly what the "
+    "source says — same words, numbers, symbols, units and URLs, same order — "
+    "and that it adds nothing and drops nothing. Reject a fluent paraphrase, a "
+    "completed sentence, a corrected fact, an invented caption, or any change "
+    "of meaning, however small, even when the result is canonical. Verifying "
+    "an unfaithful repair is worse than refusing a faithful one."
+)
+
+
+def _repair_rich_text_via_openai(
+    packet: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    prompt = json.dumps({
+        key: value for key, value in packet.items()
+        if key != "candidate_page_numbers"
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=_REPAIR_SYSTEM,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_rich_text_repair_schema(),
+        purpose="source_adjudication",
+        max_tokens=6000,
+    )
+
+
+def _critic_rich_text_repair_via_openai(
+    packet: dict[str, Any], proposal: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    prompt = json.dumps({
+        "packet": {
+            key: value for key, value in packet.items()
+            if key != "candidate_page_numbers"
+        },
+        "proposal": proposal,
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=_REPAIR_CRITIC_SYSTEM,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_rich_text_repair_critic_schema(),
+        purpose="advisory_critic",
+        max_tokens=4000,
+    )
+
+
+#: Markup whose own words are not content. Stripped from BOTH sides before the
+#: comparison below, because a repair's whole job is to remove markup — and
+#: ``\\textbf``, ``[Katex]`` and ``<table>`` all contain word-shaped tokens that
+#: would otherwise read as content the repair "lost".
+_MARKUP_WORDS_RE = re.compile(
+    r"\\[A-Za-z]+|\[/?Katex\]|</?[A-Za-z][^>]*>"
+)
+
+
+def _visible_tokens(text: str) -> set[str]:
+    return _source_tokens(_MARKUP_WORDS_RE.sub(" ", text))
+
+
+def _repair_is_faithful(before: str, after: str) -> str:
+    """Empty when the repair may be accepted, else the reason it may not.
+
+    This is mechanics, not judgment: it compares two texts for the words,
+    digits and URLs they contain. It never decides what the source MEANS — the
+    model did that, and an independent critic checked it — it only declines a
+    repair that lost or gained content, which is exactly how a fluent,
+    canonical-looking paraphrase would fail.
+
+    Both sides are compared with markup words stripped. Comparing raw tokens
+    would refuse every legitimate repair, since removing ``\\textbf{bold}`` in
+    favour of ``bold`` "loses" the token ``textbf``.
+    """
+    if kr.rich_text_issues(_clean_public_text(after)):
+        return "the proposed text is still refused by the rich-text contract"
+    before_words = _visible_tokens(before)
+    after_words = _visible_tokens(after)
+    lost = before_words - after_words
+    if lost:
+        return (
+            "the proposed text drops "
+            + ", ".join(sorted(lost)[:5])
+            + " from the source"
+        )
+    gained = after_words - before_words
+    if gained:
+        return (
+            "the proposed text adds "
+            + ", ".join(sorted(gained)[:5])
+            + " that the source does not carry"
+        )
+    before_digits = re.findall(r"\d", before)
+    after_digits = re.findall(r"\d", after)
+    if sorted(before_digits) != sorted(after_digits):
+        return "the proposed text changes the digits the source carries"
+    before_urls = set(re.findall(r"https://[^\s)\]]+", before))
+    after_urls = set(re.findall(r"https://[^\s)\]]+", after))
+    if before_urls != after_urls:
+        return "the proposed text changes the URLs the source carries"
+    return ""
 
 
 def _page_and_block_by_key(
@@ -3251,6 +3465,221 @@ def _interpret_custom_source_instruction_via_openai(
     )
 
 
+def _repair_rich_text_blocks(
+    out: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    source_path: Path | None,
+    allow_automatic_reconciliation: bool,
+    repair_provider: Any | None = None,
+    repair_critic: Any | None = None,
+) -> list[str]:
+    """Repair the blocks ``validate_graph`` refuses for non-canonical rich text.
+
+    Returns the block ids it could not repair. Mutates ``out`` in place: every
+    accepted repair becomes a hash-pinned ``source_override``, and every
+    refusal becomes a recorded warning naming the block and the gate that
+    stopped it — never a silent pass.
+
+    Targets come from ``_rich_text_issue_block_ids``, which is the SAME
+    function ``validate_graph`` uses to name the blocks on its error. The gate
+    tells the repair lane what it rejected; nothing here decides for itself
+    what counts as a defect, which is strictly less heuristic than the keyword
+    vocabulary the converter lane selects with.
+    """
+    targets = _rich_text_issue_block_ids(out, canonical=canonical)
+    if not targets:
+        return []
+    if not allow_automatic_reconciliation:
+        # An unattended run may not spend here; the pause is the contract.
+        return targets
+    if not isinstance(page_bundle, dict) or source_path is None:
+        # A text upload (.mmd/.md/.txt) has no page evidence, so there is
+        # nothing to repair AGAINST. Refusing honestly is the only option:
+        # canonicalising from the defective text alone is exactly the
+        # invention these gates exist to prevent.
+        return targets
+
+    provider = repair_provider
+    critic = repair_critic
+    if provider is None or critic is None:
+        if not semantic_api_enabled():
+            return targets
+        path = Path(source_path)
+        provider = provider or (
+            lambda packet: _repair_rich_text_via_openai(packet, source_path=path)
+        )
+        critic = critic or (
+            lambda packet, proposal: _critic_rich_text_repair_via_openai(
+                packet, proposal, source_path=path
+            )
+        )
+
+    canonical_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    graph_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in out.get("blocks") or [] if isinstance(row, dict)
+    }
+    source_chars = int((canonical.get("document") or {}).get("source_chars") or 0)
+
+    accepted: dict[str, dict[str, Any]] = {}
+    refusals: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+
+    for block_id in targets:
+        canonical_block = canonical_blocks.get(block_id)
+        graph_block = graph_blocks.get(block_id)
+        if not isinstance(canonical_block, dict) or not isinstance(graph_block, dict):
+            unresolved.append(block_id)
+            continue
+        before = _graph_block_text(graph_block, canonical_block)
+        packet = _candidate_anomaly_packet(
+            canonical_block,
+            page_bundle=page_bundle,
+            source_chars=max(1, source_chars),
+        )
+        packet["refused_block_text"] = before
+        packet["rich_text_issues"] = list(
+            kr.rich_text_issues(_clean_public_text(before))
+        )
+
+        def _refuse(gate: str, detail: str) -> None:
+            unresolved.append(block_id)
+            refusals.append({
+                "block_id": block_id, "gate": gate, "detail": detail,
+            })
+
+        # A repair that cannot run must REFUSE, never raise. The evidence pages
+        # are loaded inside the provider, so an unreadable or absent PDF, a
+        # provider outage or a malformed response would otherwise take down a
+        # run that was about to record an honest pause — turning a recoverable
+        # refusal into a crash. Q13: nothing is guessed silently, and finished
+        # work always ships.
+        try:
+            proposal = provider(copy.deepcopy(packet))
+        except Exception as exc:  # noqa: BLE001 — any failure is a refusal
+            _refuse("author", f"the repair author could not run: {exc}")
+            continue
+        if not isinstance(proposal, dict):
+            _refuse("author", "the repair author returned no decision")
+            continue
+        decision = str(proposal.get("decision") or "")
+        if decision == "review_required":
+            _refuse("author", str(proposal.get("reason") or
+                                  "the repair author asked for review"))
+            continue
+        if decision not in {"canonicalize", "suppress"}:
+            _refuse("author", f"unknown repair decision {decision!r}")
+            continue
+        if not confidence_policy.accepts(
+            proposal.get("confidence"),
+            confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+        ):
+            _refuse("author_confidence",
+                    f"{float(proposal.get('confidence') or 0.0):.3f} is below "
+                    "the source-critical floor")
+            continue
+
+        suppressed = decision == "suppress"
+        after = "" if suppressed else str(proposal.get("canonical_text") or "")
+        # Non-empty text XOR suppression: a "canonicalize" that resolves to
+        # nothing, or a "suppress" carrying text, is a contradiction and the
+        # graph must not record either.
+        if suppressed and str(proposal.get("canonical_text") or "").strip():
+            _refuse("shape", "a suppressed block may not carry canonical text")
+            continue
+        if not suppressed and not after.strip():
+            _refuse("shape", "a canonicalized block may not resolve to nothing")
+            continue
+
+        if suppressed:
+            # Suppression is only ever correct for a block that carries no
+            # readable content at all — a stray display-math closer, say. A
+            # block with words in it must be re-expressed, never deleted.
+            if _source_tokens(before):
+                _refuse(
+                    "suppression",
+                    "the block carries readable text and cannot be suppressed",
+                )
+                continue
+        else:
+            unfaithful = _repair_is_faithful(before, after)
+            if unfaithful:
+                _refuse("faithfulness", unfaithful)
+                continue
+
+        try:
+            verification = critic(copy.deepcopy(packet), copy.deepcopy(proposal))
+        except Exception as exc:  # noqa: BLE001 — an unverified repair is refused
+            _refuse("critic", f"the independent critic could not run: {exc}")
+            continue
+        if (
+            not isinstance(verification, dict)
+            or verification.get("verdict") != "verified"
+            or bool(verification.get("issues"))
+            or not confidence_policy.accepts(
+                verification.get("confidence"),
+                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+            )
+        ):
+            issues = "; ".join(
+                str(value).strip()
+                for value in list((verification or {}).get("issues") or [])[:4]
+                if str(value).strip()
+            ) if isinstance(verification, dict) else ""
+            _refuse(
+                "critic",
+                f"independent critic verdict "
+                f"{str((verification or {}).get('verdict') or 'missing')!r} at "
+                f"{float((verification or {}).get('confidence') or 0.0):.3f}"
+                + (f" — {issues}" if issues else ""),
+            )
+            continue
+
+        accepted[block_id] = {
+            "mode": _REPAIR_MODE,
+            "canonical_block_raw_sha256": str(
+                canonical_block.get("raw_sha256") or _sha256_text(before)
+            ),
+            "resolved_text": after,
+            "resolved_sha256": _sha256_text(after),
+            "suppressed": suppressed,
+            "repair_confidence": float(proposal.get("confidence") or 0.0),
+            "verification_confidence": float(verification.get("confidence") or 0.0),
+        }
+
+    # All or none. A partially repaired graph is strictly worse than an
+    # unrepaired one: the render would mix repaired and refused blocks and the
+    # gate would still refuse, having spent for it.
+    if unresolved:
+        issues = list(out.get("issues") or [])
+        for refusal in refusals:
+            issues.append({
+                "code": "semantic_source_rich_text_repair_refused",
+                "severity": "warning",
+                "block_ids": [refusal["block_id"]],
+                "message": (
+                    f"Rich-text repair refused for {refusal['block_id']} at the "
+                    f"{refusal['gate']} gate: {refusal['detail']}"
+                ),
+            })
+        out["issues"] = issues
+        out["rich_text_repairs"] = []
+        return unresolved
+
+    for block_id, override in accepted.items():
+        graph_blocks[block_id]["source_override"] = override
+    out["rich_text_repairs"] = [
+        {"block_id": block_id, "suppressed": bool(override["suppressed"])}
+        for block_id, override in accepted.items()
+    ]
+    return []
+
+
 def reconcile_source_anomalies(
     graph: dict[str, Any],
     *,
@@ -3279,6 +3708,19 @@ def reconcile_source_anomalies(
         str(row.get("block_id") or ""): row
         for row in canonical.get("blocks") or [] if isinstance(row, dict)
     }
+    # The rich-text repair runs FIRST and in place, so every path below — the
+    # converter lane, the re-render, the re-validation and the status
+    # derivation — sees the repaired graph and needs no change (register Q74).
+    # It is deliberately independent of ``_SUSPICIOUS_MARKUP_RE``: that regex
+    # names six chemistry/MathML tags, and a stray "$" or an unbalanced
+    # "[Katex]" never reached the lane at all.
+    _repair_rich_text_blocks(
+        out,
+        canonical=canonical,
+        page_bundle=page_bundle,
+        source_path=source_path,
+        allow_automatic_reconciliation=allow_automatic_reconciliation,
+    )
     suspicious_ids = [
         str(block.get("block_id") or "")
         for block in out.get("blocks") or []

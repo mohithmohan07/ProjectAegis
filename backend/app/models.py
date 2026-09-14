@@ -32,23 +32,41 @@ GENERATION_RECOVERY_INVENTORY_KEY = "_aegis_generation_recovery"
 _LEGACY_NON_RESUMABLE_LOG_MESSAGE_SHA256S = frozenset({
     "06f959ce6f1d877d79b3d78ec07e2e05ec4a1f136acfa18df3b082b8e96d3a94",
 })
-# The remedy this names must be one that WORKS. It used to say "start a new
-# upload with the PDF and let Aegis convert it again", and that is a paid
-# replay: the sealed page bundle is cached on
+# The remedy this names must be one that WORKS, and it has changed twice as the
+# facts came in.
+#
+# It first said "start a new upload with the PDF and let Aegis convert it
+# again". That was wrong: the sealed page bundle is cached on
 # ``canonical_source_phase221_fallback._bundle_cache_key`` — fallback version,
 # compiler, ingestion contract, model, ROUTING PROFILE and ``pdf_sha256``, with
-# no job id — so identical bytes return the identical ledger ("no model batches
-# were replayed"), the MMD renders deterministically from it, and the run dies
-# at the same block. Meanwhile the Phase 3 hierarchy cache IS job-scoped, so the
-# new job re-pays that whole pass first. Two owner chapters were lost this way.
+# NO job id — so identical bytes returned the identical ledger ("no model
+# batches were replayed"), the MMD rendered deterministically from it, and the
+# run died at the same block, after the job-scoped Phase 3 hierarchy cache had
+# made the new job re-pay that whole pass. Two owner chapters were lost that way.
+#
+# Those cache mechanics are still exactly true. What register Q74 changes is the
+# LAST link: Phase 3 now attempts one recorded, independently verified repair of
+# the refused block against the verified page evidence
+# (``canonical_source_phase3._repair_rich_text_blocks``). The pages are still not
+# re-read — and the run no longer has to die where it died before.
+#
+# Resume is deliberately NOT offered here and the message must not suggest it.
+# By the time this raise fires the repair lane has ALREADY run in this very run
+# (it sits ahead of the validation that produced this pending), so the refusal
+# is its verdict and a resume would only reach the same one. What changes is the
+# RE-UPLOAD: a new job re-runs Phase 3 from the cached pages, and the block that
+# has never been repaired-at now gets its attempt.
 _Q24_RECOVERY_MESSAGE = (
-    "Do not resume this saved checkpoint, and do not re-upload the same PDF: "
-    "the verified page conversion is cached against the file's own contents, "
-    "so identical bytes replay the identical refusal after paying for the "
-    "hierarchy pass again. Correct the named block in the source document and "
-    "upload the CORRECTED file (different contents convert afresh), or upload "
-    "the chapter as text (.mmd/.md/.txt), which is read verbatim with no page "
-    "reader — at the cost of the figures a PDF would have carried."
+    "Upload the same PDF again. Aegis now attempts one independently verified "
+    "repair of the refused block against the original page evidence, so a "
+    "fresh run can get past this block; its page conversion is served from "
+    "cache, so no page is read again and only this chapter's own semantic pass "
+    "is repeated. Do not resume this saved checkpoint - its repair has already "
+    "been attempted and refused, and the recorded reason names the block and "
+    "the gate that stopped it. If a fresh run refuses the same block again, "
+    "correct that block in the source document, or upload the chapter as text "
+    "(.mmd/.md/.txt), which is read verbatim with no page reader - at the cost "
+    "of the figures a PDF would have carried."
 )
 
 
