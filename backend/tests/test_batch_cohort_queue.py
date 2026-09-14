@@ -176,3 +176,21 @@ def test_publish_and_an_ordinary_push_carry_no_cohort():
     slot = dt(2026, 9, 14, 12, 30)
     assert api._cohort_id_for(step="publish", cohort=True, start_after=slot) == ""
     assert api._cohort_id_for(step="step01", cohort=False, start_after=slot) == ""
+
+
+def test_a_cohort_runs_far_fewer_master_builds_than_step01s(monkeypatch):
+    """A Master build is the memory-heavy step and this machine has died of
+    that pressure before (Q57). Narrowing it costs latency, not price: the
+    batch rate is per request, not per wave."""
+    monkeypatch.setenv("AEGIS_QUEUE_COHORT_CONCURRENCY", "6")
+    monkeypatch.setenv("AEGIS_QUEUE_COHORT_MASTERS", "2")
+    monkeypatch.setattr(chapter_queue_worker, "_volume_can_hold_a_master_batch",
+                        lambda: True)
+    worker = chapter_queue_worker.ChapterQueueWorker(lambda: None)
+
+    worker._in_flight = {1: "step02", 2: "step02"}
+    assert worker.admits("step02", cohort=True) is False, "two Masters is the cap"
+    # ...while Step 01s keep flowing into the same cohort up to its own width.
+    assert worker.admits("step01", cohort=True) is True
+    worker._in_flight = {1: "step02"}
+    assert worker.admits("step02", cohort=True) is True

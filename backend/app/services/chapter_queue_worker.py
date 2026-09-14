@@ -93,6 +93,18 @@ def cohort_concurrency() -> int:
     return max(1, _int_env("AEGIS_QUEUE_COHORT_CONCURRENCY", 6))
 
 
+def cohort_masters() -> int:
+    """How many COHORT Step 02s may build at once (register Q73).
+
+    Deliberately far below ``cohort_concurrency``: a Master build holds two
+    lanes and their workbook buffers resident, and this machine has already
+    died of that pressure once (Q57). Narrowing it slows a cohort's Step 02
+    down; it does not make it dearer, because the batch rate is charged per
+    request and not per wave. Raise it only with memory to match.
+    """
+    return max(1, _int_env("AEGIS_QUEUE_COHORT_MASTERS", 2))
+
+
 def provider_reserve() -> int:
     """Slots never given to the queue, so a person can still run something."""
     return _int_env("AEGIS_QUEUE_PROVIDER_RESERVE", 16)
@@ -298,10 +310,20 @@ class ChapterQueueWorker:
             # with it, which is the entire saving. Its requests queue at the
             # provider, so the fan-out budget below does not apply — only
             # this machine's own capacity does.
-            if len([1 for value in generation]) >= cohort_concurrency():
+            if len(generation) >= cohort_concurrency():
                 return False
-            if kind == "step02" and not _volume_can_hold_a_master_batch():
-                return False
+            if kind == "step02":
+                # A Master build is the memory-heavy step: two lanes, the
+                # reviewed workbook and every buffer they need, all resident.
+                # This machine has already died of exactly that pressure
+                # (register Q57), so Master builds stay far narrower than the
+                # cohort even inside one — which costs latency, never price:
+                # the batch rate is per request, not per wave.
+                masters = [value for value in generation if value == "step02"]
+                if len(masters) >= cohort_masters():
+                    return False
+                if not _volume_can_hold_a_master_batch():
+                    return False
             return True
         if len(generation) >= max_concurrent_runs():
             return False

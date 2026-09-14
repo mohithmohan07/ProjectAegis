@@ -5066,7 +5066,11 @@ workbook.
 
 **Admission.** A cohort task is bounded by `AEGIS_QUEUE_COHORT_CONCURRENCY`
 (6) rather than by the synchronous fan-out budget, because its requests queue
-at the provider rather than on this machine. Narrow the cohort and the waves
+at the provider rather than on this machine. A cohort **Step 02** is bounded
+much more tightly again, by `AEGIS_QUEUE_COHORT_MASTERS` (2): a Master build
+holds two lanes and their workbook buffers resident and this machine has
+already died of that pressure (Q57). Narrowing it costs latency, never price —
+the batch rate is charged per request, not per wave. Narrow the cohort and the waves
 narrow with it, which is the whole saving. The volume pre-check on a Step 02
 still applies, and a synchronous fallback still takes an ordinary provider
 slot — the gate is not removed, it is stepped around only for work that is

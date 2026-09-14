@@ -364,7 +364,12 @@ caller from the result. A wave closes when the cohort has been quiet for
 
 **Capacity.** A cohort is bounded by `AEGIS_QUEUE_COHORT_CONCURRENCY`
 (default 6) rather than by the synchronous fan-out budget, because its
-requests queue at the provider rather than on this machine. Narrow the
+requests queue at the provider rather than on this machine. Push more than
+that and the extras wait their turn inside the same group. A cohort **Step
+02** is capped separately and much lower by `AEGIS_QUEUE_COHORT_MASTERS`
+(default 2), because a Master build is the memory-heavy step; that slows a
+group's Master stage without making it dearer, since the batch rate is per
+request. Narrow the
 cohort and the waves narrow with it, which is the whole saving — so raise
 this knob only with machine headroom to match. Publish is never a cohort
 step: it spends nothing and serializes on one workbook.
