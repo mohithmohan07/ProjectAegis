@@ -5009,8 +5009,12 @@ count stands: a chapter resolves into 70–100 sequential waves and that number
 does not shrink with volume. What scales is the WIDTH of a wave — which is
 exactly what a cohort buys.
 
-**`app/services/batch_broker.py`** is the seam, at the one place every model
-call already passes through (`generation.py`'s `client.chat.completions.create`).
+**`app/services/batch_broker.py`** is the seam, and `generation.batched_completion`
+is the one door every provider call in the app goes through — the main
+generation call and BOTH source-reading paths (`canonical_source_phase22`,
+`canonical_source_phase34_structured_output_contract`). A cohort therefore
+pays the batch price for its WHOLE run, source read included; a test pins
+that a new client cannot appear without going through the same door.
 A cohort run binds a broker; every request body arriving while the cohort is
 at the same seam is collected, submitted as one batch, and answered from its
 result. The body is unchanged, so everything downstream — usage recording,

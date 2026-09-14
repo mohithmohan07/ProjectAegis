@@ -3022,6 +3022,41 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
         ) from exc
 
 
+def batched_completion(body: Mapping[str, Any], *, provider: str):
+    """Answer one request body from the cohort's wave, or return ``None``.
+
+    ``None`` means "make the ordinary call you were going to make": this run
+    is not in a cohort, the route is not OpenAI, or the wave could not answer
+    in time. Every provider call in the app goes through this one door, so a
+    cohort is billed at the batch price for its WHOLE run — the source read
+    included — and a lone run is untouched.
+
+    A batched wait deliberately does not hold a synchronous provider slot:
+    the request is queued at the provider, and holding the gate would stall
+    the machine for the length of the wave.
+    """
+    broker = batch_broker.bound() if provider == "openai" else None
+    if broker is None:
+        return None
+    openai_usage.record_service_started()
+    try:
+        response = _chat_completion_from_body(broker.call(body))
+    except batch_broker.BatchUnavailable as exc:
+        progress.log(
+            f"Batch wave unavailable ({exc}); making the ordinary request "
+            "for this one.",
+            level="info",
+        )
+        return None
+    except BaseException as exc:
+        openai_usage.record_attempt_outcome("provider_error", error=exc)
+        raise
+    finally:
+        openai_usage.record_service_ended()
+    openai_usage.record_batched_attempt()
+    return response
+
+
 def _explicit_prompt_cache_request(
     *,
     system: str,
@@ -3233,27 +3268,7 @@ def _openai_json(
                 # a synchronous provider slot — the request is queued at the
                 # provider, and holding the gate would stall the whole machine
                 # for the length of the wave.
-                broker = (
-                    batch_broker.bound() if route.provider == "openai" else None
-                )
-                batched = False
-                resp = None
-                if broker is not None:
-                    openai_usage.record_service_started()
-                    try:
-                        resp = _chat_completion_from_body(broker.call(request_body))
-                        batched = True
-                    except batch_broker.BatchUnavailable as exc:
-                        progress.log(
-                            f"Batch wave unavailable ({exc}); making the ordinary "
-                            "request for this one.",
-                            level="info",
-                        )
-                    except BaseException as exc:
-                        openai_usage.record_attempt_outcome("provider_error", error=exc)
-                        raise
-                    finally:
-                        openai_usage.record_service_ended()
+                resp = batched_completion(request_body, provider=route.provider)
                 if resp is None:
                     _acquire_openai_slot(gate, purpose=purpose)
                     openai_usage.record_service_started()
@@ -3265,8 +3280,6 @@ def _openai_json(
                     finally:
                         openai_usage.record_service_ended()
                         _release_openai_slot(gate)
-                if batched:
-                    openai_usage.record_batched_attempt()
                 # Record before finish-reason/JSON validation: responses retried for
                 # truncation or malformed JSON are still billable.
                 try:

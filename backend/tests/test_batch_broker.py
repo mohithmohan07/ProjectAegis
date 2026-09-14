@@ -323,3 +323,36 @@ def test_the_binding_reaches_the_stage_fan_out_workers(tmp_path):
         )
     assert seen == [broker, broker, broker]
     broker.stop()
+
+
+def test_every_provider_call_path_goes_through_the_one_door(tmp_path):
+    """A cohort is billed at the batch price for its WHOLE run.
+
+    Three modules build an OpenAI client: the main generation call and the
+    two source-reading paths. If a new one appears without going through
+    ``generation.batched_completion``, a cohort would silently pay the
+    synchronous price for part of its run — the exact defect this pins.
+    """
+    import pathlib
+    import re
+
+    from app.services import generation
+
+    root = pathlib.Path(generation.__file__).parent
+    builders = {
+        path.name
+        for path in root.rglob("*.py")
+        if re.search(r"^\s*(client\s*=\s*)?OpenAI\(", path.read_text(encoding="utf-8"),
+                     re.MULTILINE)
+    }
+    # The queue worker builds one for the BATCH endpoint itself, which is the
+    # far side of the door rather than a caller of it.
+    callers = builders - {"chapter_queue_worker.py"}
+    assert callers == {
+        "generation.py",
+        "canonical_source_phase22.py",
+        "canonical_source_phase34_structured_output_contract.py",
+    }, callers
+    for name in callers:
+        text = (root / name).read_text(encoding="utf-8")
+        assert "batched_completion" in text, f"{name} bypasses the wave"
