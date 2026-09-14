@@ -356,3 +356,53 @@ def test_every_provider_call_path_goes_through_the_one_door(tmp_path):
     for name in callers:
         text = (root / name).read_text(encoding="utf-8")
         assert "batched_completion" in text, f"{name} bypasses the wave"
+
+
+# --------------------------------------------------------------------------- #
+# A retry must not be answered from the store
+# --------------------------------------------------------------------------- #
+
+def test_a_retry_asks_the_provider_again_instead_of_replaying_a_bad_answer(tmp_path):
+    """The caller's retry loop replays a BYTE-IDENTICAL body.
+
+    ``messages``, ``response_format`` and the token limit are all built once
+    above ``_generate``'s loop, so a truncated or schema-failing completion
+    hashes to the same request as its retry. Answering that retry from the
+    content-addressed store hands it the same bad bytes — and the record is
+    durable on the volume, so it would answer every future run that builds the
+    same body too. Synchronously the replay is a fresh sample; batched it has
+    to be one as well.
+    """
+    body = _body("retried")
+    sha = bb.request_sha256(body)
+    api = FakeApi(answers={sha: _completion("truncated")})
+    broker = _broker(tmp_path, api)
+
+    assert broker.call(body)["choices"][0]["message"]["content"] == "truncated"
+    assert len(api.submissions) == 1
+
+    # The ordinary path still answers from the store — that is the saving.
+    assert broker.call(body)["choices"][0]["message"]["content"] == "truncated"
+    assert len(api.submissions) == 1
+
+    # ...and the retry does not: it forms a new wave and asks again.
+    api.answers[sha] = _completion("good")
+    assert broker.call(body, fresh=True)["choices"][0]["message"]["content"] == "good"
+    assert len(api.submissions) == 2, "a retry must reach the provider"
+    broker.stop()
+
+
+def test_a_healed_answer_serves_every_later_caller(tmp_path):
+    """The store is content-addressed, so a successful retry overwrites the
+    failure under the same hash and the poisoning ends there."""
+    body = _body("healed")
+    sha = bb.request_sha256(body)
+    api = FakeApi(answers={sha: _completion("truncated")})
+    broker = _broker(tmp_path, api)
+    broker.call(body)
+    api.answers[sha] = _completion("good")
+    broker.call(body, fresh=True)
+
+    assert broker.call(body)["choices"][0]["message"]["content"] == "good"
+    assert len(api.submissions) == 2, "the healed answer is served, not re-bought"
+    broker.stop()

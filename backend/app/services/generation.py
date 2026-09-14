@@ -3022,7 +3022,7 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
         ) from exc
 
 
-def batched_completion(body: Mapping[str, Any], *, provider: str):
+def batched_completion(body: Mapping[str, Any], *, provider: str, fresh: bool = False):
     """Answer one request body from the cohort's wave, or return ``None``.
 
     ``None`` means "make the ordinary call you were going to make": this run
@@ -3040,7 +3040,7 @@ def batched_completion(body: Mapping[str, Any], *, provider: str):
         return None
     openai_usage.record_service_started()
     try:
-        response = _chat_completion_from_body(broker.call(body))
+        response = _chat_completion_from_body(broker.call(body, fresh=fresh))
     except batch_broker.BatchUnavailable as exc:
         progress.log(
             f"Batch wave unavailable ({exc}); making the ordinary request "
@@ -3268,7 +3268,15 @@ def _openai_json(
                 # a synchronous provider slot — the request is queued at the
                 # provider, and holding the gate would stall the whole machine
                 # for the length of the wave.
-                resp = batched_completion(request_body, provider=route.provider)
+                resp = batched_completion(
+                    request_body, provider=route.provider,
+                    # A hard failure (truncation, invalid JSON, a schema
+                    # refusal) retries with the identical body. Reading
+                    # the stored answer would replay the same failure to
+                    # exhaustion, so every attempt after the first asks
+                    # the provider again.
+                    fresh=attempt > 0,
+                )
                 if resp is None:
                     _acquire_openai_slot(gate, purpose=purpose)
                     openai_usage.record_service_started()

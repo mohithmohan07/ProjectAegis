@@ -257,6 +257,11 @@ class _Waiter:
     event: threading.Event = field(default_factory=threading.Event)
     response: dict[str, Any] | None = None
     failed: str = ""
+    #: A caller rejected the stored answer and asked the provider again, so
+    #: this line's result REPLACES the record rather than being dropped by the
+    #: harvest's write-once guard. Without it the store would keep serving the
+    #: rejected completion to every future run that builds the same body.
+    fresh: bool = False
 
 
 class BatchBroker:
@@ -303,19 +308,37 @@ class BatchBroker:
         self._dispatcher = None
 
     # -- the call ----------------------------------------------------------
-    def call(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        """Answer one request body, or raise ``BatchUnavailable``."""
-        sha = request_sha256(body)
-        cached = self._store.response(sha)
-        if cached is not None:
-            return dict(cached.get("body") or {})
+    def call(self, body: Mapping[str, Any], *, fresh: bool = False) -> dict[str, Any]:
+        """Answer one request body, or raise ``BatchUnavailable``.
 
-        waiter = _Waiter(sha=sha, body=dict(body))
+        ``fresh`` skips the stored answer and asks the provider again. The
+        caller's retry loop replays a BYTE-IDENTICAL body — ``messages``,
+        ``response_format`` and the token limit are all built once, above the
+        loop — so a truncated or schema-failing completion hashes to the same
+        request, and without this the store would hand every remaining attempt
+        the same bad bytes. Synchronously that replay is a fresh sample and can
+        succeed; the store must not be what takes that away. Worse, the record
+        is durable on the volume, so one bad completion would answer every
+        FUTURE run that builds the same body.
+
+        A successful retry overwrites the record under the same hash, so the
+        store heals rather than staying poisoned.
+        """
+        sha = request_sha256(body)
+        if not fresh:
+            cached = self._store.response(sha)
+            if cached is not None:
+                return dict(cached.get("body") or {})
+
+        waiter = _Waiter(sha=sha, body=dict(body), fresh=fresh)
         with self._lock:
             existing = self._pending.get(sha)
             if existing is not None:
                 # Two threads asking the identical question is one line.
                 waiter = existing
+                # ...and if either of them rejected the stored answer, the
+                # line's result replaces it.
+                waiter.fresh = waiter.fresh or fresh
             else:
                 self._pending[sha] = waiter
                 now = self._clock()
@@ -472,7 +495,13 @@ class BatchBroker:
                 if waiter is not None:
                     self._release([waiter], failure=f"batch line failed ({status_code or 'error'})")
                 continue
-            if self._store.response(sha) is None:
+            # Write-once, so recovering an OLD wave late cannot overwrite a
+            # newer answer with the stale one it was carrying. A waiter that
+            # asked for a fresh sample is the exception: it rejected what is
+            # stored, so its answer is the one that should survive.
+            if self._store.response(sha) is None or (
+                waiter is not None and waiter.fresh
+            ):
                 self._store.put_response(sha, body, batch_id=batch_id)
                 stored += 1
             if waiter is not None and not waiter.event.is_set():
