@@ -193,8 +193,8 @@ async def stage_source(
     if current and not current["can"]["upload_source"]:
         raise HTTPException(
             409,
-            "this chapter is busy or cannot be resumed; it cannot take a new "
-            "source file right now",
+            "a step is running for this chapter; it cannot take a new source "
+            "file until that step finishes",
         )
 
     try:

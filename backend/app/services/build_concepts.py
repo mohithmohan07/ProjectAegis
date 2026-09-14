@@ -3194,13 +3194,11 @@ def _raise_dead_end_rich_text_settlement(pending: dict) -> None:
     settlement: the run cannot complete usefully, and the honest fast
     failure names the cure.
     """
-    recovery_message = (
-        "Do not resume this saved checkpoint; it will replay the same source "
-        "graph refusal. Start a new upload with the PDF and let Aegis convert "
-        "it again before generation. If the same pause returns after that "
-        "fresh conversion, correct the named block in the source document "
-        "and upload the corrected document."
-    )
+    # One wording, one place: a second copy drifted from the first and told two
+    # different stories about the same dead run.
+    from ..models import _Q24_RECOVERY_MESSAGE
+
+    recovery_message = _Q24_RECOVERY_MESSAGE
     message = (
         "Unattended generation stopped instead of settling "
         + _decision_identity_text(pending)

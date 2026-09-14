@@ -32,12 +32,23 @@ GENERATION_RECOVERY_INVENTORY_KEY = "_aegis_generation_recovery"
 _LEGACY_NON_RESUMABLE_LOG_MESSAGE_SHA256S = frozenset({
     "06f959ce6f1d877d79b3d78ec07e2e05ec4a1f136acfa18df3b082b8e96d3a94",
 })
+# The remedy this names must be one that WORKS. It used to say "start a new
+# upload with the PDF and let Aegis convert it again", and that is a paid
+# replay: the sealed page bundle is cached on
+# ``canonical_source_phase221_fallback._bundle_cache_key`` — fallback version,
+# compiler, ingestion contract, model, ROUTING PROFILE and ``pdf_sha256``, with
+# no job id — so identical bytes return the identical ledger ("no model batches
+# were replayed"), the MMD renders deterministically from it, and the run dies
+# at the same block. Meanwhile the Phase 3 hierarchy cache IS job-scoped, so the
+# new job re-pays that whole pass first. Two owner chapters were lost this way.
 _Q24_RECOVERY_MESSAGE = (
-    "Do not resume this saved checkpoint; it will replay the same source "
-    "graph refusal. Start a new upload with the PDF and let Aegis convert it "
-    "again before generation. If the same pause returns after that fresh "
-    "conversion, correct the named block in the source document and upload "
-    "the corrected document."
+    "Do not resume this saved checkpoint, and do not re-upload the same PDF: "
+    "the verified page conversion is cached against the file's own contents, "
+    "so identical bytes replay the identical refusal after paying for the "
+    "hierarchy pass again. Correct the named block in the source document and "
+    "upload the CORRECTED file (different contents convert afresh), or upload "
+    "the chapter as text (.mmd/.md/.txt), which is read verbatim with no page "
+    "reader — at the cost of the figures a PDF would have carried."
 )
 
 

@@ -968,8 +968,17 @@ def test_rich_text_carry_forward_fails_fast_with_the_named_remedy(monkeypatch):
     assert excinfo.value.resume_allowed is False
     assert excinfo.value.recovery_action == "reconvert_new_upload"
     assert "Do not resume this saved checkpoint" in str(excinfo.value)
-    assert "If the same pause returns" in excinfo.value.recovery_message
-    assert any("Start a new upload" in m for m in logs)
+    # The remedy has to be one that WORKS. "Upload the same PDF again" is a
+    # paid replay: the sealed page bundle is cached on the file's own sha256
+    # with no job id, so identical bytes return the identical ledger and the
+    # run dies at the same block having re-paid the hierarchy pass. What the
+    # message must name is a CORRECTED file, or the text route.
+    assert "do not re-upload the same PDF" in excinfo.value.recovery_message
+    assert "CORRECTED" in excinfo.value.recovery_message
+    assert ".mmd" in excinfo.value.recovery_message
+    assert any("do not re-upload the same PDF" in m for m in logs), (
+        "the logged line carries the same corrected remedy as the exception"
+    )
     # A NON-rich-text pending with the same shape still carries forward
     # through the normal path (it reaches the recorder, which needs a real
     # db/job — reaching it at all proves the guard is scoped).

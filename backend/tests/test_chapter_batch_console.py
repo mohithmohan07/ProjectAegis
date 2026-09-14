@@ -188,6 +188,47 @@ def test_non_resumable_run_is_dead_and_offers_no_retry(session):
     assert projected["state"] == "dead"
     assert projected["can"]["retry"] is False
     assert projected["can"]["step01"] is False
+    # ...and the one action its own message, the usage guide and the contract
+    # all instruct a person to take is OFFERED. Withdrawing it left a dead row
+    # with nothing to press (owner report, 14 September 2026).
+    assert projected["can"]["upload_source"] is True
+
+
+def test_a_dead_row_is_recovered_by_a_new_source_and_keeps_its_history(session):
+    """The recovery is a NEW job, never a resume of the refused checkpoint.
+
+    ``stage_source`` mints one through ``create_post_learning_job``; this pins
+    the projection either side of that, since the whole value of offering the
+    upload is that the row stops being dead once a fresh conversion is staged.
+    """
+    chapter = _chapter(session, code="10CBMA_T06R")
+    dead_job = _job(session, inventory={
+        models.GENERATION_RECOVERY_INVENTORY_KEY: {
+            "resume_allowed": False,
+            "message": "the converted source is unusable",
+            "recovery_action": "reconvert the PDF",
+        },
+    })
+    row = _row(session, chapter, dead_job)
+    session.add(models.ChapterBatchTask(
+        batch_row_id=row.id, kind="step01", state="failed",
+        failure_code="non_resumable",
+    ))
+    session.flush()
+    assert chapter_batches.project_one(session, chapter.id)["state"] == "dead"
+
+    fresh = _job(session)
+    row.previous_job_ids = [int(dead_job.id)]
+    row.job_id = int(fresh.id)
+    session.flush()
+
+    projected = chapter_batches.project_one(session, chapter.id)
+    assert projected["state"] != "dead", (
+        "a fresh conversion carries no refusal, so the row must come back"
+    )
+    assert int(dead_job.id) in list(row.previous_job_ids or []), (
+        "the refused run is filed, never erased"
+    )
 
 
 def test_pending_human_decision_blocks_and_names_itself(session):
