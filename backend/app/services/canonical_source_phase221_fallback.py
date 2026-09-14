@@ -1178,6 +1178,60 @@ def _upgrade_verified_batch_result(
     return upgraded, changed
 
 
+_CORRECTION_HISTORY_CARRIERS = (
+    "previous_result",
+    "page_result",
+    "batch_result",
+)
+_CORRECTION_HISTORY_MAX_DEPTH = 2
+
+
+def _collect_correction_history(
+    result: object,
+    _depth: int = 0,
+) -> list[dict[str, Any]]:
+    """Every correction attempt a batch result carries, nesting included.
+
+    A batch that failed as a group and was then repaired page by page keeps
+    the earlier attempts inside a carrier — ``batch_result``/``page_result``
+    on the Phase 3.4.2 isolation refusal, ``previous_result`` on a salvage
+    return — while its own ``correction_history`` describes only the stage
+    that produced it. Reading the top level alone therefore under-reports
+    what the conversion actually paid for, which is the opposite of what a
+    correction record is for.
+
+    Two levels is the whole shape those contracts can build (an isolation
+    refusal carrying a page result that itself carries the salvage input).
+    The bound is there so a hand-edited or future cache entry cannot make
+    this recurse without limit; a carrier that is not a dict is simply not a
+    result and is skipped, as is a history entry that is not a mapping.
+
+    **No de-duplication, deliberately.** Two entries can be byte-identical
+    and both true: the deterministic validator's refusals are fixed
+    sentences — ``"extractor returned no pages array"`` and ``"extractor
+    page IDs do not exactly match the supplied batch"`` — so the same
+    ``(attempt, stage, reason)`` triple legitimately repeats across pages
+    and across passes. No result produced by this module or by the salvage
+    contract carries both a top-level history and a carrier, so nothing here
+    can ever see one attempt twice; every collapse would therefore delete a
+    distinct retry the run really bought.
+    """
+    if not isinstance(result, dict):
+        return []
+    collected: list[dict[str, Any]] = [
+        copy.deepcopy(entry)
+        for entry in (result.get("correction_history") or [])
+        if isinstance(entry, dict)
+    ]
+    if _depth >= _CORRECTION_HISTORY_MAX_DEPTH:
+        return collected
+    for carrier in _CORRECTION_HISTORY_CARRIERS:
+        collected.extend(
+            _collect_correction_history(result.get(carrier), _depth + 1)
+        )
+    return collected
+
+
 def _canonicalize_outline_render_text_atoms(outline: object) -> bool:
     """Normalize only source-rendering strings duplicated by the outline.
 
@@ -3160,6 +3214,24 @@ def extract_pdf_to_page_acsd(
                 # Only a genuinely unusable transcription (no candidate at
                 # all) stops the source pipeline; residual model disputes
                 # ship under review flags instead.
+                #
+                # Say it in full before raising. Every layer above this one
+                # reshapes and truncates the exception text, and the reason
+                # plus the attempts behind it exist nowhere else once this
+                # frame is gone — a hard stop is exactly the moment an
+                # operator needs the whole of it.
+                progress.log(
+                    f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} "
+                    f"({', '.join(outcome['page_ids'])}) produced no "
+                    "shippable candidate and stops the conversion. Reason: "
+                    f"{result.get('reason') or 'verification failed'}. "
+                    "Correction attempts recorded: "
+                    + json.dumps(
+                        _collect_correction_history(result),
+                        ensure_ascii=False,
+                    ),
+                    level="error",
+                )
                 raise ValueError(
                     f"GPT PDF-to-ACSD batch {batch_index}/{batch_count} "
                     "requires review: "
@@ -3182,6 +3254,9 @@ def extract_pdf_to_page_acsd(
             )
         rows = result.get("pages") or []
         accepted.extend(copy.deepcopy(rows))
+        # ``result`` is the local — rebound to a deep copy above on the
+        # flagged branch — so this reads the same object the rows came from.
+        batch_history = _collect_correction_history(result)
         decisions.append({
             "batch": batch_index,
             "page_ids": outcome["page_ids"],
@@ -3191,6 +3266,19 @@ def extract_pdf_to_page_acsd(
                 if accepted_with_flags
                 else "verified"
             ),
+            # What this batch cost, and why it cost it. All five keys are
+            # always present: a reader must never have to tell "no
+            # corrections were needed" from "corrections were not recorded",
+            # and ``status`` alone cannot distinguish a batch every page of
+            # which was salvaged from one that converged first time.
+            "correction_history": batch_history,
+            "correction_attempts": len(batch_history),
+            "unresolved_reason": str(result.get("reason") or ""),
+            "recovered_by": str(result.get("recovered_by") or ""),
+            "flagged_page_ids": [
+                str(page_id)
+                for page_id in result.get("flagged_page_ids") or []
+            ],
         })
     accepted.sort(key=lambda row: int(row.get("page_number") or 0))
     expected_pages = list(range(1, page_count + 1))

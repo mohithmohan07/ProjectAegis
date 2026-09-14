@@ -51,8 +51,12 @@ def _semantic_salvage(
         "ownership. Do not invent missing textbook prose or questions. If precise "
         "geometry caused the earlier rejection, use conservative, non-overlapping "
         "horizontal bbox bands in true reading order while keeping each visible "
-        "semantic block separate. Running headers/footers/navigation may be "
-        "omitted. Return every supplied page exactly once."
+        "semantic block separate. The running-navigation rule above still "
+        "governs, and this contract does not relax it: repeated page furniture "
+        "is either omitted with its exact printed line returned in that page's "
+        "dropped_furniture array, or retained as kind=navigation; a margin box "
+        "that teaches is semantic content and must be transcribed in full. "
+        "Return every supplied page exactly once."
     )
     prompt = json.dumps(
         {
@@ -127,11 +131,21 @@ def _semantic_salvage(
             "verification": verification,
             "previous_result": copy.deepcopy(previous),
         }
-    history = list(previous.get("correction_history") or [])
+    # Every entry says where it was recorded. The inherited ones belong to
+    # the ordinary correction loop that ran before this contract was reached;
+    # the appended one is the extra paid pass this contract just bought.
+    # Untagged they read as one flat run of attempts, and the record exists
+    # precisely to say which stage spent what.
+    history: list[dict[str, Any]] = [
+        {**entry, "origin": "group"}
+        for entry in (previous.get("correction_history") or [])
+        if isinstance(entry, dict)
+    ]
     history.append({
         "attempt": len(history) + 1,
         "stage": "semantic_salvage",
         "reason": reason,
+        "origin": "salvage",
     })
     return {
         "status": "verified",
@@ -185,6 +199,7 @@ def install() -> None:
             accepted: list[dict[str, Any]] = []
             histories: list[dict[str, Any]] = []
             verifications: list[dict[str, Any]] = []
+            flagged_page_ids: list[str] = []
             for page in pages:
                 single = resilient_extract_batch([page])
                 if single.get("status") != "verified":
@@ -226,13 +241,30 @@ def install() -> None:
                         "pages": candidate_pages,
                         "accepted_with_review_flags": True,
                     }
+                    # The returned status is "verified" for the whole batch
+                    # from here on. Without this list nothing downstream can
+                    # name the page that only shipped under a flag.
+                    flagged_page_ids.append(page.page_id)
                 accepted.extend(copy.deepcopy(single.get("pages") or []))
                 histories.extend(
-                    copy.deepcopy(single.get("correction_history") or [])
+                    {**entry, "origin": page.page_id}
+                    for entry in copy.deepcopy(
+                        single.get("correction_history") or []
+                    )
+                    if isinstance(entry, dict)
                 )
                 if isinstance(single.get("verification"), dict):
                     verifications.append(copy.deepcopy(single["verification"]))
             accepted.sort(key=lambda row: int(row.get("page_number") or 0))
+            # The group's own correction loop ran, and was paid for, before
+            # isolation started. Publishing only the per-page histories left
+            # the record claiming this batch converged first time; those
+            # attempts lead, then each page's own.
+            group_history = [
+                {**entry, "origin": "group"}
+                for entry in (result.get("correction_history") or [])
+                if isinstance(entry, dict)
+            ]
             return {
                 "status": "verified",
                 "pages": accepted,
@@ -250,7 +282,8 @@ def install() -> None:
                     "issues": [],
                     "page_verifications": verifications,
                 },
-                "correction_history": histories,
+                "correction_history": group_history + histories,
+                "flagged_page_ids": flagged_page_ids,
                 "recovered_by": "phase3.4.2-page-isolation",
             }
 

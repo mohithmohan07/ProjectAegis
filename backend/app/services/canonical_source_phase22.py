@@ -14,6 +14,7 @@ Phase-2/2.1 deterministic gate again before Build Concepts may continue.
 from __future__ import annotations
 
 import base64
+import bisect
 import copy
 import hashlib
 import json
@@ -92,7 +93,6 @@ def _notify_openai_transport_started() -> None:
     callback = _BEFORE_OPENAI_TRANSPORT.get()
     if callable(callback):
         callback()
-_MATHPIX_PAGE_RE = re.compile(r"-(?P<page>\d{1,4})\.jpg(?:\?|$)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,13 @@ class EvidencePage:
     text: str
     image_data_url: str
     score: float
+    # How this page came to be here. ``"scored"`` is the positional/keyword
+    # fallback in ``_candidate_page_numbers``; a ``"ledger"`` value means the
+    # verified page bundle already recorded which PDF page this packet's own
+    # text was transcribed from, and no guess was made at all. Recorded so a
+    # log or a provenance record can say which, rather than reading as if the
+    # two were the same kind of answer.
+    selection: str = "scored"
 
 
 DecisionProvider = Callable[[dict[str, Any], list[EvidencePage]], dict[str, Any]]
@@ -285,7 +292,15 @@ def _orphan_figure_packet(
         "source_start": int(figure.get("source_start") or 0),
         "allowed_insert_before_block_ids": allowed,
         "nearby_blocks": evidence,
-        "search_terms": [caption.split(".", 1)[0], "Club of Thinkers"],
+        # The WHOLE caption is the search term. Splitting on the first period
+        # yields "Fig" or "Figure 7" — three and eight characters, the second
+        # a bare locator — and `_candidate_page_numbers` drops any term under
+        # eight normalized characters, which left an orphan-figure packet
+        # with zero scoring terms and collapsed its fallback to a pure
+        # position guess. (The chapter-specific literal that used to sit
+        # beside it here was a fixture leaking into production: a keyword
+        # vocabulary classifying content, which Rule 1 forbids.)
+        "search_terms": [caption],
         "expected_output": {
             "recovered_text": "exact source task visibly printed with the Figure",
             "source_label": (
@@ -374,24 +389,27 @@ def _pdf_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _page_hint_from_urls(packet: dict[str, Any]) -> list[int]:
-    pages: list[int] = []
-    for url in packet.get("figure_image_urls") or []:
-        match = _MATHPIX_PAGE_RE.search(str(url))
-        if not match:
-            continue
-        value = int(match.group("page"))
-        if value > 0 and value not in pages:
-            pages.append(value)
-    return pages
-
-
 def _candidate_page_numbers(
     page_texts: list[str],
     packet: dict[str, Any],
     *,
     source_chars: int,
 ) -> list[tuple[int, float]]:
+    """Guess which PDF pages a packet is printed on, from text and position.
+
+    This is the FALLBACK, not the answer. When the job was converted through
+    the GPT PDF-to-ACSD lane the verified page bundle already records which
+    page every transcribed block came from, and
+    :func:`resolve_packet_pdf_page` reads it — a recorded fact, no guess. This
+    scorer runs only when there is no usable bundle (a Mathpix-era MMD, a
+    bundle from a different upload, or a rendered ledger that no longer
+    matches the compiled source).
+
+    It never decides what the source MEANS: nothing here is shown to the
+    model as a judgment, and the pages it picks only bound which images the
+    adjudicator is allowed to read. The model still reports what it can see,
+    or reports that it cannot see it.
+    """
     terms = [
         _normal(term)
         for term in packet.get("search_terms") or []
@@ -417,11 +435,6 @@ def _candidate_page_numbers(
     for index in range(max(0, approximate - 1), min(page_count, approximate + 2)):
         scored[index] = scored.get(index, 0.0) + (1.5 if index == approximate else 0.75)
 
-    for human_page in _page_hint_from_urls(packet):
-        for index in {human_page - 1, human_page - 2, human_page}:
-            if 0 <= index < page_count:
-                scored[index] = scored.get(index, 0.0) + 2.0
-
     if not scored:
         scored[approximate] = 1.0
     ranked = sorted(scored.items(), key=lambda pair: (-pair[1], pair[0]))
@@ -436,19 +449,316 @@ def _evidence_id(index: int) -> str:
     return f"EVIDENCE-PAGE-{index + 1:02d}"
 
 
+# --------------------------------------------------------------------------- #
+# The verified page ledger — a recorded page number instead of a guess.
+#
+# A job converted by the GPT PDF-to-ACSD lane carries ``source.gpt-page-acsd
+# .json`` beside its other artifacts: every transcribed block, under the PDF
+# page it was transcribed from. It is already paid for, and reading it reads
+# no PDF page — it is a JSON file on disk. Where it applies, the page a packet
+# needs is a FACT the conversion recorded, not a keyword-and-position guess.
+#
+# Every function below returns ``None`` (or an empty map) for every condition
+# that makes the ledger inapplicable, and the caller then uses the scorer. A
+# wrong page is not a defect the model can see through: it would send the
+# adjudicator three pages that do not carry the missing text and the packet
+# would come back "not visible", paid for and unrepaired.
+#
+# The ``fallback`` imports here are deliberately LOCAL:
+# ``canonical_source_phase221_fallback`` imports this module at its top, so a
+# module-level import in this direction is a hard circular import.
+# --------------------------------------------------------------------------- #
+
+
+def load_page_ledger(
+    artifact_dir: Path | str,
+    *,
+    pdf_sha256: str,
+    is_pdf: bool,
+    on_refusal: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    """Return the verified page bundle for THIS exact upload, or ``None``.
+
+    The ``pdf_sha256`` comparison is the whole safety argument: a bundle
+    belongs to the bytes it was extracted from, and an artifact directory can
+    outlive a re-upload. A ledger from a different PDF would place packets on
+    confidently wrong pages, which is worse than the scorer's honest guess.
+
+    ``on_refusal`` is called with one sentence when a bundle FILE is present
+    and this function declines it anyway. A missing file is the ordinary case
+    (a non-PDF upload, a pre-ledger conversion) and says nothing; a file that
+    is there and refused is a bundle someone will expect to have been used,
+    and staying silent about it is how a degradation becomes invisible.
+    """
+    from . import canonical_source_phase221_fallback as fallback
+
+    if not is_pdf or not str(pdf_sha256 or "").strip():
+        return None
+    path = Path(artifact_dir) / fallback.GPT_PAGE_ACSD_FILENAME
+    if not path.exists():
+        return None
+
+    def refuse(reason: str) -> None:
+        if callable(on_refusal):
+            on_refusal(
+                f"Verified page ledger {path.name} is present but not usable "
+                f"({reason}); source packets fall back to the positional page "
+                "scorer."
+            )
+
+    try:
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # An unreadable ledger is a missing ledger. This function is a cost
+        # saving on an already-working lane; it may never turn a repairable
+        # packet into a raised exception.
+        refuse(f"it could not be read: {exc}")
+        return None
+    if not isinstance(bundle, dict):
+        refuse("its top level is not an object")
+        return None
+    if bundle.get("source_origin") != fallback.FALLBACK_ORIGIN:
+        refuse(
+            "it was written by "
+            f"{str(bundle.get('source_origin') or 'an unnamed reader')!r}, not "
+            f"{fallback.FALLBACK_ORIGIN!r}"
+        )
+        return None
+    if str(bundle.get("pdf_sha256") or "") != str(pdf_sha256):
+        refuse("it was extracted from a different upload of this file")
+        return None
+    return bundle
+
+
+def _ledger_page_by_page_id(bundle: dict[str, Any]) -> dict[str, int]:
+    """Map every ledger page id to its 1-based PDF page number."""
+    numbers: dict[str, int] = {}
+    for page in bundle.get("pages") or []:
+        if not isinstance(page, dict):
+            continue
+        page_id = str(page.get("page_id") or "")
+        number = int(page.get("page_number") or 0)
+        if page_id and number > 0:
+            numbers.setdefault(page_id, number)
+    return numbers
+
+
+def _ledger_offset_spans(
+    bundle: dict[str, Any],
+    canonical: dict[str, Any],
+) -> list[tuple[int, int]] | None:
+    """Return ``(source_start, pdf_page_number)`` pairs, or ``None``.
+
+    The ledger renders to the MMD every later phase reads, and the renderer
+    can report the character span each page block emitted. A canonical block's
+    ``source_start`` is an offset into that same MMD, so the span that starts
+    at or before it names the page the block was printed on.
+
+    That equivalence holds only while the rendered text IS the compiled
+    source, so it is checked rather than assumed: the rendered digest must
+    equal ``document.source_sha256``. It does hold in practice —
+    ``_persist_bundle`` writes the ledger after every mutation, so the file on
+    disk is the one the published MMD came from — but a single edited block
+    would silently shift every offset after it, and shifted offsets point at
+    the wrong page with no visible symptom.
+    """
+    from . import canonical_source_phase221_fallback as fallback
+
+    expected = str((canonical.get("document") or {}).get("source_sha256") or "")
+    if not expected:
+        return None
+    try:
+        text, spans = fallback.render_page_acsd_to_mmd_with_spans(bundle)
+    except Exception:
+        return None
+    if _sha256_text(text) != expected:
+        return None
+    numbers = _ledger_page_by_page_id(bundle)
+    offsets: list[tuple[int, int]] = []
+    for span in spans:
+        # The MMD header stamps carry no page block, so they carry no page
+        # id either and are dropped here. That is what makes a position
+        # inside the header unresolvable rather than wrongly attributed to
+        # page one — see the bisect in `resolve_packet_pdf_page`.
+        number = numbers.get(str(span.get("page_id") or ""))
+        if number:
+            offsets.append((int(span.get("start") or 0), number))
+    offsets.sort(key=lambda pair: pair[0])
+    return offsets or None
+
+
+def resolve_packet_pdf_page(
+    packet: dict[str, Any],
+    *,
+    bundle: dict[str, Any] | None,
+    offset_spans: list[tuple[int, int]] | None,
+) -> int | None:
+    """Return the 1-based PDF page the ledger records for this packet.
+
+    Two routes, strongest first:
+
+    1. The figure's own pinned asset, when exactly ONE page carries it. An
+       orphan-figure packet carries the ``image_urls`` of the figure it is
+       about, and those urls were minted from the very ledger block that
+       holds the picture. It is an identity join, not a similarity one, and
+       it is immune to a shifted offset — but it is an identity join on the
+       IMAGE, not on the figure, because an asset filename is
+       ``<sha256 of the jpeg bytes>.jpg``. A crop that renders byte-identical
+       on several pages — a mascot or an icon reprinted beside every activity
+       in a lower-grade book — therefore carries ONE url on all of them, and
+       the join answers "these pages", not "this page". Taking the first in
+       bundle order would be a guess shipped under the ledger's label, so an
+       ambiguous join declines and route 2 answers instead.
+    2. The offset span. The packet's ``source_start`` is an offset into the
+       rendered MMD; the last span beginning at or before it names the page.
+       Unlike route 1 this is specific to THIS packet's own position, which
+       is why it is the one that breaks a tie.
+
+    ``None`` means "the ledger does not answer this", and the caller falls
+    back to the scorer.
+
+    Deliberately NOT a third route: ``asset_page_number``. It reads like a
+    corroborator for route 1, but it is written only under
+    ``if scope == "full_table"`` — a figure block carries ``asset_filename``
+    and ``asset_url`` and nothing else — so on the orphan-FIGURE packets this
+    function exists for it is absent every time.
+    """
+    if not isinstance(bundle, dict):
+        return None
+
+    urls = {
+        str(value).strip()
+        for value in packet.get("figure_image_urls") or []
+        if str(value).strip()
+    }
+    if urls:
+        numbers = _ledger_page_by_page_id(bundle)
+        matched: list[int] = []
+        for page in bundle.get("pages") or []:
+            if not isinstance(page, dict):
+                continue
+            number = numbers.get(str(page.get("page_id") or ""))
+            if not number or number in matched:
+                continue
+            for block in page.get("blocks") or []:
+                if not isinstance(block, dict):
+                    continue
+                if str(block.get("asset_url") or "").strip() in urls:
+                    matched.append(number)
+                    break
+        if len(matched) == 1:
+            return matched[0]
+        # Zero matches: the figure's asset never materialized (a degenerate
+        # bbox is a recorded flag, not an abort), so there is nothing to join
+        # on. Two or more: the asset is content-addressed and this picture is
+        # printed byte-identically on several pages, so the join names all of
+        # them and none of them. Either way route 1 has no answer and route 2
+        # takes over — never the first page in bundle order.
+
+    if not offset_spans:
+        return None
+    position = max(0, int(packet.get("source_start") or 0))
+    starts = [start for start, _number in offset_spans]
+    index = bisect.bisect_right(starts, position) - 1
+    if index < 0:
+        # Every body span starts after this position, so the position is
+        # inside the MMD header (the three stamps and their blank line, about
+        # 200 characters) and belongs to no page at all. Answering "page one"
+        # here would be a guess wearing a recorded fact's clothes.
+        return None
+    return offset_spans[index][1]
+
+
+def _neighbour_pages(anchor: int, packet: dict[str, Any]) -> tuple[int, int]:
+    """Order the anchor's two neighbours by where this packet's target lies.
+
+    Only an ordering, and only over the two pages that share a page break
+    with the anchor — see :func:`collect_evidence_pages`. It reads the
+    packet's own recorded ``issue_type``, never the source, and at the
+    default ``_MAX_PAGES`` both neighbours ship either way; the order decides
+    which page image the model is offered first, and which one survives a
+    ``_MAX_PAGES`` below three.
+    """
+    if str(packet.get("issue_type") or "") == "missing_parent_section":
+        # Anchored on the FIRST SUBSECTION; the parent heading is printed
+        # before it, so the previous page is the likelier neighbour.
+        return (anchor - 1, anchor + 1)
+    # An orphan figure's task runs on from the figure, so the NEXT page is
+    # the likelier neighbour. Anything else anchors on its own position and
+    # reads forward, which is the same shape.
+    return (anchor + 1, anchor - 1)
+
+
 def collect_evidence_pages(
     path: Path,
     packet: dict[str, Any],
     *,
     source_chars: int,
+    pdf_page: int | None = None,
+    selection: str = "scored",
 ) -> list[EvidencePage]:
-    """Return bounded original-document pages with opaque model-facing IDs."""
+    """Return bounded original-document pages with opaque model-facing IDs.
+
+    ``pdf_page`` is the 1-based page the verified page ledger recorded for
+    this packet (see :func:`resolve_packet_pdf_page`). When it is supplied the
+    scorer does not run at all: the evidence is that page and its two
+    immediate neighbours, clamped to the document.
+
+    The neighbours are not hedging, and the window is deliberately not a
+    budget: the argument for them is a single page break, which reaches
+    exactly one page in each direction, so a larger ``_MAX_PAGES`` may not
+    widen it. ``_MAX_PAGES`` can only shrink it, and which neighbour survives
+    that is then the packet's to decide, because the two packet kinds look in
+    opposite directions. An orphan-figure packet is anchored on the figure
+    and wants the task printed beside it, which continues onto the NEXT page;
+    a ``missing_parent_section`` packet is anchored on its FIRST SUBSECTION
+    and wants the parent heading, which the book printed BEFORE that — so the
+    previous page is its likelier neighbour. Nothing here reads the source:
+    the anchor is where the packet builder recorded its own position, and the
+    order only says which page image the model is offered first.
+
+    ``selection`` names how ``pdf_page`` was resolved and is recorded on every
+    returned page. It is ignored when ``pdf_page`` is absent or out of range,
+    where every page is honestly labelled ``"scored"``: a page this function
+    guessed must never be able to read as a page the conversion recorded.
+    """
     import fitz
 
     document = fitz.open(path)
     try:
-        page_texts = [page.get_text("text") or "" for page in document]
-        ranked = _candidate_page_numbers(page_texts, packet, source_chars=source_chars)
+        page_count = int(document.page_count)
+        texts: dict[int, str] = {}
+
+        def page_text(index: int) -> str:
+            """Extract one page's text layer at most once.
+
+            The ledger route sends three pages; without memoization it would
+            still pay a full-document text extraction to choose them, which
+            is most of what the scorer costs on a long book.
+            """
+            if index not in texts:
+                texts[index] = document[index].get_text("text") or ""
+            return texts[index]
+
+        anchor = int(pdf_page or 0)
+        if 1 <= anchor <= page_count:
+            route = str(selection or "").strip() or "ledger"
+            ranked: list[tuple[int, float]] = []
+            for number in (anchor, *_neighbour_pages(anchor, packet)):
+                index = number - 1
+                if not 0 <= index < page_count:
+                    continue
+                if any(index == chosen for chosen, _score in ranked):
+                    continue
+                ranked.append((index, 1.0 if number == anchor else 0.5))
+            ranked = ranked[:_MAX_PAGES]
+        else:
+            route = "scored"
+            ranked = _candidate_page_numbers(
+                [page_text(index) for index in range(page_count)],
+                packet,
+                source_chars=source_chars,
+            )
         evidence: list[EvidencePage] = []
         for evidence_index, (page_index, score) in enumerate(ranked):
             page = document[page_index]
@@ -458,11 +768,12 @@ def collect_evidence_pages(
             evidence.append(EvidencePage(
                 evidence_id=_evidence_id(evidence_index),
                 page_number=page_index + 1,
-                text=page_texts[page_index],
+                text=page_text(page_index),
                 image_data_url=(
                     "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
                 ),
                 score=float(score),
+                selection=route,
             ))
         return evidence
     finally:
@@ -1455,6 +1766,26 @@ def semantic_source(canonical: dict[str, Any] | None, raw_source: str) -> str:
     )
     if semantic_hash and _sha256_text(raw) == semantic_hash:
         return raw
+    # ``repair_id`` is ``REPAIR-<packet fingerprint>``, so it is not only a
+    # label here: it breaks the tie between two overlays inserted at the SAME
+    # offset, and the bytes of the semantic source depend on that order.
+    # Anything that moves a packet's fingerprint — its search terms, its
+    # nearby-block evidence — can therefore reorder a same-offset pair on a
+    # re-derivation. A persisted canonical replays its own stored ids and is
+    # unaffected; an id recorded OUTSIDE the canonical (an exported audit, a
+    # saved log) will not match a re-derived one.
+    #
+    # The same moved fingerprint has one further reach, named here because it
+    # is the other place a packet's identity escapes this module:
+    # `phase3.source_contract_hash` hashes the WHOLE `source_adjudication`
+    # marker, and the marker keeps its `packets` list (the post-adjudication
+    # `marker.update()` never removes it). So a changed packet field moves the
+    # source-contract hash too, and a saved Phase 3 graph pinned to the old
+    # hash reads as incompatible. It is bounded by the same argument:
+    # `phase2._load_or_refresh_for_job` reuses the persisted canonical
+    # whenever the MMD digest still matches, so only a genuine recompile
+    # mints new packets — and that path already discards adjudication
+    # decisions.
     ordered = sorted(
         overlays,
         key=lambda item: (int(item.get("offset") or 0), str(item.get("repair_id") or "")),
@@ -1605,6 +1936,46 @@ def adjudicate_job_source(
         level="warning",
     )
 
+    # Resolve every packet's page HERE, once, before the fan-out below.
+    # `_ledger_offset_spans` renders the whole ledger to MMD, and
+    # `_render_page_acsd_parts` mutates the bundle in place on its way
+    # (`_scrub_page_acsd_escape_artifacts`), so doing this inside a worker
+    # would be a data race on state every sibling shares — and would re-render
+    # the entire document once per packet for an answer that does not vary.
+    # The PDF digest is likewise read once: it is a full-file hash.
+    pdf_sha = _pdf_sha256(source_path)
+    ledger = load_page_ledger(
+        uploads.source_artifact_directory(int(job.id)),
+        pdf_sha256=pdf_sha,
+        is_pdf=source_path.suffix.lower() == ".pdf",
+        # A bundle that is on disk and refused anyway is the one case that has
+        # to be said out loud: falling silently back to the scorer looks
+        # exactly like a job that never had a ledger, and nobody would know to
+        # look. A missing bundle stays silent — that is the ordinary case.
+        on_refusal=lambda message: progress.log(message, level="warning"),
+    )
+    offset_spans = _ledger_offset_spans(ledger, canonical) if ledger else None
+    if ledger is not None and offset_spans is None:
+        progress.log(
+            "Verified page ledger no longer renders the compiled source "
+            "(its recorded offsets would point at the wrong pages), so only "
+            "packets their own pinned figure can place will use it.",
+            level="warning",
+        )
+    ledger_pages = {
+        str(packet["issue_id"]): resolve_packet_pdf_page(
+            packet, bundle=ledger, offset_spans=offset_spans
+        )
+        for packet in packets
+    }
+    resolved_count = sum(1 for value in ledger_pages.values() if value)
+    if ledger is not None:
+        progress.log(
+            f"Verified page ledger placed {resolved_count} of {len(packets)} "
+            "source packet(s) on a recorded PDF page; the remainder fall back "
+            "to the positional page scorer."
+        )
+
     from .phase3 import kernel as _kernel
 
     def _adjudicate_one(numbered: tuple[int, dict[str, Any]]) -> tuple[str, dict[str, Any], str]:
@@ -1628,11 +1999,15 @@ def adjudicate_job_source(
             )
             return cache_key, result, "hit"
         pages = collect_evidence_pages(
-            source_path, packet, source_chars=source_chars
+            source_path,
+            packet,
+            source_chars=source_chars,
+            pdf_page=ledger_pages.get(str(packet["issue_id"])),
+            selection="ledger",
         )
         progress.log(
             f"Source packet {index}/{len(packets)} ({packet['issue_type']}) "
-            f"candidate pages: "
+            f"candidate pages ({pages[0].selection if pages else 'none'}): "
             + ", ".join(
                 f"{page.evidence_id}=PDF {page.page_number}" for page in pages
             )
@@ -1644,7 +2019,7 @@ def adjudicate_job_source(
                 "version": ADJUDICATION_VERSION,
                 "created_at": time.time(),
                 "packet_fingerprint": packet["fingerprint"],
-                "source_file_sha256": _pdf_sha256(source_path),
+                "source_file_sha256": pdf_sha,
                 "model": model_provider.source_model_identity(),
                 "result": result,
             }
