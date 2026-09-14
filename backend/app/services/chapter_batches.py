@@ -499,7 +499,20 @@ def _can(
     return {
         # Replacing the staged source is how a person recovers a bad upload;
         # it is refused only while a step actually holds the chapter.
-        "upload_source": not live and not dead,
+        #
+        # A ``dead`` row is the case that MOST needs it. A non-resumable
+        # verdict (Q24) means the source as converted is unusable, and the
+        # engine's own message, this console's usage guide and the contract's
+        # recovery column all say the same thing: upload the PDF again and let
+        # Aegis convert it afresh. Gating that on ``not dead`` withdrew the one
+        # action every one of those texts instructs a person to take, leaving a
+        # dead row with no action at all (owner report, 14 September 2026).
+        #
+        # Nothing here resumes the dead job: ``stage_source`` mints a NEW job
+        # through ``create_post_learning_job`` and files the old job id under
+        # ``previous_job_ids``, so the refusal recorded against the old
+        # checkpoint is never replayed and never erased.
+        "upload_source": not live,
         "step01": (
             has_job and not live and not dead and not marker_status
             and str((signals or {}).get("status") or "") in {"uploaded", "converted"}

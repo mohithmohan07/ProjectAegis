@@ -240,7 +240,7 @@ attempts and returns to the queue only when a person presses *Retry*.
 | **Failed · attempts_exhausted** | the step raised on every attempt (`max_attempts`, default 2) | read the error in the drawer, fix the cause, *Retry* |
 | **Failed · run_incomplete** | Step 01 stopped mid-way on every attempt (provider outage, for one); the checkpoint is saved | *Retry* resumes from the saved checkpoint, replaying finished work from the decision store — nothing paid for is spent again |
 | **Failed · master_lane_unavailable** | a Master lane was refused; the lane and reason are on the row | fix the named cause, push Step 02 again |
-| **Failed · non_resumable** / **Dead** | the run recorded a do-not-resume verdict (the source as converted is unusable — Q24) | upload the source again (a new conversion) |
+| **Failed · non_resumable** / **Dead** | the run recorded a do-not-resume verdict (the source as converted is unusable — Q24) | **Upload source** in the drawer — a new upload mints a fresh job and converts again; *Retry* is refused here and would only replay the refusal |
 | **Failed · job_missing** | the staged upload is gone | upload the source again |
 
 A lock collision (another route held this job while the queue claimed it) is
