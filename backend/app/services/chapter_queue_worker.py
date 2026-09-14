@@ -56,6 +56,55 @@ def max_concurrent_masters() -> int:
     return max(1, _int_env("AEGIS_QUEUE_MAX_CONCURRENT_MASTERS", 1))
 
 
+def live_broker():
+    """The process's wave broker, bound to the OpenAI credentials in use.
+
+    One per process, deliberately: the saving comes from cohort chapters
+    sharing a wave, and two brokers would cut every wave in half.
+    """
+    from . import batch_broker, model_provider
+
+    def _client():
+        from openai import OpenAI
+
+        return OpenAI(timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS, max_retries=2,
+                      **model_provider.client_kwargs())
+
+    def _build():
+        return batch_broker.BatchBroker(batch_broker.OpenAIBatchApi(_client))
+
+    return batch_broker.process_broker(_build)
+
+
+def cohort_concurrency() -> int:
+    """How many COHORT chapters may run at once (register Q73).
+
+    A cohort's provider calls go to the batch endpoint, where the provider —
+    not this machine — holds the queue, so the synchronous fan-out budget is
+    not what bounds it. What bounds it is this machine: each concurrent run
+    holds its own source text, inventories and workbook buffers. Six is the
+    tested-safe default on the deployed 4 GB machine; the owner authorised
+    more capacity for wider cohorts, and this is the knob that spends it.
+
+    A synchronous FALLBACK inside a cohort run still takes an ordinary
+    provider slot, which is why this does not remove the gate — it sits
+    beside it.
+    """
+    return max(1, _int_env("AEGIS_QUEUE_COHORT_CONCURRENCY", 6))
+
+
+def cohort_masters() -> int:
+    """How many COHORT Step 02s may build at once (register Q73).
+
+    Deliberately far below ``cohort_concurrency``: a Master build holds two
+    lanes and their workbook buffers resident, and this machine has already
+    died of that pressure once (Q57). Narrowing it slows a cohort's Step 02
+    down; it does not make it dearer, because the batch rate is charged per
+    request and not per wave. Raise it only with memory to match.
+    """
+    return max(1, _int_env("AEGIS_QUEUE_COHORT_MASTERS", 2))
+
+
 def provider_reserve() -> int:
     """Slots never given to the queue, so a person can still run something."""
     return _int_env("AEGIS_QUEUE_PROVIDER_RESERVE", 16)
@@ -236,9 +285,14 @@ class ChapterQueueWorker:
         usable = max(0, config.OPENAI_MAX_CONCURRENCY - provider_reserve())
         return max(1, usable // workers)
 
-    def admits(self, kind: str, *, reserved: int = 0) -> bool:
+    def admits(self, kind: str, *, reserved: int = 0, cohort: bool = False) -> bool:
         """Whether one more ``kind`` fits, with ``reserved`` fan-outs held back
-        for an older task this pass could not admit."""
+        for an older task this pass could not admit.
+
+        ``cohort`` says the task belongs to a batch cohort, which is bounded
+        by this machine's capacity rather than by the synchronous provider
+        gate (register Q73).
+        """
         with self._lock:
             in_flight = dict(self._in_flight)
         if kind in _PUBLISH_KINDS:
@@ -251,6 +305,26 @@ class ChapterQueueWorker:
         generation = [
             value for value in in_flight.values() if value in _GENERATION_KINDS
         ]
+        if cohort:
+            # A cohort runs wide on purpose: narrow it and the waves narrow
+            # with it, which is the entire saving. Its requests queue at the
+            # provider, so the fan-out budget below does not apply — only
+            # this machine's own capacity does.
+            if len(generation) >= cohort_concurrency():
+                return False
+            if kind == "step02":
+                # A Master build is the memory-heavy step: two lanes, the
+                # reviewed workbook and every buffer they need, all resident.
+                # This machine has already died of exactly that pressure
+                # (register Q57), so Master builds stay far narrower than the
+                # cohort even inside one — which costs latency, never price:
+                # the batch rate is per request, not per wave.
+                masters = [value for value in generation if value == "step02"]
+                if len(masters) >= cohort_masters():
+                    return False
+                if not _volume_can_hold_a_master_batch():
+                    return False
+            return True
         if len(generation) >= max_concurrent_runs():
             return False
         if kind == "step02":
@@ -316,7 +390,8 @@ class ChapterQueueWorker:
                     self._backoff_until.pop(int(task.id), None)
                     kind = str(task.kind)
                     reserved = _STEP_COST.get(str(held.kind), 1) if held is not None else 0
-                    if not self.admits(kind, reserved=reserved):
+                    if not self.admits(kind, reserved=reserved,
+                                       cohort=bool(str(task.cohort_id or ""))):
                         if held is None and kind in _GENERATION_KINDS:
                             held = task
                         self._note_denied(task, reserved=reserved)
@@ -569,6 +644,20 @@ def _job_owner(db, job_id: int) -> str:
     return str(job.owner_sub or "") if job is not None else ""
 
 
+def _cohort_session(task):
+    """Bind the wave broker for a cohort task; a plain task is untouched.
+
+    A run outside a cohort must never be parked in someone else's wave: it
+    has nobody to share a wave with, so batching it would only add the
+    provider's queue time to a run a person is watching.
+    """
+    from . import batch_broker
+
+    if not str(getattr(task, "cohort_id", "") or ""):
+        return batch_broker.session(None)
+    return batch_broker.session(live_broker())
+
+
 def _run_step01(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     """Convert the staged source if it still needs it, then Step 01.
 
@@ -586,7 +675,7 @@ def _run_step01(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     # on the batch row, never by rewriting the job's owner.
     owner_sub = _job_owner(db, job_id)
 
-    with openai_usage.track(), progress.capture_to_journal(
+    with openai_usage.track(), _cohort_session(task), progress.capture_to_journal(
         job_id, title="Step 01 — generating the Concept files",
     ) as capture:
         job = db.get(models.UploadJob, job_id)
@@ -630,7 +719,7 @@ def _run_step02(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     # The Master build takes its own atomic storage reservation inside
     # ``_build_master_siblings``; a refusal arrives here as StorageCapacityError
     # and becomes a visible blocked row rather than a retry into a full volume.
-    with openai_usage.track(), progress.capture_to_journal(
+    with openai_usage.track(), _cohort_session(task), progress.capture_to_journal(
         job_id, title="Step 02 — building the Master files",
         continue_existing=True,
     ) as capture:
@@ -809,6 +898,28 @@ def disabled_reason() -> str:
     return _disabled_reason
 
 
+def _recover_batch_waves() -> int:
+    """Bank what a wave already bought before this process died (Q73).
+
+    A submitted batch is money already spent. Re-attaching to it at boot and
+    storing its answers is the difference between a crash costing a restart
+    and a crash costing the cohort. Never fatal: a machine with no batch
+    credentials, or no open waves, simply has nothing to recover.
+    """
+    from . import batch_broker
+
+    try:
+        if not batch_broker.BatchStore().open_waves():
+            return 0
+        recovered = live_broker().recover()
+    except Exception:  # noqa: BLE001 — recovery must never stop the queue
+        log.warning("batch wave recovery failed", exc_info=True)
+        return 0
+    if recovered:
+        log.info("batch wave recovery banked %s response(s)", recovered)
+    return recovered
+
+
 def initialize_chapter_queue(session_factory) -> ChapterQueueWorker | None:
     global _worker, _disabled_reason
     if not enabled():
@@ -825,6 +936,7 @@ def initialize_chapter_queue(session_factory) -> ChapterQueueWorker | None:
     _disabled_reason = ""
     if _worker is not None:
         return _worker
+    _recover_batch_waves()
     _worker = ChapterQueueWorker(session_factory)
     _worker.start()
     return _worker

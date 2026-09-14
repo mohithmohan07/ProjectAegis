@@ -271,6 +271,16 @@ _BRACKETED_LITERAL_RE = _re_tags.compile(
 )
 
 
+def is_bracketed_list_literal(value: str) -> bool:
+    """Whether a cell is a quoted list repr rather than a delimited list.
+
+    Named so a writer can LEAVE such a cell exactly as it is: it is recorded
+    evidence of a malformed input (register Q29), and re-delimiting it would
+    hide the defect behind a tidy-looking cell.
+    """
+    return bool(_BRACKETED_LITERAL_RE.match(str(value or "").strip()))
+
+
 def list_token_defects(value: str) -> list[str]:
     """Contract §16: the two list-cell shapes the read-back names.
 

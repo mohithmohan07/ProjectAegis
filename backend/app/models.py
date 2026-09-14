@@ -876,6 +876,17 @@ class ChapterBatchTask(Base):
     # aggregate the console wants is a GROUP BY.
     push_group_id: Mapped[str] = mapped_column(String(32), default="",
                                                index=True)
+    # A COHORT is the batch lane's unit (register Q73): the chapters that
+    # start together so their stage fan-outs land in the same provider wave
+    # and are billed at the batch price. Like the push group it has no
+    # lifecycle of its own — it is a stamped label the dispatcher and the
+    # broker agree on.
+    cohort_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    # The slot the owner asked for ("12:00, 12:30, 1:00..."): a task is not
+    # claimable before it. Empty means claimable now, which is every task the
+    # console pushed before the batch lane existed.
+    start_after: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True)
     enqueued_by_sub: Mapped[str] = mapped_column(String(255), default="")
     enqueued_by_email: Mapped[str] = mapped_column(String(320), default="")
     enqueued_at: Mapped[datetime] = mapped_column(

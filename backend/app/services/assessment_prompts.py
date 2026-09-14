@@ -60,7 +60,7 @@ STANDARD VALUES (use EXACTLY these):
   policy with no source override retains the run publication. Never invent it.
 - Relationship lists use the exact " | " separator (space, pipe, space).
   Concept keyword cells use the separator carried by column_spec_policy
-  (comma-space for new runs in every subject);
+  (the exact " | " list for new runs in every subject);
   this question-author stage does not rewrite concept keywords or rosters.
 
 UNIVERSAL QUALITY RULES:

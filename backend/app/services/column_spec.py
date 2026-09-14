@@ -12,7 +12,7 @@ import copy
 from decimal import Decimal
 from typing import Any, Mapping
 
-VERSION = "owner-column-spec-2026-09-08-v2"
+VERSION = "owner-column-spec-2026-09-14-v3"
 POLICY_KEY = "_column_spec_policy"
 ENGLISH_TAGS = ("content", "language", "creativity", "evidence")
 LEGACY_TAGS = (
@@ -136,7 +136,7 @@ def for_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         "version": VERSION,
         "subject_adapter": "english" if english else "universal",
-        "keywords_separator": ", ",
+        "keywords_separator": " | ",
         "objective_explanation_prefix": "option_label_and_answer",
         "rubric_tags": list(ENGLISH_TAGS) if english else [],
         "rubric_half_step": True,
@@ -194,19 +194,41 @@ def keyword_cell(value: Any, policy: Mapping[str, Any]) -> str:
     rows, which the reviewer re-delimited by hand on three chapters (13
     September 2026). Re-tokenising a declared list field is formatting; the
     terms are still the model's.
+
+    The owner settled the delimiter on 14 September 2026: keywords are a
+    ``" | "`` list, as contract §16 and Appendix B.1 always said, and the
+    reviewer's hand re-delimiting is now what the writer produces. Under
+    that policy a comma-typed cell is read as the pre-v2.0 comma list it
+    is and re-joined with pipes, so one file still never mixes delimiters.
+    A profile frozen under the comma policy keeps comma-space: the policy
+    dict is carried on the run, so a sealed run re-renders byte for byte.
     """
     from .. import bulk_import as bi
 
     text = str(value or "")
+    comma_policy = policy.get("keywords_separator") == ", "
     if "|" in text:
         tokens = [token.strip() for token in text.split("|")]
+    elif bi.is_bracketed_list_literal(text):
+        # A quoted list repr is recorded evidence of a malformed input
+        # (register Q29) and the read-back names it as a defect. Splitting it
+        # on its commas would produce tidy-looking pipe tokens and hide the
+        # defect, so it ships exactly as it arrived — as it did under the
+        # comma policy, which never decoded a repr either.
+        tokens = [text]
     else:
-        tokens = [str(token).strip() for token in bi.split_multi(text, legacy_commas=False)]
+        # Under the comma policy a pipe-free cell is already the one token the
+        # writer treats it as. Under the pipe policy the same cell is a comma
+        # list a person typed, and re-delimiting it is the whole point.
+        tokens = [
+            str(token).strip()
+            for token in bi.split_multi(text, legacy_commas=not comma_policy)
+        ]
     seen: list[str] = []
     for token in tokens:
         if token and token not in seen:
             seen.append(token)
-    if policy.get("keywords_separator") == ", ":
+    if comma_policy:
         return ", ".join(seen)
     return bi.join_multi(seen)
 

@@ -428,30 +428,39 @@ def _resilient_openai_multimodal_json(
             service_tier=str(request_policy.get("service_tier") or ""),
         ):
             try:
-                generation._acquire_openai_slot(gate, purpose=purpose)
-                openai_usage.record_service_started()
-                try:
-                    response = client.chat.completions.create(
-                        **request_policy,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": str(system or "") + recovery_instruction,
-                            },
-                            {"role": "user", "content": content},
-                        ],
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": response_schema,
+                request_body = {
+                    **request_policy,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": str(system or "") + recovery_instruction,
                         },
-                        max_completion_tokens=current_budget,
-                    )
-                except BaseException as exc:
-                    openai_usage.record_attempt_outcome("provider_error", error=exc)
-                    raise
-                finally:
-                    openai_usage.record_service_ended()
-                    generation._release_openai_slot(gate)
+                        {"role": "user", "content": content},
+                    ],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": response_schema,
+                    },
+                    "max_completion_tokens": current_budget,
+                }
+                # Reading the source is part of the run, so a cohort pays the
+                # batch price for it too (register Q73). Outside a cohort this
+                # answers None and the ordinary call below is unchanged.
+                response = generation.batched_completion(
+                    request_body, provider=route.provider,
+                )
+                if response is None:
+                    generation._acquire_openai_slot(gate, purpose=purpose)
+                    openai_usage.record_service_started()
+                    try:
+                        response = client.chat.completions.create(**request_body)
+                    except BaseException as exc:
+                        openai_usage.record_attempt_outcome(
+                            "provider_error", error=exc)
+                        raise
+                    finally:
+                        openai_usage.record_service_ended()
+                        generation._release_openai_slot(gate)
                 try:
                     openai_usage.record_response(
                         response, requested_model=request_policy["model"]

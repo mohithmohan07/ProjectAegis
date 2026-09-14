@@ -231,7 +231,44 @@ const ACTION_LABEL: Record<PushKind, string> = {
   retry: "Retry",
 };
 
+/** The next few half-hour slots, as the owner names them ("12:00 PM,
+ * 12:30 PM, 1:00 PM..."). A slot is what makes a cohort START together: the
+ * queue will not claim any of its tasks before it, so the first stage of
+ * every chapter in the group arrives in one wave instead of trickling in
+ * behind whoever was pushed first. */
+export function nextSlots(from: Date = new Date(), count = 8): string[] {
+  const out: string[] = [];
+  const cursor = new Date(from.getTime());
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() > 30 ? 60 : 30);
+  for (let index = 0; index < count; index += 1) {
+    out.push(cursor.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+    cursor.setMinutes(cursor.getMinutes() + 30);
+  }
+  return out;
+}
+
+/** One displayed slot back to the instant the queue compares against. An
+ * empty choice means "now", which is no gate at all. */
+export function slotIso(label: string, from: Date = new Date()): string | undefined {
+  if (!label.trim()) return undefined;
+  const cursor = new Date(from.getTime());
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() > 30 ? 60 : 30);
+  for (let index = 0; index < 48; index += 1) {
+    const shown = cursor.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    if (shown === label) return cursor.toISOString();
+    cursor.setMinutes(cursor.getMinutes() + 30);
+  }
+  return undefined;
+}
+
 export default function ChapterBatch() {
+  // The batch lane (register Q73). Off by default: a single chapter has
+  // nobody to share a wave with, and a person watching one run should not
+  // wait for the provider's queue.
+  const [runTogether, setRunTogether] = useState(false);
+  const [slot, setSlot] = useState("");
   const { query, setFilter } = useChapterBatchFilters();
   const { data, error, loading, stopped, reload, patchRows } =
     useChapterBatchRows(query);
@@ -383,6 +420,24 @@ export default function ChapterBatch() {
             .filter((entry) => entry.lanes.length > 0)
           : targets.map((row) => ({ row, lanes: [] as string[] }));
       if (rows.length === 0) return;
+      // Publishing spends nothing and serializes on one workbook, so it
+      // never joins a wave (register Q73); an ordinary push sends exactly
+      // the request it always sent.
+      const pushRows = (
+        step: "step01" | "step02" | "publish",
+        entries: typeof rows,
+      ) => {
+        const payload = entries.map((entry) =>
+          step === "publish"
+            ? { chapter_id: entry.row.chapter_id, lanes: entry.lanes }
+            : { chapter_id: entry.row.chapter_id });
+        if (step === "publish" || !runTogether) {
+          return api.chapterBatchPush(step, payload);
+        }
+        return api.chapterBatchPush(step, payload, {
+          cohort: true, startAt: slotIso(slot),
+        });
+      };
       setPushing(kind);
       setActionError(null);
       setReceiptLabel(ACTION_LABEL[kind]);
@@ -393,13 +448,7 @@ export default function ChapterBatch() {
             ? await api.chapterBatchCancel(ids)
             : kind === "retry"
               ? await api.chapterBatchRetry(ids)
-              : await api.chapterBatchPush(
-                kind,
-                rows.map((entry) =>
-                  kind === "publish"
-                    ? { chapter_id: entry.row.chapter_id, lanes: entry.lanes }
-                    : { chapter_id: entry.row.chapter_id }),
-              );
+              : await pushRows(kind, rows);
         applyResult(result);
       } catch (e) {
         // A readable 409 detail (publication order, for one) is shown
@@ -409,7 +458,7 @@ export default function ChapterBatch() {
         setPushing(null);
       }
     },
-    [applyResult],
+    [applyResult, runTogether, slot],
   );
 
   const confirmPublish = useCallback(async () => {
@@ -635,6 +684,34 @@ export default function ChapterBatch() {
       {selected.size > 0 && (
         <div className="chapter-actionbar" data-testid="chapter-actionbar">
           <strong>{selected.size} selected</strong>
+          <label className="chapter-cohort" title={
+            "Run these chapters together so their model calls go to the "
+            + "provider in one batch, at the batch price. They start on the "
+            + "slot you choose, and each stage waits for the whole group."
+          }>
+            <input
+              type="checkbox"
+              checked={runTogether}
+              onChange={(event) => setRunTogether(event.target.checked)}
+              data-testid="push-cohort"
+            />
+            Run together at the batch price
+          </label>
+          {runTogether && (
+            <label className="chapter-cohort">
+              from
+              <select
+                value={slot}
+                onChange={(event) => setSlot(event.target.value)}
+                data-testid="push-slot"
+              >
+                <option value="">now</option>
+                {nextSlots().map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="spacer" />
           <button
             disabled={step01Rows.length === 0 || pushing !== null}

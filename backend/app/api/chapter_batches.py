@@ -18,6 +18,7 @@ Two shapes are deliberate:
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -45,6 +46,12 @@ class PushRow(BaseModel):
 class PushRequest(BaseModel):
     step: str = Field(..., description="step01 | step02 | publish")
     rows: list[PushRow] = Field(default_factory=list)
+    # The batch lane (register Q73). ``cohort`` runs these chapters together
+    # so their stage fan-outs land in one provider wave, at the batch price;
+    # ``start_at`` is the slot the owner asked for ("12:00, 12:30, 1:00…"),
+    # which is what makes them start together rather than trickle.
+    cohort: bool = False
+    start_at: datetime | None = None
 
 
 class ChapterIdsRequest(BaseModel):
@@ -223,6 +230,29 @@ async def stage_source(
     return _row_or_404(db, chapter_id)
 
 
+def _cohort_id_for(
+    *, step: str, cohort: bool, start_after: datetime | None,
+    push_group_id: str = "",
+) -> str:
+    """Which batch cohort this push joins, if any (register Q73).
+
+    A cohort that names a SLOT is identified by that slot, not by the push:
+    three reviewers each pushing their own subject's chapters for 12:30 are
+    ONE group that starts together, which is the whole point of naming a
+    time. Their stage fan-outs then meet in the same wave instead of three
+    narrower ones.
+
+    A cohort with no slot starts now and can only be the pusher's own rows,
+    so it is identified by the push. Publishing never joins a cohort: it
+    spends nothing and serializes on one shared workbook.
+    """
+    if not cohort or step == "publish":
+        return ""
+    if start_after is not None:
+        return "slot-" + start_after.strftime("%Y%m%dT%H%M")
+    return str(push_group_id or "")
+
+
 @router.post("/push")
 def push(
     payload: PushRequest,
@@ -238,12 +268,20 @@ def push(
             + ", ".join(chapter_batches.models.CHAPTER_BATCH_STEPS),
         )
     group = chapter_queue.new_push_group_id()
+    start_after = payload.start_at
+    if start_after is not None and start_after.tzinfo is not None:
+        start_after = start_after.astimezone(timezone.utc).replace(tzinfo=None)
+    cohort_id = _cohort_id_for(
+        step=step, cohort=bool(payload.cohort), start_after=start_after,
+        push_group_id=group,
+    )
     results: list[dict[str, Any]] = []
     for item in payload.rows:
         outcome = chapter_queue.enqueue_one(
             db, int(item.chapter_id), step=step, push_group_id=group,
             actor_sub=user.sub, actor_email=user.email,
             lanes=item.lanes, running_probe=_running_probe,
+            cohort_id=cohort_id, start_after=start_after,
         )
         db.commit()
         outcome["row"] = chapter_batches.project_one(
@@ -256,7 +294,11 @@ def push(
             outcome["position"] = positions.get(int(outcome["task_id"]))
     # A push should start now, not at the next poll tick.
     chapter_queue_worker.nudge()
-    return {"step": step, "push_group_id": group, "results": results}
+    return {
+        "step": step, "push_group_id": group, "results": results,
+        "cohort_id": cohort_id,
+        "start_at": start_after.isoformat() if start_after else "",
+    }
 
 
 def _bulk(db: Session, user: auth.Principal, chapter_ids: list[int], act) -> dict:

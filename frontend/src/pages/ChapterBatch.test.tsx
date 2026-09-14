@@ -9,7 +9,7 @@ import type {
   ChapterBatchQueue,
   ChapterBatchRow,
 } from "../types";
-import ChapterBatch from "./ChapterBatch";
+import ChapterBatch, { nextSlots, slotIso } from "./ChapterBatch";
 
 const apiMock = vi.hoisted(() => ({
   vocab: vi.fn(),
@@ -623,4 +623,29 @@ test("a row and its open drawer never share an upload id", async () => {
   // A lane this run does not have is never offered a reviewed upload.
   expect(ids).not.toContain("chapter-103-drawer-upload-master-pre");
   expect(ids).not.toContain("chapter-103-drawer-upload-concept-pre");
+});
+
+
+// --------------------------------------------------------------------------- #
+// The batch lane's slots (register Q73)
+// --------------------------------------------------------------------------- #
+
+test("the offered slots are the next half hours, as the owner names them", () => {
+  const slots = nextSlots(new Date("2026-09-14T11:05:00"), 4);
+  expect(slots).toHaveLength(4);
+  // 11:05 rounds up to 11:30, then every half hour.
+  expect(slots[0]).toMatch(/11:30/);
+  expect(slots[1]).toMatch(/12:00/);
+  expect(slots[2]).toMatch(/12:30/);
+  expect(slots[3]).toMatch(/1:00|13:00/);
+});
+
+test("a slot resolves to the instant the queue compares against, and now is no gate", () => {
+  const from = new Date("2026-09-14T11:05:00");
+  const [first] = nextSlots(from, 1);
+  const iso = slotIso(first, from);
+  expect(iso).toBeTruthy();
+  expect(new Date(String(iso)).getTime()).toBeGreaterThan(from.getTime());
+  expect(slotIso("", from)).toBeUndefined();
+  expect(slotIso("not a slot", from)).toBeUndefined();
 });

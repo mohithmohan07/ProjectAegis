@@ -110,16 +110,20 @@ def test_both_snapshot_exports_use_universal_keywords_and_master_detects_corrupt
     master = aw.parse_workbook(master_bytes)
     assert aw.validate_concept_file(concept, snapshot, profile) == []
     assert aw.validate_master_file(master, snapshot, profile, group_provenance=manifest["group_provenance"]) == []
-    assert concept["sheets"]["Objective"]["rows"][0]["keywords"] == "shape, dimension, comparison"
+    assert concept["sheets"]["Objective"]["rows"][0]["keywords"] == "shape | dimension | comparison"
     row = master["sheets"]["Objective"]["rows"][0]
-    assert row["keywords"] == "shape, dimension, comparison"
+    assert row["keywords"] == "shape | dimension | comparison"
     assert row["answer_explanation"].startswith("a) Cube.")
     assert isinstance(row["answer_weightage_1"], (int, float))
     assert row["correct_answer_1"] == "Yes"
-    concept["sheets"]["Objective"]["rows"][0]["keywords"] = "shape | dimension"
-    assert any("keywords must use comma-space" in error for error in aw.validate_concept_file(concept, snapshot, profile))
-    row["keywords"] = "shape | dimension"
-    assert any("keywords must use comma-space" in error for error in aw.validate_master_file(master, snapshot, profile))
+    # The owner settled the delimiter on the contract's " | " (14 September
+    # 2026), so a pipe list is now the VALID spelling and can no longer stand
+    # in for a corrupted cell. The read-back defect the pipe policy does name
+    # is contract §16's DEL-001: a literal pipe left inside one token.
+    concept["sheets"]["Objective"]["rows"][0]["keywords"] = "shape|dimension | comparison"
+    assert any("keywords" in error for error in aw.validate_concept_file(concept, snapshot, profile))
+    row["keywords"] = "shape|dimension | comparison"
+    assert any("keywords" in error for error in aw.validate_master_file(master, snapshot, profile))
     row["answer_explanation"] = "b) Cube. The wrong label must not pass."
     assert any("option label" in error for error in aw.validate_master_file(
         master, snapshot, profile, group_provenance=manifest["group_provenance"],
@@ -140,7 +144,7 @@ def test_db_concept_export_has_same_keyword_projection(db, subject):
         parsed = aw.parse_workbook(writer.write_concepts_workbook(
             db, [concept.id for concept in concepts], layout_id=writer.CONCEPT_FILE_LAYOUT_ID,
         ))
-        assert {row["keywords"] for row in parsed["sheets"]["Objective"]["rows"]} == {"decision, responsibility, self-help"}
+        assert {row["keywords"] for row in parsed["sheets"]["Objective"]["rows"]} == {"decision | responsibility | self-help"}
     finally:
         chapter.subject = original_subject
         for concept in concepts:
@@ -175,7 +179,9 @@ def test_completing_subject_binds_english_policy_without_upgrading_legacy():
 def test_non_english_runs_share_column_rules_but_reject_rubric_tags(subject):
     profile = _profile(subject)
     policy = column_spec.from_profile(profile)
-    assert policy["keywords_separator"] == ", "
+    # The owner settled the delimiter on 14 September 2026: contract §16's
+    # " | " list, in every subject, English included.
+    assert policy["keywords_separator"] == " | "
     assert policy["objective_explanation_prefix"] == "option_label_and_answer"
     assert policy["rubric_half_step"] is True
     assert policy["math_keyboard"] == "response_requirement"
