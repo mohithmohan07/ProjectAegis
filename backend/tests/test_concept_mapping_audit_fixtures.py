@@ -535,6 +535,7 @@ def _contract_list(value: str) -> str:
     Contract v2.0 §16: the production reader splits a pipe-free legacy cell
     on commas only; the corrected-intent normalized snapshot additionally
     treats a raw line break as the list separator it visibly was.
+
     """
 
     return LIST_DELIMITER.join(
@@ -545,13 +546,17 @@ def _contract_list(value: str) -> str:
 
 
 def _current_keyword_cell(value: str) -> str:
-    """Q33 changes only the separator of already-normalized keyword tokens.
+    """The current policy's keyword cell, from the still-pinned legacy one.
 
-    The historical audit's malformed quoted-list cells remain evidence;
-    this expectation neither decodes their repr nor repairs their content.
+    Q33 had made this comma-space; the owner settled it back on contract
+    §16's ``" | "`` on 14 September 2026 (register Q73), which is the
+    delimiter the legacy matrix already carries — so the projection is now
+    the identity. The historical audit's malformed quoted-list cells remain
+    evidence; this expectation neither decodes their repr nor repairs their
+    content.
     """
 
-    return ", ".join(str(value).split(LIST_DELIMITER))
+    return str(value)
 
 
 def _projected_cell(value: object, *, raw_equation: bool = False) -> str:
@@ -2277,7 +2282,16 @@ def test_raw_keyword_list_literals_remain_visible_validation_defects(
         if not raw_row["keywords"].startswith("['"):
             continue
         found = True
-        assert row["keywords"] == raw_row["keywords"]
+        # The repr is never DECODED into tokens — the malformed cell stays a
+        # malformed cell and the read-back still names it. Under the settled
+        # " | " delimiter (register Q73) the snapshot normaliser above has
+        # already re-delimited the fixture's commas, so the rendered cell is
+        # the snapshot's form rather than the raw file's; what must not
+        # happen — a repr quietly turned into tidy separate keywords — still
+        # does not.
+        assert row["keywords"].startswith("['")
+        assert row["keywords"].endswith("']")
+        assert row["keywords"] == _contract_list(raw_row["keywords"])
         defects = column_spec.keyword_defects(
             row["keywords"], column_spec.from_profile(profile),
         )

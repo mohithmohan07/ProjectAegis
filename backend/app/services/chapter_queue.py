@@ -97,6 +97,8 @@ def enqueue_one(
     actor_sub: str = "",
     actor_email: str = "",
     lanes: Sequence[str] | None = None,
+    cohort_id: str = "",
+    start_after: datetime | None = None,
     running_probe=None,
 ) -> dict[str, Any]:
     """Admit one chapter for one step, or say exactly why not.
@@ -207,6 +209,8 @@ def enqueue_one(
         state="queued",
         attempt=0,
         push_group_id=str(push_group_id or ""),
+        cohort_id=str(cohort_id or ""),
+        start_after=start_after,
         enqueued_by_sub=str(actor_sub or ""),
         enqueued_by_email=str(actor_email or ""),
         enqueued_at=_now(),
@@ -362,12 +366,23 @@ def retry_one(
 # ---------------------------------------------------------------------------
 
 def claimable(db: Session, *, kinds: Sequence[str]) -> list[models.ChapterBatchTask]:
-    """Queued tasks in admission order: oldest push first, ties by id."""
+    """Queued tasks in admission order: oldest push first, ties by id.
+
+    A task carrying a ``start_after`` slot (register Q73: "initiate the
+    Concept Files generation at once ... 12:00 PM, 12:30 PM") is simply not
+    claimable before it. That is what makes a cohort start TOGETHER: every
+    chapter in it becomes claimable on the same tick, so their first stage
+    fan-outs arrive in one wave instead of trickling in behind each other.
+    """
     now = _now()
     return (
         db.query(models.ChapterBatchTask)
         .filter(
             models.ChapterBatchTask.kind.in_(tuple(kinds)),
+            or_(
+                models.ChapterBatchTask.start_after.is_(None),
+                models.ChapterBatchTask.start_after <= now,
+            ),
             or_(
                 models.ChapterBatchTask.state == "queued",
                 and_(

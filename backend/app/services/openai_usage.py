@@ -787,6 +787,19 @@ def request_attempt(*, requested_model: str, purpose: str = "", provider: str = 
             _emit_usage_update()
 
 
+def record_batched_attempt() -> None:
+    """Mark the active attempt as answered by a batch wave (register Q73).
+
+    The provider prices a batched request at half the synchronous rate, so
+    the receipt has to say which lane answered it: a cohort run mixes
+    batched waves with synchronous fallbacks, and reporting both at the
+    same rate would overstate the bill of one and understate the other.
+    """
+    attempt = _active_attempt.get()
+    if attempt is not None:
+        attempt["batched"] = True
+
+
 def record_service_started() -> None:
     row = _active_attempt.get()
     if row is not None:
@@ -1156,6 +1169,13 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         return accumulator.summary(include_attempts=False)
 
     reported_tier = str(_get(response, "service_tier") or "").lower()
+    batched = bool((attempt or {}).get("batched")) if attempt is not None else False
+    # A batch line comes back on the provider's own batch tier. Pricing it
+    # would otherwise fall through to "unknown tier" and report the whole
+    # cohort as unpriced usage.
+    priceable_tier = reported_tier in {"", "default", "standard", "auto"} or (
+        batched and reported_tier in {"batch", "flex"}
+    )
     cached_tokens = min(input_tokens, cached_tokens)
     cache_write_tokens = min(max(input_tokens - cached_tokens, 0), cache_write_tokens)
     response_cost = (
@@ -1163,9 +1183,9 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
             model=model,
             input_tokens=input_tokens, cached_input_tokens=cached_tokens,
             cache_write_tokens=cache_write_tokens, output_tokens=output_tokens,
-            priced_at=priced_at,
+            priced_at=priced_at, batched=batched,
         )
-        if usage_status == "reported" and reported_tier in {"", "default", "standard", "auto"} else None
+        if usage_status == "reported" and priceable_tier else None
     )
     accumulator.add(
         model=model,
@@ -1743,6 +1763,16 @@ def _pricing_for(model: str, *, priced_at: float | None = None) -> Pricing | Non
     return None
 
 
+BATCH_RATE_MULTIPLIER = Decimal("0.5")
+"""The provider's published batch price, as a multiple of the sync price.
+
+An estimate, exactly like every other rate in this module: the invoice is
+the provider's. It is applied only to a receipt the broker marked as
+answered by a wave, so a synchronous fallback inside a cohort run is still
+reported at the synchronous rate.
+"""
+
+
 def _request_cost(
     *,
     model: str,
@@ -1751,6 +1781,7 @@ def _request_cost(
     cache_write_tokens: int,
     output_tokens: int,
     priced_at: float | None = None,
+    batched: bool = False,
 ) -> Decimal | None:
     """Price one response so per-request cache/long-context rules stay exact."""
     pricing = _pricing_for(model, priced_at=priced_at)
@@ -1774,7 +1805,8 @@ def _request_cost(
     ):
         input_value *= pricing.long_input_multiplier
         output_value *= pricing.long_output_multiplier
-    return (input_value + output_value) / Decimal(1_000_000)
+    total = (input_value + output_value) / Decimal(1_000_000)
+    return total * BATCH_RATE_MULTIPLIER if batched else total
 
 
 def _model_summary(item: ModelUsage) -> dict[str, Any]:

@@ -322,3 +322,51 @@ drawer.
   only orders the work.
 * It cannot stop a running step, and it does not cap a queued task's wait.
   Both are recorded as open in the audit.
+
+## Running a cohort at the batch price
+
+The console's ordinary push runs chapters one after another at the
+synchronous price. A **cohort** runs a group of chapters together so that
+every stage's model calls leave in one batch, which the provider bills at
+half the synchronous rate (register Q73).
+
+**How to push one.** Tick the chapters, turn on **Run together at the batch
+price**, choose a slot (the next half hours are offered; `now` means no
+gate), then press the step you want. Every chapter in the group becomes
+claimable on the same tick, so their first stage arrives in one wave rather
+than trickling in push order.
+
+    POST /chapter-batches/push
+    {"step": "step01", "cohort": true, "start_at": "2026-09-14T12:30:00Z",
+     "rows": [{"chapter_id": 12}, {"chapter_id": 13}, {"chapter_id": 14}]}
+
+**What happens then.** Each chapter runs the same seventy to a hundred
+sequential seams it always ran. At each seam the broker collects every
+request the cohort produced, submits them as one batch, and answers each
+caller from the result. A wave closes when the cohort has been quiet for
+`AEGIS_BATCH_QUIET_SECONDS` (20s), or when it has been open for
+`AEGIS_BATCH_MAX_WAIT_SECONDS` (180s), or at `AEGIS_BATCH_MAX_LINES` (400).
+
+**What protects the money.**
+
+| Risk | What the lane does |
+| --- | --- |
+| The process dies mid-wave | The wave record is written before the request leaves and the batch carries its wave id; the next boot re-attaches, harvests the answers and stores them. Nothing already bought is bought again. |
+| The provider is slow | Every waiter gives up after `AEGIS_BATCH_DEADLINE_SECONDS` (90 min) and makes the ordinary synchronous call. The batch is cancelled; anything it had already produced is still banked. |
+| The same request twice | Responses are stored content-addressed by the sha256 of the request body, so an identical ask is answered free, across runs and across processes. |
+
+**Capacity.** A cohort is bounded by `AEGIS_QUEUE_COHORT_CONCURRENCY`
+(default 6) rather than by the synchronous fan-out budget, because its
+requests queue at the provider rather than on this machine. Narrow the
+cohort and the waves narrow with it, which is the whole saving — so raise
+this knob only with machine headroom to match. Publish is never a cohort
+step: it spends nothing and serializes on one workbook.
+
+**Cost.** A batched receipt is priced at half the synchronous rate and a
+synchronous fallback inside the same run is priced at the full rate, so the
+drawer's *Cumulative model usage* is what the run actually cost.
+
+**Not yet proven live.** Whether a batched request is eligible for the
+prompt-cache discount, whether `prompt_cache_options` and `service_tier` are
+accepted inside a batch body, and the real wave latency all need one real
+cohort to settle. The fallback absorbs each of those without stranding a run.

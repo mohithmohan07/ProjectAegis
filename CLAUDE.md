@@ -1,5 +1,38 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q73 (the batch lane and the keyword delimiter, 14 September 2026).**
+Two decisions. (1) **Keywords are a `" | "` list**, as contract §16 and
+Appendix B.1 always said: `column_spec.VERSION` is
+`owner-column-spec-2026-09-14-v3`, every subject writes pipes, a comma-typed
+cell is re-delimited rather than read as one term, and a profile frozen under
+the comma policy keeps comma-space so no sealed run re-renders. (2) **A run
+must be priced through the Batch API, not per chapter.** The owner's design —
+select N chapters per subject, start them together on a slot (12:00, 12:30,
+1:00...), stall every chapter at each sequence and push the next sequence
+together — is the wave-structured cohort lane Q53 measured and deferred.
+`batch_broker` collects every request arriving while a cohort is at the same
+seam, submits it as ONE batch at the batch price, and answers each caller from
+the result; the request body and everything downstream of it are unchanged, so
+Rule 1 and every checker/critic stage stand. A submitted wave is never paid for
+twice (the record is written before the request leaves, the batch carries its
+wave id, every line is stored content-addressed by request hash, and boot
+recovers open waves); a slow wave never strands a run (a 90-minute waiter
+deadline, then the ordinary synchronous call); a wave closes on quiet, not on a
+clock. The binding is a contextvar so the stage fan-out's sixteen siblings land
+in the same wave. `chapter_batch_tasks` gains `cohort_id` and `start_after`
+(additive); `claimable` will not return a task before its slot, which is what
+makes a cohort start together; `POST /chapter-batches/push` takes `cohort` and
+`start_at` and the console offers the next half-hour slots. A cohort is bounded
+by `AEGIS_QUEUE_COHORT_CONCURRENCY` (6) rather than the synchronous fan-out
+budget, because its requests queue at the provider; publish is never a cohort
+step. `record_batched_attempt` + `BATCH_RATE_MULTIPLIER` (0.5) price a batched
+receipt at the batch rate while a synchronous fallback stays at the synchronous
+rate. **Needs one live cohort to settle:** prompt-cache eligibility inside a
+batch body (the one recorded receipt spent $3.128 of $4.9718 on cache writes
+that bought 0.12% reads), whether `prompt_cache_options`/`service_tier` are
+accepted there, and the real wave latency that decides overnight versus days.
+Recorded estimate: $4.9718 → about $2.17. Q73 in `docs/aegis-restructure.md`.
+
 **Latest amendment: Q68 (corrections catalogue, second pass, 13 September 2026).**
 Four of Q67's "planned next" items are executed, each version-gated so a
 sealed run replays byte for byte. (1) **Culminations are authored whole.** The

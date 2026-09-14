@@ -122,6 +122,11 @@ def _ensure_columns() -> None:
         # is expressible and free.
         ("assessment_releases", "lane", "VARCHAR(16) DEFAULT ''"),
         ("assessment_releases", "layout_id", "VARCHAR(64) DEFAULT ''"),
+        # The batch lane's cohort (register Q73). Additive on a deployed
+        # queue: every task already in it reads cohort-less and claimable,
+        # which is exactly what it was.
+        ("chapter_batch_tasks", "cohort_id", "VARCHAR(32) DEFAULT ''"),
+        ("chapter_batch_tasks", "start_after", "DATETIME DEFAULT NULL"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in additions:

@@ -228,3 +228,39 @@ def test_the_settle_critic_flags_forward_references_to_a_later_topic():
     assert "name that later topic" in prompts.CRITIC_SYSTEM
     assert "When the request carries chapter_topics_in_teaching_order" in prompts.CRITIC_SYSTEM
 
+
+
+# --------------------------------------------------------------------------- #
+# The owner's delimiter decision, 14 September 2026: keywords are a pipe list
+# --------------------------------------------------------------------------- #
+
+def test_a_new_run_writes_keywords_as_a_pipe_list_in_every_subject():
+    """Contract §16 and Appendix B.1 always said ``" | "``; Q33 had made the
+    cell comma-space and the reviewers re-delimited three chapters by hand.
+    The owner settled it on the contract's side for new runs."""
+    for subject in ("English", "Mathematics", "Science", "Social Science"):
+        policy = column_spec.for_metadata({"subject": subject})
+        assert policy["keywords_separator"] == " | ", subject
+        assert policy["version"] == column_spec.VERSION
+
+
+def test_a_comma_typed_cell_re_delimits_under_the_pipe_policy():
+    """A person typing the old spelling must not silently become ONE keyword:
+    under the pipe policy a comma list is read as the pre-v2.0 list it is."""
+    pipe = column_spec.for_metadata({"subject": "Mathematics"})
+    assert column_spec.keyword_cell("median, class interval, mode", pipe) == (
+        "median | class interval | mode"
+    )
+    # Every pipe spelling still lands on the one canonical form.
+    for spelling in ("a | b | c", "a |b| c", "a|b|c", " a| b |c "):
+        assert column_spec.keyword_cell(spelling, pipe) == "a | b | c", spelling
+    # And the cell the writer produces passes its own read-back check.
+    assert column_spec.keyword_defects("median | class interval | mode", pipe) == []
+
+
+def test_a_profile_frozen_under_the_comma_policy_still_writes_commas():
+    """Identity: a sealed run carries its own policy dict, so the delimiter
+    change cannot re-render an already-published workbook."""
+    frozen = {"keywords_separator": ", ", "version": "owner-column-spec-2026-09-08-v2"}
+    assert column_spec.keyword_cell("a | b | c", frozen) == "a, b, c"
+    assert column_spec.keyword_cell("a, b, c", frozen) == "a, b, c"

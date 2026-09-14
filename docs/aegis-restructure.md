@@ -4970,3 +4970,112 @@ Offline only: `tests/test_placeholder_captions.py` (the empty alt, the
 stamped render without the line, the sealed render with it, the unchanged
 context hash, the warning and its non-blocking status). No paid generation.
 
+
+
+## Q73 — decided — the batch lane: cohorts, waves, and the keyword delimiter
+
+Two owner decisions of 14 September 2026, one small and one structural.
+
+### The keyword delimiter
+
+> "The keywords should be divided with pipes. not commas."
+
+Contract §16 and Appendix B.1 always said the `" | "` list; Q33 had made the
+workbook cell comma-space; the reviewers re-delimited three chapters by hand
+(Q67 recorded the three-way conflict and left it with the owner). It is
+settled on the contract's side. `column_spec.VERSION` is
+`owner-column-spec-2026-09-14-v3` and `for_metadata` writes
+`keywords_separator: " | "` for every subject, English included.
+
+A cell someone types with commas is read as the pre-v2.0 comma list it is and
+re-joined with pipes, so one file still never mixes delimiters — the mirror
+image of the old policy, which re-delimited pipes into commas. **A profile
+frozen under the comma policy keeps comma-space**: the policy dict is carried
+on the run (`from_profile`), so a sealed run re-renders byte for byte and no
+published workbook moves. The concept prompts already asked for `" | "`
+(Q67); only the cell projection was disagreeing with them.
+
+### The batch lane
+
+> "I want the BATCH API price to be considered for the run. I dont want them
+> to run with individual costing... we can select 'x' number of chapters per
+> subject which has to run together... initiate the Concept Files generation
+> at once like in multiples of 12:00 PM, 12:30 PM... Even if there are 70 to
+> 100 sequences per chapter, output till each sequence can be stalled, and
+> then the next sequence can be pushed to the next together."
+
+That is the right shape, and it is what Q53 measured and deferred. Q53's
+count stands: a chapter resolves into 70–100 sequential waves and that number
+does not shrink with volume. What scales is the WIDTH of a wave — which is
+exactly what a cohort buys.
+
+**`app/services/batch_broker.py`** is the seam, at the one place every model
+call already passes through (`generation.py`'s `client.chat.completions.create`).
+A cohort run binds a broker; every request body arriving while the cohort is
+at the same seam is collected, submitted as one batch, and answered from its
+result. The body is unchanged, so everything downstream — usage recording,
+finish-reason handling, JSON parsing, the checker, the critic — is the same
+code for both paths. Rule 1 is untouched: the broker carries requests, it
+does not read them.
+
+Three properties matter more than the discount:
+
+* **A submitted wave is never paid for twice.** The wave record is written
+  BEFORE the request leaves; the provider batch id is written as soon as it
+  exists; the batch carries `metadata.aegis_wave`, so a wave whose record
+  lost its id is found by listing. Every returned line is stored
+  content-addressed by the sha256 of its request body. `initialize_chapter_queue`
+  recovers open waves at boot, so a crash mid-wave costs a restart, not the
+  cohort.
+* **A slow wave never strands a run.** Every waiter carries a deadline
+  (`AEGIS_BATCH_DEADLINE_SECONDS`, 90 minutes). On expiry the broker answers
+  `BatchUnavailable` and the caller makes the ordinary synchronous request —
+  the honest answer to the provider's 24-hour-only guarantee. Anything the
+  abandoned batch had already produced still lands in the store and is served
+  free to the next asker.
+* **A wave closes on quiet, not on a clock.** A stage's fan-out arrives in a
+  burst and then goes silent while the batch is out, so `AEGIS_BATCH_QUIET_SECONDS`
+  (20s) closes it, capped by `AEGIS_BATCH_MAX_WAIT_SECONDS` (180s) and
+  `AEGIS_BATCH_MAX_LINES` (400). The dispatcher sleeps exactly as long as the
+  open wave can afford: a fixed poll tick would be added to every one of a
+  chapter's seventy-plus seams.
+
+The binding is a **contextvar**, not a thread local, because
+`kernel.parallel_map_in_order` runs each stage worker under a copy of the
+caller's context — those sixteen siblings ARE the wave, and a thread local
+would have bound only the orchestrator.
+
+**The cohort.** `chapter_batch_tasks` gains `cohort_id` and `start_after`
+(additive `ALTER TABLE`; every task already queued reads cohort-less and
+claimable, which is what it was). `claimable` will not return a task before
+its slot, which is what makes a cohort START together rather than trickle in
+push order. `POST /chapter-batches/push` takes `cohort` and `start_at`; the
+console offers "Run together at the batch price" and the next half-hour slots.
+Publish is never a cohort step: it spends nothing and serializes on one
+workbook.
+
+**Admission.** A cohort task is bounded by `AEGIS_QUEUE_COHORT_CONCURRENCY`
+(6) rather than by the synchronous fan-out budget, because its requests queue
+at the provider rather than on this machine. Narrow the cohort and the waves
+narrow with it, which is the whole saving. The volume pre-check on a Step 02
+still applies, and a synchronous fallback still takes an ordinary provider
+slot — the gate is not removed, it is stepped around only for work that is
+not on it.
+
+**Pricing.** `openai_usage.record_batched_attempt()` marks the receipt and
+`_request_cost` applies `BATCH_RATE_MULTIPLIER` (0.5). The provider's own
+batch tier is accepted as priceable, so a cohort does not read as unpriced
+usage. A synchronous fallback inside a cohort run is still reported at the
+synchronous rate: the console shows what each request actually cost.
+
+**What this does not do, and needs one live cohort to settle.** Whether a
+batched request is eligible for the prompt-cache discount (the one recorded
+receipt spent $3.128 of $4.9718 on cache writes that bought 15,149 reads —
+0.12%); whether `prompt_cache_options` and `service_tier` are accepted in a
+batch body, which the per-line fallback would otherwise absorb silently; and
+the real wave latency, which decides whether a cohort finishes overnight or
+over days. The recorded estimate is $4.9718 → about $2.17.
+
+Offline only: `tests/test_batch_broker.py` (14), `tests/test_batch_pricing.py`
+(4), `tests/test_batch_cohort_queue.py` (9), and the frontend slot tests. No
+paid generation.

@@ -754,10 +754,21 @@ export const api = {
   chapterBatchPush: (
     step: ChapterBatchStep,
     rows: Array<{ chapter_id: number; lanes?: string[] }>,
+    // The batch lane (register Q73): `cohort` runs these chapters together so
+    // their stage fan-outs land in one provider wave and are billed at the
+    // batch price; `startAt` is the slot they all start on. Omitted entirely
+    // when the caller is making an ordinary push, so the request body is
+    // byte-identical to what it has always been.
+    options?: { cohort?: boolean; startAt?: string },
   ) =>
     http<ChapterBatchPushResult>("/chapter-batches/push", {
       method: "POST",
-      body: JSON.stringify({ step, rows }),
+      body: JSON.stringify({
+        step,
+        rows,
+        ...(options?.cohort ? { cohort: true } : {}),
+        ...(options?.startAt ? { start_at: options.startAt } : {}),
+      }),
     }),
   chapterBatchCancel: (chapterIds: number[]) =>
     http<ChapterBatchPushResult>("/chapter-batches/cancel", {

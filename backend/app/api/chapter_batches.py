@@ -18,6 +18,7 @@ Two shapes are deliberate:
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -45,6 +46,12 @@ class PushRow(BaseModel):
 class PushRequest(BaseModel):
     step: str = Field(..., description="step01 | step02 | publish")
     rows: list[PushRow] = Field(default_factory=list)
+    # The batch lane (register Q73). ``cohort`` runs these chapters together
+    # so their stage fan-outs land in one provider wave, at the batch price;
+    # ``start_at`` is the slot the owner asked for ("12:00, 12:30, 1:00…"),
+    # which is what makes them start together rather than trickle.
+    cohort: bool = False
+    start_at: datetime | None = None
 
 
 class ChapterIdsRequest(BaseModel):
@@ -238,12 +245,19 @@ def push(
             + ", ".join(chapter_batches.models.CHAPTER_BATCH_STEPS),
         )
     group = chapter_queue.new_push_group_id()
+    # Publishing spends nothing and writes a shared workbook one at a time, so
+    # it has nothing to gain from a wave and nothing to wait for.
+    cohort_id = group if (payload.cohort and step != "publish") else ""
+    start_after = payload.start_at
+    if start_after is not None and start_after.tzinfo is not None:
+        start_after = start_after.astimezone(timezone.utc).replace(tzinfo=None)
     results: list[dict[str, Any]] = []
     for item in payload.rows:
         outcome = chapter_queue.enqueue_one(
             db, int(item.chapter_id), step=step, push_group_id=group,
             actor_sub=user.sub, actor_email=user.email,
             lanes=item.lanes, running_probe=_running_probe,
+            cohort_id=cohort_id, start_after=start_after,
         )
         db.commit()
         outcome["row"] = chapter_batches.project_one(
@@ -256,7 +270,11 @@ def push(
             outcome["position"] = positions.get(int(outcome["task_id"]))
     # A push should start now, not at the next poll tick.
     chapter_queue_worker.nudge()
-    return {"step": step, "push_group_id": group, "results": results}
+    return {
+        "step": step, "push_group_id": group, "results": results,
+        "cohort_id": cohort_id,
+        "start_at": start_after.isoformat() if start_after else "",
+    }
 
 
 def _bulk(db: Session, user: auth.Principal, chapter_ids: list[int], act) -> dict:
