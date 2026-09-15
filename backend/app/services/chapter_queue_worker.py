@@ -29,7 +29,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .. import config, models
-from . import chapter_batches, chapter_queue
+from . import chapter_batches, chapter_queue, process_memory
 
 log = logging.getLogger(__name__)
 
@@ -82,9 +82,11 @@ def cohort_concurrency() -> int:
     A cohort's provider calls go to the batch endpoint, where the provider —
     not this machine — holds the queue, so the synchronous fan-out budget is
     not what bounds it. What bounds it is this machine: each concurrent run
-    holds its own source text, inventories and workbook buffers. Six is the
-    tested-safe default on the deployed 4 GB machine; the owner authorised
-    more capacity for wider cohorts, and this is the knob that spends it.
+    holds its own source text, inventories and workbook buffers. Six is a
+    chosen default, not a measured one — no cohort of six has been run on the
+    deployed machine, and this repository has already lost a run to guessing
+    at that number (register Q57). The heartbeat's ``chapter queue memory:``
+    line is what turns it into a measurement. Raise it against that log.
 
     A synchronous FALLBACK inside a cohort run still takes an ordinary
     provider slot, which is why this does not remove the gate — it sits
@@ -207,8 +209,25 @@ class ChapterQueueWorker:
         self._heartbeat: threading.Thread | None = None
         self._lock = threading.Lock()
         #: task id -> kind, for admission arithmetic AND for the sweep, which
-        #: must never reclaim a task this process is actually running.
+        #: must never reclaim a task this process is actually running. Its
+        #: shape is load-bearing: ``status()`` publishes it and both the sweep
+        #: and ``admits`` read its VALUES as kinds, so the cohort label rides
+        #: alongside in its own map rather than widening this one.
         self._in_flight: dict[int, str] = {}
+        #: task id -> cohort label (``""`` outside a cohort). Written and
+        #: popped under the same lock as ``_in_flight``; read-only diagnostics.
+        self._in_flight_cohort: dict[int, str] = {}
+        #: task id -> upload job id (``0`` until ``_run_one`` resolves it).
+        #: ``uploads`` marks a live run by holding that JOB's lock, so naming
+        #: the OTHER lanes in this process needs job ids, not task ids. Same
+        #: lock, same lifetime, same reason to ride alongside ``_in_flight``
+        #: rather than inside it.
+        self._in_flight_job: dict[int, int] = {}
+        #: The largest ``VmHWM`` any beat has reported, so a line can say how
+        #: much of the peak is NEW. A peak that stops growing is the signal
+        #: that a cohort width has settled; a peak that climbs every beat is
+        #: the signal that it has not.
+        self._peak_hwm_bytes = 0
         self._started_at = 0.0
         #: task ids whose wait has been logged once; cleared on claim.
         self._denied_logged: set[int] = set()
@@ -400,7 +419,8 @@ class ChapterQueueWorker:
                     if claimed is None:
                         continue
                     self._denied_logged.discard(int(claimed.id))
-                    self._launch(int(claimed.id), str(claimed.kind))
+                    self._launch(int(claimed.id), str(claimed.kind),
+                                 cohort=str(claimed.cohort_id or ""))
                     started += 1
         finally:
             db.close()
@@ -429,9 +449,10 @@ class ChapterQueueWorker:
         with self._lock:
             return list(self._in_flight)
 
-    def _launch(self, task_id: int, kind: str) -> None:
+    def _launch(self, task_id: int, kind: str, cohort: str = "") -> None:
         with self._lock:
             self._in_flight[task_id] = kind
+            self._in_flight_cohort[task_id] = cohort
         thread = threading.Thread(
             target=self._run_one, args=(task_id,),
             name=f"chapter-queue-{kind}-{task_id}", daemon=True,
@@ -445,6 +466,7 @@ class ChapterQueueWorker:
             task = db.get(models.ChapterBatchTask, int(task_id))
             if task is None:
                 return
+            self._note_job(task_id, task, db)
             verdict = chapter_queue.reconcile_before_dispatch(db, task)
             if verdict is not None:
                 chapter_queue.finish(
@@ -474,7 +496,29 @@ class ChapterQueueWorker:
             db.close()
             with self._lock:
                 self._in_flight.pop(int(task_id), None)
+                self._in_flight_cohort.pop(int(task_id), None)
+                self._in_flight_job.pop(int(task_id), None)
             self.nudge()
+
+    def _note_job(self, task_id: int, task, db) -> None:
+        """Record which upload job this task is about, before it can lock it.
+
+        Resolved here and not in ``_launch`` because ``_launch`` holds only a
+        task id and a kind, and because this runs before ``self._runner`` — so
+        the job id is always recorded BEFORE the lock that it explains can be
+        taken, which is what keeps the attribution below from ever counting
+        this queue's own run as somebody else's.
+
+        Diagnostics only: a task whose row has gone records ``0`` and runs
+        exactly as it would have.
+        """
+        try:
+            row = db.get(models.ChapterBatchRow, int(task.batch_row_id or 0))
+            job_id = int(getattr(row, "job_id", 0) or 0)
+        except Exception:  # noqa: BLE001 — a diagnostic never fails a run
+            job_id = 0
+        with self._lock:
+            self._in_flight_job[int(task_id)] = job_id
 
     def _settle(self, db, task_id: int, outcome: dict[str, Any]) -> None:
         state = str(outcome.get("state") or "failed")
@@ -517,9 +561,126 @@ class ChapterQueueWorker:
             refund_attempt=bool(outcome.get("refund_attempt")),
         )
 
+    def _other_generation_lanes(self, our_job_ids: set[int]) -> int | None:
+        """Generation lanes live in this process that are NOT this queue's.
+
+        The queue is not the only thing spending memory here: a person can
+        run Step 01 or Step 02 from the console while a cohort is running,
+        and the RSS on the line is the sum of both. ``uploads`` marks a live
+        run by holding that JOB's process-local lock — the marker
+        ``is_job_running`` reads — so the held locks that belong to no job
+        this queue is running are what let a reader attribute the number to a
+        cohort width rather than to a coincidence.
+
+        It is a SET DIFFERENCE and not a subtraction of counts. Subtracting
+        counts assumed every in-flight task holds a lock, and a publish task
+        holds none — ``_run_publish`` calls ``openai_usage.track()`` directly,
+        never ``run_with_openai_usage`` — while ``admits`` lets a publish run
+        beside generation as an ordinary state. One publish in flight
+        therefore cancelled one genuine interactive lane and printed a
+        confident ``other=0``: precisely the reading this field exists to
+        prevent, in precisely the case it was written for.
+
+        It is still an attribution and not an identity, in one direction: an
+        interactive run on the SAME job as an in-flight publish is indexed by
+        that one job id and is not separable from it here. Everything the
+        field was written for — an interactive lane beside a cohort — is on
+        different jobs by construction.
+
+        ``None`` when the marker cannot be read at all. The caller prints
+        ``other=?`` for that rather than dropping the field: an absent field
+        reads as zero, and zero is the answer that would send someone looking
+        at the wrong knob.
+        """
+        try:
+            from . import uploads
+
+            # Read-only, under the module's own guard. There is no public
+            # accessor for the whole set — ``is_job_running`` answers for one
+            # job id, and a caller has to know which id to ask about.
+            with uploads._usage_job_locks_guard:
+                held = {
+                    int(job_id)
+                    for job_id, lock in uploads._usage_job_locks.items()
+                    if lock.locked()
+                }
+        except Exception:  # noqa: BLE001 — a diagnostic never fails a beat
+            return None
+        return len(held - {int(job_id) for job_id in our_job_ids if job_id})
+
+    def _log_memory(self) -> None:
+        """One line per beat: what this process holds, and what is running.
+
+        Sampled BEFORE the lock is taken, so reading ``/proc`` can never make
+        a dispatch pass or a lease pop wait on instrumentation.
+
+        The counts are on the same line as the bytes on purpose. "RSS is
+        2.9 GiB" is not actionable; "RSS is 2.9 GiB with six step01s in cohort
+        slot-20260914T1230 in flight" is the sentence that decides whether
+        ``AEGIS_QUEUE_COHORT_CONCURRENCY`` can stay at six. Bytes are raw —
+        this is a series to grep and plot, and a rounded MiB hides exactly the
+        growth worth seeing.
+        """
+        reading = process_memory.sample()
+        with self._lock:
+            in_flight = dict(self._in_flight)
+            cohort_of = dict(self._in_flight_cohort)
+            job_of = dict(self._in_flight_job)
+        if reading is None:
+            rss = hwm = new_peak = "-"
+            ceiling = "-(unreadable)"
+        else:
+            grew = max(0, reading.hwm_bytes - self._peak_hwm_bytes)
+            self._peak_hwm_bytes = max(self._peak_hwm_bytes, reading.hwm_bytes)
+            rss = str(reading.rss_bytes)
+            hwm = str(reading.hwm_bytes)
+            new_peak = str(grew)
+            bound = reading.limit.limit_bytes
+            ceiling = f"{'-' if bound is None else bound}({reading.limit.source})"
+        kinds = list(in_flight.values())
+        # ``cohort_of`` is read with .get: a test — and any future caller that
+        # assigns ``_in_flight`` directly, as several already do — leaves it
+        # empty, and a subscript would turn a diagnostic into a KeyError
+        # inside the heartbeat thread.
+        labels = sorted({
+            cohort_of.get(task_id, "") for task_id in in_flight
+        } - {""})
+        other = self._other_generation_lanes(
+            {job_of.get(task_id, 0) for task_id in in_flight})
+        process_memory.logger().info(
+            "chapter queue memory: rss=%s hwm=%s new_peak=%s limit=%s "
+            "in_flight=%s step01=%s step02=%s publish=%s cohort=%s "
+            "cohorts=%s other=%s",
+            rss, hwm, new_peak, ceiling,
+            len(in_flight),
+            kinds.count("step01"), kinds.count("step02"),
+            kinds.count("publish"),
+            sum(1 for task_id in in_flight if cohort_of.get(task_id, "")),
+            ",".join(labels) or "-",
+            "?" if other is None else other,
+        )
+
     def _beat(self) -> None:
         while not self._stopping:
-            time.sleep(min(chapter_queue.HEARTBEAT_SECONDS, 15))
+            # ``self._sleep`` and not ``time.sleep``: the seam is already on
+            # the constructor, and without using it here the heartbeat is a
+            # thread no test can step — which is why the beat was untested
+            # while it was the only place that knows what this process holds.
+            self._sleep(min(chapter_queue.HEARTBEAT_SECONDS, 15))
+            try:
+                # ABOVE the idle guard. An idle beat is the reading that says
+                # what this process costs with nothing running, which is the
+                # baseline every other line is read against.
+                self._log_memory()
+            except Exception:  # noqa: BLE001 — a lease outranks a diagnostic
+                # Deliberately NOT ``log.debug`` on the module logger: that is
+                # the channel this whole module exists because production
+                # discards (uvicorn leaves root at WARNING with no handler).
+                # A ``_log_memory`` that raised every beat would take the
+                # memory series away from the one box it is for with no trace
+                # at all — the same silence Q57 was debugged without.
+                process_memory.logger().warning(
+                    "chapter queue: memory beat failed", exc_info=True)
             ids = self._in_flight_ids()
             if not ids:
                 continue
@@ -920,8 +1081,35 @@ def _recover_batch_waves() -> int:
     return recovered
 
 
+def _announce_memory_ceiling() -> None:
+    """Install the memory logger and record this machine's ceiling, once.
+
+    FIRST, before ``enabled()`` and before ``admission_shortfall()``. A
+    deployment that refuses to start the worker is exactly the deployment
+    somebody is about to reconfigure, and the ceiling is the number that
+    reconfiguration has to respect — so it has to be in the log of the boot
+    that refused, not only in the log of a boot that worked.
+    """
+    process_memory.install_logging()
+    bound = process_memory.limit()
+    process_memory.logger().info(
+        "chapter queue: memory limit %s (source=%s, bytes=%s)",
+        process_memory.human_bytes(bound.limit_bytes), bound.source,
+        "-" if bound.limit_bytes is None else bound.limit_bytes,
+    )
+
+
 def initialize_chapter_queue(session_factory) -> ChapterQueueWorker | None:
     global _worker, _disabled_reason
+    try:
+        _announce_memory_ceiling()
+    except Exception:  # noqa: BLE001 — a reading must never break a boot
+        # ``main.py``'s lifespan calls this unguarded, so an exception here is
+        # the whole application failing to start for the sake of a diagnostic.
+        # Every internal is already defensive; this is the one call site where
+        # the module's stated stance was not actually enforced.
+        log.warning(
+            "chapter queue: memory ceiling not recorded", exc_info=True)
     if not enabled():
         _disabled_reason = "disabled by AEGIS_QUEUE_WORKER"
         log.info("chapter queue worker disabled by AEGIS_QUEUE_WORKER")

@@ -41,6 +41,37 @@ def active(payload) -> bool:
 def store_jpeg(raw_image: bytes) -> bytes:
     """The asset store's JPEG form of one picture, mechanically.
 
+    A picture that IS already this form — a JPEG with no alpha channel to
+    composite — is passed through byte for byte, before ``load()`` decodes a
+    pixel. Re-encoding an already-lossy JPEG at q95 buys nothing and costs
+    three ways. It adds a generation of loss to bytes it cannot improve. It
+    INFLATES them (measured on the page renders below: 26,884 -> 36,626 for
+    one page, +36%; +55% on a text-dense page), and that inflation is
+    durable, because what is written is what the store keeps. And it is paid
+    on every read, not every change: ``queue`` reads the whole document,
+    which pins every picture, and only THEN compares the file hash, so every
+    re-upload of an unchanged file decodes and re-encodes the complete page
+    set before discarding the document it came from.
+
+    Passing the bytes through also lets one picture have one identity. The
+    store is content addressed, so the same page rendered by the source lane
+    and by this one now hash to the same stored file instead of to a q95
+    variant only this lane can produce.
+
+    The scan layout is deliberately not part of the condition. MuPDF's
+    encoder emits a PROGRESSIVE JPEG (SOF2, verified on PyMuPDF 1.28.2),
+    which is the form this repo's own page renders already send to the
+    vision API through ``canonical_source_phase221_fallback``; a
+    baseline-only pass-through would re-encode exactly the pictures this
+    exists for.
+
+    Greyscale counts as alpha-free. ``L`` is the ordinary form of a scanned
+    page a reviewer pastes in, it has nothing to composite, and the vision
+    API reads it. Re-encoding one does not merely inflate it — it converts
+    the single channel to three and writes them at q95 (measured on a grey
+    2x page render: 10,924 -> 36,626 bytes, +235%). ``CMYK`` is still
+    converted, and so is every container that is not a JPEG.
+
     Transparency is composited onto white — the background Excel and Word
     show behind a pasted picture — instead of the black a bare ``RGB``
     conversion produces, which would erase a line drawing entirely.
@@ -48,6 +79,8 @@ def store_jpeg(raw_image: bytes) -> bytes:
     from PIL import Image as PILImage
 
     with PILImage.open(io.BytesIO(raw_image)) as picture:
+        if picture.format == "JPEG" and picture.mode in {"RGB", "L"}:
+            return raw_image
         picture.load()
         if picture.mode in {"RGBA", "LA", "P"}:
             translucent = picture.convert("RGBA")
@@ -213,7 +246,17 @@ def read_document(path: Path, filename: str, *, job_id: int | None = None) -> di
             import fitz
             with fitz.open(stream=raw, filetype="pdf") as document:
                 for page in document:
-                    ref = image(page.get_pixmap().tobytes("png"), "image/png", page=page.number + 1)
+                    # The house page render (canonical_source_phase221_fallback:
+                    # 2x matrix, no alpha, JPEG q88). The 1x PNG this replaced
+                    # was not cheaper: at ``detail: "high"`` the model scales
+                    # the image to a shortest side of 768, so a 595x842 1x
+                    # render is UPSCALED to 768x1087 and the 2x render is
+                    # DOWNSCALED to the same 768x1087 — identical tile count,
+                    # identical token cost, and strictly more real detail
+                    # survives the downscale than an upscale can invent.
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                    ref = image(pixmap.tobytes("jpeg", jpg_quality=88),
+                                "image/jpeg", page=page.number + 1)
                     block(page.get_text(), page=page.number + 1, image_refs=[ref])
         else:
             block(raw.decode("utf-8-sig"))

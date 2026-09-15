@@ -49,6 +49,36 @@ def _null_architect_assembly(monkeypatch):
     )
 
 
+def _stub_hierarchy_role(row: dict) -> str:
+    """Answer from whichever structural projection Phase 3 sent.
+
+    A compile that has NOT frozen the structural-baseline stamp carries
+    ``baseline_role`` — the title-vocabulary verdict — exactly as it always
+    did. A run that goes through ``prepare_generation_graph`` freezes the
+    stamp (Q74) and carries ``structural_evidence`` instead: the printed
+    number, heading kind, depth and chapter-title match, with the role left
+    to the model. These stubs stand in for that model, so they must be able
+    to read both; on this fixture the two projections agree exactly, which is
+    what keeps the rest of each test's expectations unchanged.
+    """
+    if "baseline_role" in row:
+        return str(row["baseline_role"])
+    evidence = row.get("structural_evidence") or {}
+    if evidence.get("title_matches_chapter_title"):
+        return "chapter_heading"
+    if evidence.get("numbered_main"):
+        return "main_topic"
+    if evidence.get("numbered_sub"):
+        return "subtopic"
+    # Everything left on this fixture is its one unnumbered teaching heading.
+    # A depth rule here would be the same pre-cooked verdict the stamp
+    # removes — and since the parser's own main-topic guess is deliberately
+    # NOT part of ``structural_evidence`` (it is not printed structure), a
+    # stub that leaned on depth would answer "subtopic" for the chapter's only
+    # topic and leave the graph with no main topic at all.
+    return "main_topic"
+
+
 def _malformed_source(count: int = 1) -> str:
     paragraphs = "\n\n".join(
         f"Source item {index} has $value{index}+1"
@@ -870,10 +900,11 @@ def test_prepare_turns_exact_generic_rich_text_failure_into_one_decision(
         return {
             "sections": [{
                 "section_id": row["section_id"],
-                "role": row["baseline_role"],
+                "role": _stub_hierarchy_role(row),
                 "parent_section_id": "",
                 "topic_display_name": (
-                    row["title"] if row["baseline_role"] == "main_topic" else ""
+                    row["title"]
+                    if _stub_hierarchy_role(row) == "main_topic" else ""
                 ),
                 "confidence": 0.999,
                 "evidence": ["verified test hierarchy"],

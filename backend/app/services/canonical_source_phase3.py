@@ -101,6 +101,34 @@ _MACHINE_METADATA_MIGRATION_VERSION = 1
 # and no cached decision key moves. Not part of ``semantic_context_hash``.
 FIGURE_CAPTION_RENDER_KEY = "figure_caption_render"
 FIGURE_CAPTION_RENDER_VERSION = "unprinted-caption-blank-2026-09-13-v1"
+
+# Q74: how a verified page block becomes replacement source text. Under v2 the
+# 0.35 token-overlap floor is gone — a threshold has no way to tell "this page
+# block is the wrong evidence" from "this page block is a cubic-lattice figure
+# whose caption shares no words with the sentence that cites it" — and one page
+# block may offer more than one faithful rendering, so a candidate is
+# identified by ``<block_key>#<rendering_id>`` with the default rendering
+# keeping the bare ``block_key``.
+#
+# Like ``FIGURE_CAPTION_RENDER_*`` the stamp lives on the GRAPH, not in
+# ``semantic_context_hash``: a graph sealed before this policy re-derives its
+# overrides through exactly the gates it was sealed with, so a paid run never
+# has a stored ``source_override`` refused out from under it, and no
+# conversion cache key moves.
+SOURCE_FUSION_POLICY_KEY = "source_fusion_policy"
+SOURCE_FUSION_POLICY_VERSION = "verified-block-selection-2026-09-14-v2"
+
+# Q74: the printed structure a section carries — its number, its heading kind,
+# whether it repeats the chapter title — is EVIDENCE for the hierarchy model,
+# not a verdict handed to it. Under the stamp the classification payload
+# carries that evidence instead of ``baseline_role``, the title-vocabulary
+# verdict six regexes used to reach on the model's behalf (Rule 1). The stamp
+# rides ``metadata`` because only a genuinely new hierarchy decision may adopt
+# it; it is not part of ``semantic_context_hash`` (see the three delegated
+# ``fields()`` helpers, each of which returns only its own key), so a recorded
+# graph keeps its identity.
+STRUCTURAL_BASELINE_KEY = "structural_baseline_policy"
+STRUCTURAL_BASELINE_VERSION = "structural-evidence-2026-09-14-v1"
 _ADJUDICATED_HEADING_MIGRATION_KEY = (
     "adjudicated_heading_validation_migration"
 )
@@ -576,6 +604,30 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
     return _sha256_json(identity)
 
 
+def _source_fusion_v2(graph: Any) -> bool:
+    """Whether THIS graph was compiled under the v2 verified-block policy.
+
+    Read off the graph rather than a module flag so a resumed run replays the
+    policy it was sealed with: a stored ``source_override`` is re-derived and
+    re-gated on every reattach, and a v1 graph re-gated under v2 (or the
+    reverse) would refuse work the owner has already paid for.
+    """
+
+    return bool(
+        isinstance(graph, dict)
+        and graph.get(SOURCE_FUSION_POLICY_KEY) == SOURCE_FUSION_POLICY_VERSION
+    )
+
+
+def _structural_baseline_v1(metadata: Any) -> bool:
+    """Whether this run's hierarchy payload carries structural evidence."""
+
+    return bool(
+        isinstance(metadata, dict)
+        and metadata.get(STRUCTURAL_BASELINE_KEY) == STRUCTURAL_BASELINE_VERSION
+    )
+
+
 def _title_number(title: object, raw: object = "") -> tuple[str, str]:
     text = _SPACE_RE.sub(" ", str(title or "")).strip()
     source = str(raw or "")
@@ -1030,12 +1082,66 @@ def _verified_adjudicated_heading_binding(
     )
 
 
+def _structural_evidence_rows(
+    sections: list[dict[str, Any]],
+    *,
+    chapter_title: str,
+    numbered_main_section_ids: set[str],
+    numbered_sub_section_ids: set[str],
+    structural_numbers: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Project the printed structure each section carries, judging nothing.
+
+    Every field here is something the book itself prints or the sealed
+    numbered-heading inventory already recorded: the number on the heading,
+    how that heading was written, its depth, and whether it repeats the
+    selected chapter title. Nothing is mapped to a role — that is the
+    hierarchy model's decision (Rule 1), and this is the evidence it needs to
+    make it without the six title-vocabulary regexes reaching it first.
+    """
+
+    rows: dict[str, dict[str, Any]] = {}
+    chapter_key = _normal(chapter_title)
+    numbers = dict(structural_numbers or {})
+    for section in sections:
+        section_id = str(section.get("section_id") or "")
+        if not section_id:
+            continue
+        title = str(section.get("title") or "").strip()
+        title_key = _normal(title)
+        try:
+            level = max(1, int(section.get("level") or 1))
+        except (TypeError, ValueError):
+            level = 1
+        rows[section_id] = {
+            "numbered_main": section_id in numbered_main_section_ids,
+            "numbered_sub": section_id in numbered_sub_section_ids,
+            # Phase 2 strips the printed number off the heading title, so the
+            # number lives in the sealed numbered-heading inventory. A section
+            # with no number carries the empty string — an absence the model
+            # is allowed to see, not a missing field it has to guess at.
+            "structural_number": str(
+                section.get("number")
+                or numbers.get(section_id)
+                or _title_number(title)[0]
+                or ""
+            ),
+            "heading_kind": str(section.get("heading_kind") or ""),
+            "title_matches_chapter_title": bool(
+                title_key and chapter_key and title_key == chapter_key
+            ),
+            "level": level,
+        }
+    return rows
+
+
 def _classification_payload(
     canonical: dict[str, Any],
     *,
     metadata: dict[str, Any],
     baseline: dict[str, str],
     page_bundle: dict[str, Any] | None,
+    structural_evidence: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from . import generation_quality_policy
     blocks_by_id = {
@@ -1043,6 +1149,18 @@ def _classification_payload(
         for block in canonical.get("blocks") or []
         if isinstance(block, dict)
     }
+    # Under the structural-baseline stamp the model is shown what the book
+    # PRINTS instead of ``baseline_role``, the verdict ``_baseline_section_role``
+    # reaches with six title regexes ("Activity", "Source A", "Summary"…).
+    # Unstamped runs emit the identical payload, so ``_sha256_json(payload)``
+    # and phase 3.4's ``payload_sha256`` do not move and no cached hierarchy
+    # batch is re-paid for.
+    structural = (
+        structural_evidence
+        if structural_evidence is not None
+        and _structural_baseline_v1(metadata)
+        else None
+    )
     sections = [
         {
             "section_id": str(section.get("section_id") or ""),
@@ -1050,7 +1168,19 @@ def _classification_payload(
             "level": int(section.get("level") or 1),
             "source_order": int(section.get("order") or 0),
             "source_start": int(section.get("source_start") or 0),
-            "baseline_role": baseline.get(str(section.get("section_id") or ""), "other"),
+            **(
+                {
+                    "structural_evidence": copy.deepcopy(
+                        structural.get(str(section.get("section_id") or ""), {})
+                    )
+                }
+                if structural is not None
+                else {
+                    "baseline_role": baseline.get(
+                        str(section.get("section_id") or ""), "other"
+                    )
+                }
+            ),
             "excerpt": _section_excerpt(section, blocks_by_id),
         }
         for section in canonical.get("sections") or []
@@ -1573,6 +1703,22 @@ def compile_semantic_graph(
     for virtual in sections:
         if virtual.get("phase3_virtual"):
             numbered_main_ids.add(str(virtual.get("section_id") or ""))
+    # The structural EVIDENCE the hierarchy model reads may only carry what
+    # the page prints. ``numbered_main_ids`` is wider than that: it also holds
+    # ``fallback_main_section_ids``, which is
+    # ``generation._topic_headings``' verdict about which UNNUMBERED headings
+    # are topics — a shallowest-level-with-enough-sections rule with a
+    # math-fragment filter. Sending that verdict across as "numbered_main"
+    # with an empty ``structural_number`` would be the same pre-cooked answer
+    # this stamp exists to remove, wearing an evidence label (Rule 1), and
+    # both prompt sentences vouch that the field is printed structure.
+    # A restored virtual parent DOES keep the flag: its number is one the page
+    # prints, recovered from verified page evidence under the source-critical
+    # floor, and it carries that number in ``structural_number``.
+    printed_main_section_ids = numbered_main_ids - fallback_main_section_ids
+    for virtual in sections:
+        if virtual.get("phase3_virtual"):
+            printed_main_section_ids.add(str(virtual.get("section_id") or ""))
 
     fallback_subtopic_parent: dict[str, str] = {}
     if fallback_main_section_ids:
@@ -1601,6 +1747,30 @@ def compile_semantic_graph(
             ]
             if parents:
                 fallback_subtopic_parent[sid] = str(parents[-1].get("section_id") or "")
+
+    # The number each heading PRINTS, read off the sealed numbered-heading
+    # inventory rather than the title (Phase 2 has already stripped it there).
+    # Evidence for the hierarchy model under the structural-baseline stamp;
+    # unused otherwise, and it decides nothing either way.
+    structural_numbers: dict[str, str] = {
+        str(row.get("resolved_section_id") or ""): str(row.get("number") or "")
+        for row in numbered_main_bindings
+        if str(row.get("resolved_section_id") or "")
+        and str(row.get("number") or "")
+    }
+    for _major, sub_blocks in subs.items():
+        for sub_block in sub_blocks:
+            if not isinstance(sub_block, dict):
+                continue
+            sub_section_id = str(sub_block.get("section_id") or "")
+            if not sub_section_id or sub_section_id in structural_numbers:
+                continue
+            sub_number = _title_number(
+                str((sub_block.get("heading") or {}).get("title") or ""),
+                str(sub_block.get("raw_text") or ""),
+            )[0]
+            if sub_number:
+                structural_numbers[sub_section_id] = sub_number
 
     baseline = {
         str(section.get("section_id") or ""): _baseline_section_role(
@@ -1635,6 +1805,13 @@ def compile_semantic_graph(
             metadata=metadata,
             baseline=baseline,
             page_bundle=page_bundle,
+            structural_evidence=_structural_evidence_rows(
+                sections,
+                chapter_title=chapter_title,
+                numbered_main_section_ids=printed_main_section_ids,
+                numbered_sub_section_ids=numbered_sub_ids,
+                structural_numbers=structural_numbers,
+            ),
         )
         classifications = _validate_classifications(
             section_ids, hierarchy_provider(payload)
@@ -1988,6 +2165,7 @@ def compile_semantic_graph(
         "schema_version": SCHEMA_VERSION,
         "compiler_version": COMPILER_VERSION,
         FIGURE_CAPTION_RENDER_KEY: FIGURE_CAPTION_RENDER_VERSION,
+        SOURCE_FUSION_POLICY_KEY: SOURCE_FUSION_POLICY_VERSION,
         "semantic_confidence_policy": confidence_policy.cache_identity(),
         "phase": PHASE,
         "status": "ready" if not suspicious_blocks else "review_required",
@@ -2303,6 +2481,19 @@ def _graph_block_text(
         resolved = str(override.get("resolved_text") or "")
         if override.get("resolved_sha256") == _sha256_text(resolved):
             return resolved
+    # A rich-text repair may legitimately resolve to NOTHING: the commonest
+    # real defect is a block whose entire content is a stray display-math
+    # closer, and its only faithful repair is to emit nothing (register Q74).
+    # The truthy branch above cannot express that, so suppression is its own
+    # branch — still hash-pinned, so an empty resolution is as tamper-evident
+    # as any other.
+    if (
+        isinstance(override, dict)
+        and override.get("mode") == _REPAIR_MODE
+        and override.get("suppressed") is True
+        and override.get("resolved_sha256") == _sha256_text("")
+    ):
+        return ""
     source = canonical_block or {}
     return str(source.get("display_text") or source.get("raw_text") or "")
 
@@ -2754,6 +2945,207 @@ def _critic_source_anomaly_via_openai(
     )
 
 
+# --------------------------------------------------------------------------- #
+# The rich-text repair (register Q74)
+# --------------------------------------------------------------------------- #
+#
+# ``validate_graph`` refuses a graph whose semantic source carries non-canonical
+# rich text, and until Q74 nothing could repair it. The converter lane above
+# selects a DIFFERENT verified page block, which cannot help here: the MMD was
+# rendered from those same page blocks, so the defect lives in the block's own
+# transcription and every candidate carries it. Two owner chapters died that
+# way (BLK-00312, BLK-00348).
+#
+# So this lane adds the one move the defect needs — the model re-expresses the
+# block's text in the canonical form, with the verified page evidence in hand —
+# behind the same independent critic and SOURCE_CRITICAL floor the selector
+# uses. It runs INSIDE Phase 3, whose caches are job-scoped, so no page is
+# re-read and no already-converted PDF is touched (the owner's constraint of
+# 14 September 2026).
+#
+# The acceptance gates below are what make this safe to do at all: this is the
+# first place in the source lane where a model produces source BYTES rather
+# than selecting an opaque evidence id.
+
+#: A repair that changes nothing but the refused markup. Every token the block
+#: already carried must survive, so a fluent paraphrase is refused even when it
+#: is canonical.
+_REPAIR_MODE = "api_canonicalized_rich_text"
+
+
+def _rich_text_repair_schema() -> dict[str, Any]:
+    """Every declared property is required: OpenAI refuses the whole request
+    with 400 ``invalid_schema`` otherwise, and no retry or Fixer can help
+    (register Q61)."""
+    return {
+        "name": "aegis_phase3_rich_text_repair",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": ["canonicalize", "suppress", "review_required"],
+                },
+                "canonical_text": {"type": "string"},
+                "suppressed": {"type": "boolean"},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "reason": {"type": "string"},
+            },
+            "required": [
+                "decision", "canonical_text", "suppressed", "confidence",
+                "reason",
+            ],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _rich_text_repair_critic_schema() -> dict[str, Any]:
+    return {
+        "name": "aegis_phase3_rich_text_repair_verification",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "verdict": {
+                    "type": "string", "enum": ["verified", "rejected"],
+                },
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "issues": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+            "required": ["verdict", "confidence", "issues", "reason"],
+            "additionalProperties": False,
+        },
+    }
+
+
+_REPAIR_SYSTEM = (
+    "You are the Aegis source rich-text canonicalizer. One ACSD block's text "
+    "carries markup the Aegis rich-text contract refuses, and the block is "
+    "shown to you beside the original PDF pages it was transcribed from. "
+    "Re-express THAT SAME CONTENT in the canonical form.\n\n"
+    "This is a transcription repair, never an edit. Preserve every word, "
+    "number, symbol, unit and URL the block already carries, in its order. Do "
+    "not summarise, rephrase, complete, correct or extend the source. Do not "
+    "invent a caption, a table cell or an asset URL. If the printed page and "
+    "the block disagree, follow the page.\n\n"
+    "Choose 'suppress' only when the block's entire content is refused markup "
+    "carrying no readable text at all — a stray display-math closer, for "
+    "instance — so that the correct repair is to emit nothing. Choose "
+    "'review_required' whenever you cannot do this faithfully; a refused "
+    "repair is recorded honestly and costs far less than a plausible rewrite."
+)
+
+_REPAIR_CRITIC_SYSTEM = (
+    "You are the independent Aegis rich-text repair verifier. You are given "
+    "one ACSD block's original text, a proposed canonical re-expression, and "
+    "the original PDF pages. Verify that the proposal says exactly what the "
+    "source says — same words, numbers, symbols, units and URLs, same order — "
+    "and that it adds nothing and drops nothing. Reject a fluent paraphrase, a "
+    "completed sentence, a corrected fact, an invented caption, or any change "
+    "of meaning, however small, even when the result is canonical. Verifying "
+    "an unfaithful repair is worse than refusing a faithful one."
+)
+
+
+def _repair_rich_text_via_openai(
+    packet: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    prompt = json.dumps({
+        key: value for key, value in packet.items()
+        if key != "candidate_page_numbers"
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=_REPAIR_SYSTEM,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_rich_text_repair_schema(),
+        purpose="source_adjudication",
+        max_tokens=6000,
+    )
+
+
+def _critic_rich_text_repair_via_openai(
+    packet: dict[str, Any], proposal: dict[str, Any], *, source_path: Path
+) -> dict[str, Any]:
+    prompt = json.dumps({
+        "packet": {
+            key: value for key, value in packet.items()
+            if key != "candidate_page_numbers"
+        },
+        "proposal": proposal,
+    }, ensure_ascii=False, indent=2)
+    return phase22._openai_multimodal_json(
+        system=_REPAIR_CRITIC_SYSTEM,
+        prompt=prompt,
+        pages=_anomaly_evidence_pages(
+            source_path, packet.get("candidate_page_numbers") or []
+        ),
+        response_schema=_rich_text_repair_critic_schema(),
+        purpose="advisory_critic",
+        max_tokens=4000,
+    )
+
+
+#: Markup whose own words are not content. Stripped from BOTH sides before the
+#: comparison below, because a repair's whole job is to remove markup — and
+#: ``\\textbf``, ``[Katex]`` and ``<table>`` all contain word-shaped tokens that
+#: would otherwise read as content the repair "lost".
+_MARKUP_WORDS_RE = re.compile(
+    r"\\[A-Za-z]+|\[/?Katex\]|</?[A-Za-z][^>]*>"
+)
+
+
+def _visible_tokens(text: str) -> set[str]:
+    return _source_tokens(_MARKUP_WORDS_RE.sub(" ", text))
+
+
+def _repair_is_faithful(before: str, after: str) -> str:
+    """Empty when the repair may be accepted, else the reason it may not.
+
+    This is mechanics, not judgment: it compares two texts for the words,
+    digits and URLs they contain. It never decides what the source MEANS — the
+    model did that, and an independent critic checked it — it only declines a
+    repair that lost or gained content, which is exactly how a fluent,
+    canonical-looking paraphrase would fail.
+
+    Both sides are compared with markup words stripped. Comparing raw tokens
+    would refuse every legitimate repair, since removing ``\\textbf{bold}`` in
+    favour of ``bold`` "loses" the token ``textbf``.
+    """
+    if kr.rich_text_issues(_clean_public_text(after)):
+        return "the proposed text is still refused by the rich-text contract"
+    before_words = _visible_tokens(before)
+    after_words = _visible_tokens(after)
+    lost = before_words - after_words
+    if lost:
+        return (
+            "the proposed text drops "
+            + ", ".join(sorted(lost)[:5])
+            + " from the source"
+        )
+    gained = after_words - before_words
+    if gained:
+        return (
+            "the proposed text adds "
+            + ", ".join(sorted(gained)[:5])
+            + " that the source does not carry"
+        )
+    before_digits = re.findall(r"\d", before)
+    after_digits = re.findall(r"\d", after)
+    if sorted(before_digits) != sorted(after_digits):
+        return "the proposed text changes the digits the source carries"
+    before_urls = set(re.findall(r"https://[^\s)\]]+", before))
+    after_urls = set(re.findall(r"https://[^\s)\]]+", after))
+    if before_urls != after_urls:
+        return "the proposed text changes the URLs the source carries"
+    return ""
+
+
 def _page_and_block_by_key(
     page_bundle: dict[str, Any], block_key: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -2902,11 +3294,108 @@ def _render_verified_page_block(
     return str(block.get("text") or "").strip()
 
 
+_DEFAULT_PAGE_RENDERING = ""
+_RENDERING_SEPARATOR = "#"
+
+
+class _VerifiedRenderingRefused(ValueError):
+    """A verified page rendering that cannot be sealed, with its defect names.
+
+    A ``ValueError`` subclass on purpose: every existing caller catches
+    ``(TypeError, ValueError)`` and keeps behaving exactly as it did. What it
+    adds is the list of NAMED defects, so a rejected rendering can be shown to
+    the reviewer and the diagnostician as evidence — "this page block renders
+    an unclosed math delimiter" — instead of vanishing from the shortlist the
+    way the 0.35 floor used to make it vanish.
+    """
+
+    def __init__(self, message: str, defects: Iterable[str] = ()) -> None:
+        super().__init__(message)
+        self.defects = [str(value) for value in defects if str(value)]
+
+
+def _split_verified_target(target_id: str) -> tuple[str, str]:
+    """Split ``<block_key>#<rendering_id>`` into its two mechanical halves.
+
+    A v1 target carries no separator and therefore keeps the bare block key,
+    which is what makes every recorded ``selected_block_key`` replay byte for
+    byte. ``_page_block_key`` is ``"<page_id>:<order>"`` and page ids never
+    contain ``#``, so the split is unambiguous.
+    """
+
+    block_key, separator, rendering_id = str(target_id or "").partition(
+        _RENDERING_SEPARATOR
+    )
+    return block_key, (rendering_id if separator else _DEFAULT_PAGE_RENDERING)
+
+
+def _verified_target_id(block_key: str, rendering_id: str) -> str:
+    if not rendering_id:
+        return str(block_key)
+    return f"{block_key}{_RENDERING_SEPARATOR}{rendering_id}"
+
+
+def _verified_page_renderings(
+    page: dict[str, Any], block: dict[str, Any]
+) -> list[tuple[str, dict[str, Any]]]:
+    """Every faithful rendering one verified page block can supply.
+
+    The default rendering comes FIRST and carries the empty id, so its
+    ``target_id`` is exactly the block key v1 minted and no recorded decision,
+    context hash or override moves.
+
+    After it come the block's own page-qualified ``linked_visual_refs`` — the
+    authoritative link the page extraction wrote, not the page-local
+    ``linked_visual_orders`` guess it may have left stale. That is the second
+    faithful reading of one page block: a paragraph or table that cites a
+    figure may need the FIGURE, not its own OCR text, and under v1 that
+    rendering had no id at all so a reviewer could never choose it.
+    """
+
+    renderings: list[tuple[str, dict[str, Any]]] = [
+        (_DEFAULT_PAGE_RENDERING, block)
+    ]
+    page_id = str(page.get("page_id") or "")
+    figures_by_order = {
+        int(row.get("reading_order") or 0): row
+        for row in page.get("blocks") or []
+        if isinstance(row, dict) and row.get("kind") == "figure"
+    }
+    seen: set[int] = set()
+    for ref in block.get("linked_visual_refs") or []:
+        if not isinstance(ref, dict):
+            continue
+        ref_page = str(ref.get("page_id") or "")
+        if ref_page and ref_page != page_id:
+            # A cross-page visual cannot be rendered from this page alone.
+            # It is not lost: the owning page block is its own candidate.
+            continue
+        try:
+            order = int(ref.get("reading_order") or 0)
+        except (TypeError, ValueError):
+            continue
+        figure = figures_by_order.get(order)
+        if figure is None or order in seen:
+            # A ref that names no figure on this page — a stale order, or a
+            # link to a table or paragraph — mints no rendering here. Like the
+            # cross-page case above, the referenced block is scored as its own
+            # candidate by ``_candidate_anomaly_packet`` and reaches the
+            # reviewer under its own key whenever it makes the shortlist; what
+            # is not offered is reading THIS block as that one, which is not a
+            # rendering of this block's own evidence.
+            continue
+        seen.add(order)
+        renderings.append((f"visual-{order:04d}", figure))
+    return renderings
+
+
 def _resolve_verified_page_candidate(
     canonical_block: dict[str, Any],
     *,
     selected_page: dict[str, Any],
     selected_block: dict[str, Any],
+    rendering_id: str = _DEFAULT_PAGE_RENDERING,
+    policy_v2: bool = False,
 ) -> str:
     """Derive replacement text from verified page data without model prose."""
 
@@ -2915,10 +3404,42 @@ def _resolve_verified_page_candidate(
         or canonical_block.get("raw_text")
         or ""
     )
-    if canonical_block.get("kind") == "table":
+    if rendering_id:
+        # A named rendering is a DIFFERENT verified block on the same page,
+        # chosen deliberately by the reviewer (or by an instruction the model
+        # interpreted within the supplied ids). The table gate below guards the
+        # DEFAULT rendering — "you asked to replace a table with this block's
+        # own transcription and this block is not a table" — and does not apply
+        # to a linked visual: contract §11/Q38 want one complete faithful image
+        # where a table cannot be transcribed, and that image IS a figure
+        # block. The rich-text contract at the end of this function still runs
+        # on whatever the rendering produces.
+        if not policy_v2:
+            raise _VerifiedRenderingRefused(
+                "a non-default verified page rendering requires the "
+                "verified-block selection policy",
+                ["rendering_policy_not_active"],
+            )
+        rendering = next(
+            (
+                row for identifier, row
+                in _verified_page_renderings(selected_page, selected_block)
+                if identifier == rendering_id
+            ),
+            None,
+        )
+        if not isinstance(rendering, dict):
+            raise _VerifiedRenderingRefused(
+                "the selected verified page rendering no longer exists",
+                ["unknown_rendering"],
+            )
+        resolved = _render_verified_page_block(selected_page, rendering)
+    elif canonical_block.get("kind") == "table":
         if selected_block.get("kind") != "table":
-            raise ValueError(
-                "table anomaly must be resolved by a verified table block")
+            raise _VerifiedRenderingRefused(
+                "table anomaly must be resolved by a verified table block",
+                ["table_requires_verified_table_block"],
+            )
         resolved = _full_table_asset(selected_block) or _patch_suspicious_table(
             canonical_text,
             selected_block=selected_block,
@@ -2927,25 +3448,58 @@ def _resolve_verified_page_candidate(
     else:
         resolved = _render_verified_page_block(
             selected_page, selected_block)
-        source_tokens = _source_tokens(canonical_text)
-        resolved_tokens = _source_tokens(resolved)
-        if source_tokens and resolved_tokens:
-            overlap = len(source_tokens & resolved_tokens) / max(
-                1, min(len(source_tokens), len(resolved_tokens))
-            )
-            if overlap < 0.35:
-                raise ValueError(
-                    "verified replacement does not match the source block "
-                    "context")
+        if not policy_v2:
+            # Q74 removes this floor. A token-overlap ratio cannot tell the
+            # wrong page block from the right one: the cubic-lattice figure
+            # that a sentence about sodium chloride cites shares none of that
+            # sentence's words, and the 0.35 line silently DROPPED it from
+            # the reviewer's shortlist rather than showing it and letting the
+            # model and the reviewer judge. The grammar gate below still
+            # refuses anything that cannot be sealed (Rule 1: a gate that
+            # refuses a broken artifact is mechanics; a threshold that
+            # decides what the source means is not).
+            source_tokens = _source_tokens(canonical_text)
+            resolved_tokens = _source_tokens(resolved)
+            if source_tokens and resolved_tokens:
+                overlap = len(source_tokens & resolved_tokens) / max(
+                    1, min(len(source_tokens), len(resolved_tokens))
+                )
+                if overlap < 0.35:
+                    raise _VerifiedRenderingRefused(
+                        "verified replacement does not match the source block "
+                        "context",
+                        ["source_context_overlap"],
+                    )
     cleaned = _clean_public_text(resolved)
-    if (
-        not cleaned
-        or _SUSPICIOUS_MARKUP_RE.search(cleaned)
-        or kr.rich_text_issues(cleaned)
-    ):
-        raise ValueError(
-            "verified replacement violates semantic rich-text contract")
+    defects: list[str] = []
+    if not cleaned:
+        defects.append("empty_rendering")
+    elif _SUSPICIOUS_MARKUP_RE.search(cleaned):
+        defects.append("converter_semantic_markup")
+    defects.extend(kr.rich_text_issues(cleaned))
+    if defects:
+        raise _VerifiedRenderingRefused(
+            "verified replacement violates semantic rich-text contract",
+            defects,
+        )
     return resolved
+
+
+# A v2 shortlist scores more page blocks and more renderings per block before
+# anything is discarded. The retrieval cut still runs first — it is how any of
+# this stays bounded — but under v1 it was ALSO the sealability cut, at 12: a
+# page block that could actually be applied was thrown away to make room for
+# eleven that could not, and nothing recorded either loss. Under v2 the
+# retrieval cut is wider and the survivor caps below run after resolution, so
+# what they bound is applicable candidates and named rejections rather than
+# retrieval score. They are what the reviewer and the pending payload are
+# budgeted for: 1 item + 20 graph errors + 23 candidates + 24 rejections stays
+# inside ``_source_review_pending``'s ``evidence[:100]`` cap, and only the
+# SEALABLE rows carry a page number into the one bounded diagnosis request, so
+# a named rejection costs prose and never another rendered page image.
+_V2_ANOMALY_PACKET_LIMIT = 24
+_V2_SEALABLE_CANDIDATES = 24
+_V2_REJECTED_CANDIDATES = 24
 
 
 def _source_review_candidate_rows(
@@ -2953,8 +3507,19 @@ def _source_review_candidate_rows(
     *,
     page_bundle: dict[str, Any] | None,
     source_chars: int,
+    policy_v2: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return only candidate page blocks that can be applied deterministically."""
+    """Return the candidate page renderings for one disputed source block.
+
+    Under v1 the returned rows are exactly the ones that can be applied
+    deterministically, in exactly the v1 shape — a recorded decision replays
+    byte for byte.
+
+    Under v2 every rendering is scored and every rendering is returned, each
+    carrying ``sealable`` and, when it is not, the NAMED ``defects`` that stop
+    it. Only sealable rows may ever reach ``state["candidates"]``; the rest are
+    evidence a person reads, never an option a resolver can pick.
+    """
 
     if not isinstance(page_bundle, dict):
         return []
@@ -2962,41 +3527,94 @@ def _source_review_candidate_rows(
         canonical_block,
         page_bundle=page_bundle,
         source_chars=max(1, source_chars),
-        limit=12,
+        limit=_V2_ANOMALY_PACKET_LIMIT if policy_v2 else 12,
     )
     candidates: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
     for row in packet.get("candidate_blocks") or []:
         if not isinstance(row, dict):
             continue
-        target_id = str(row.get("block_key") or "")
+        block_key = str(row.get("block_key") or "")
         selected_page, selected_block = _page_and_block_by_key(
-            page_bundle, target_id)
+            page_bundle, block_key)
         if (
-            not target_id
+            not block_key
             or not isinstance(selected_page, dict)
             or not isinstance(selected_block, dict)
         ):
             continue
-        try:
-            resolved = _resolve_verified_page_candidate(
-                canonical_block,
-                selected_page=selected_page,
-                selected_block=selected_block,
+        renderings = (
+            _verified_page_renderings(selected_page, selected_block)
+            if policy_v2
+            else [(_DEFAULT_PAGE_RENDERING, selected_block)]
+        )
+        for rendering_id, rendering in renderings:
+            target_id = _verified_target_id(block_key, rendering_id)
+            # What the row SHOWS is the rendering's own block; what it
+            # IDENTIFIES stays the page block the target names, because
+            # ``_apply_human_source_candidate`` re-verifies page_id/
+            # page_number/reading_order against that block before it applies
+            # anything. Reading the visible text off the parent instead would
+            # print the citing paragraph's OCR text on every one of its
+            # renderings — several rows up to 8 KB each, identical, labelled
+            # with the parent's kind, in the same bounded diagnosis request —
+            # so the reviewer could not tell the figure option from the
+            # paragraph option except by its id.
+            rendered_block = (
+                rendering if isinstance(rendering, dict) else selected_block
             )
-        except (TypeError, ValueError):
-            continue
-        candidates.append({
-            "target_id": target_id,
-            "page_id": str(selected_page.get("page_id") or ""),
-            "page_number": int(selected_page.get("page_number") or 0),
-            "reading_order": int(selected_block.get("reading_order") or 0),
-            "kind": str(selected_block.get("kind") or ""),
-            "visible_text": _page_block_visible_text(selected_block)[:8_000],
-            "resolved_text": resolved,
-            "resolved_sha256": _sha256_text(resolved),
-            "retrieval_score": float(row.get("retrieval_score") or 0.0),
-        })
-    return candidates[:24]
+            try:
+                resolved = _resolve_verified_page_candidate(
+                    canonical_block,
+                    selected_page=selected_page,
+                    selected_block=selected_block,
+                    rendering_id=rendering_id,
+                    policy_v2=policy_v2,
+                )
+            except (TypeError, ValueError) as exc:
+                if not policy_v2:
+                    continue
+                rejected.append({
+                    "target_id": target_id,
+                    "page_id": str(selected_page.get("page_id") or ""),
+                    "page_number": int(selected_page.get("page_number") or 0),
+                    "reading_order": int(
+                        selected_block.get("reading_order") or 0),
+                    "kind": str(rendered_block.get("kind") or ""),
+                    "visible_text": _page_block_visible_text(
+                        rendered_block)[:8_000],
+                    "resolved_text": "",
+                    "resolved_sha256": "",
+                    "retrieval_score": float(row.get("retrieval_score") or 0.0),
+                    "rendering_id": rendering_id,
+                    "sealable": False,
+                    "defects": list(getattr(exc, "defects", None)
+                                    or ["unrenderable"]),
+                })
+                continue
+            candidate = {
+                "target_id": target_id,
+                "page_id": str(selected_page.get("page_id") or ""),
+                "page_number": int(selected_page.get("page_number") or 0),
+                "reading_order": int(selected_block.get("reading_order") or 0),
+                "kind": str(rendered_block.get("kind") or ""),
+                "visible_text": _page_block_visible_text(
+                    rendered_block)[:8_000],
+                "resolved_text": resolved,
+                "resolved_sha256": _sha256_text(resolved),
+                "retrieval_score": float(row.get("retrieval_score") or 0.0),
+            }
+            if policy_v2:
+                candidate["rendering_id"] = rendering_id
+                candidate["sealable"] = True
+                candidate["defects"] = []
+            candidates.append(candidate)
+    if not policy_v2:
+        return candidates[:24]
+    return (
+        candidates[:_V2_SEALABLE_CANDIDATES]
+        + rejected[:_V2_REJECTED_CANDIDATES]
+    )
 
 
 def _has_human_selected_source_overrides(graph: Any) -> bool:
@@ -3056,8 +3674,10 @@ def _current_human_source_overrides_valid(
                     canonical_block,
                     page_bundle=page_bundle,
                     source_chars=source_chars,
+                    policy_v2=_source_fusion_v2(graph),
                 )
                 if str(row.get("target_id") or "") == target_id
+                and row.get("sealable", True)
             ),
             None,
         )
@@ -3251,6 +3871,221 @@ def _interpret_custom_source_instruction_via_openai(
     )
 
 
+def _repair_rich_text_blocks(
+    out: dict[str, Any],
+    *,
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    source_path: Path | None,
+    allow_automatic_reconciliation: bool,
+    repair_provider: Any | None = None,
+    repair_critic: Any | None = None,
+) -> list[str]:
+    """Repair the blocks ``validate_graph`` refuses for non-canonical rich text.
+
+    Returns the block ids it could not repair. Mutates ``out`` in place: every
+    accepted repair becomes a hash-pinned ``source_override``, and every
+    refusal becomes a recorded warning naming the block and the gate that
+    stopped it — never a silent pass.
+
+    Targets come from ``_rich_text_issue_block_ids``, which is the SAME
+    function ``validate_graph`` uses to name the blocks on its error. The gate
+    tells the repair lane what it rejected; nothing here decides for itself
+    what counts as a defect, which is strictly less heuristic than the keyword
+    vocabulary the converter lane selects with.
+    """
+    targets = _rich_text_issue_block_ids(out, canonical=canonical)
+    if not targets:
+        return []
+    if not allow_automatic_reconciliation:
+        # An unattended run may not spend here; the pause is the contract.
+        return targets
+    if not isinstance(page_bundle, dict) or source_path is None:
+        # A text upload (.mmd/.md/.txt) has no page evidence, so there is
+        # nothing to repair AGAINST. Refusing honestly is the only option:
+        # canonicalising from the defective text alone is exactly the
+        # invention these gates exist to prevent.
+        return targets
+
+    provider = repair_provider
+    critic = repair_critic
+    if provider is None or critic is None:
+        if not semantic_api_enabled():
+            return targets
+        path = Path(source_path)
+        provider = provider or (
+            lambda packet: _repair_rich_text_via_openai(packet, source_path=path)
+        )
+        critic = critic or (
+            lambda packet, proposal: _critic_rich_text_repair_via_openai(
+                packet, proposal, source_path=path
+            )
+        )
+
+    canonical_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in canonical.get("blocks") or [] if isinstance(row, dict)
+    }
+    graph_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in out.get("blocks") or [] if isinstance(row, dict)
+    }
+    source_chars = int((canonical.get("document") or {}).get("source_chars") or 0)
+
+    accepted: dict[str, dict[str, Any]] = {}
+    refusals: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+
+    for block_id in targets:
+        canonical_block = canonical_blocks.get(block_id)
+        graph_block = graph_blocks.get(block_id)
+        if not isinstance(canonical_block, dict) or not isinstance(graph_block, dict):
+            unresolved.append(block_id)
+            continue
+        before = _graph_block_text(graph_block, canonical_block)
+        packet = _candidate_anomaly_packet(
+            canonical_block,
+            page_bundle=page_bundle,
+            source_chars=max(1, source_chars),
+        )
+        packet["refused_block_text"] = before
+        packet["rich_text_issues"] = list(
+            kr.rich_text_issues(_clean_public_text(before))
+        )
+
+        def _refuse(gate: str, detail: str) -> None:
+            unresolved.append(block_id)
+            refusals.append({
+                "block_id": block_id, "gate": gate, "detail": detail,
+            })
+
+        # A repair that cannot run must REFUSE, never raise. The evidence pages
+        # are loaded inside the provider, so an unreadable or absent PDF, a
+        # provider outage or a malformed response would otherwise take down a
+        # run that was about to record an honest pause — turning a recoverable
+        # refusal into a crash. Q13: nothing is guessed silently, and finished
+        # work always ships.
+        try:
+            proposal = provider(copy.deepcopy(packet))
+        except Exception as exc:  # noqa: BLE001 — any failure is a refusal
+            _refuse("author", f"the repair author could not run: {exc}")
+            continue
+        if not isinstance(proposal, dict):
+            _refuse("author", "the repair author returned no decision")
+            continue
+        decision = str(proposal.get("decision") or "")
+        if decision == "review_required":
+            _refuse("author", str(proposal.get("reason") or
+                                  "the repair author asked for review"))
+            continue
+        if decision not in {"canonicalize", "suppress"}:
+            _refuse("author", f"unknown repair decision {decision!r}")
+            continue
+        if not confidence_policy.accepts(
+            proposal.get("confidence"),
+            confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+        ):
+            _refuse("author_confidence",
+                    f"{float(proposal.get('confidence') or 0.0):.3f} is below "
+                    "the source-critical floor")
+            continue
+
+        suppressed = decision == "suppress"
+        after = "" if suppressed else str(proposal.get("canonical_text") or "")
+        # Non-empty text XOR suppression: a "canonicalize" that resolves to
+        # nothing, or a "suppress" carrying text, is a contradiction and the
+        # graph must not record either.
+        if suppressed and str(proposal.get("canonical_text") or "").strip():
+            _refuse("shape", "a suppressed block may not carry canonical text")
+            continue
+        if not suppressed and not after.strip():
+            _refuse("shape", "a canonicalized block may not resolve to nothing")
+            continue
+
+        if suppressed:
+            # Suppression is only ever correct for a block that carries no
+            # readable content at all — a stray display-math closer, say. A
+            # block with words in it must be re-expressed, never deleted.
+            if _source_tokens(before):
+                _refuse(
+                    "suppression",
+                    "the block carries readable text and cannot be suppressed",
+                )
+                continue
+        else:
+            unfaithful = _repair_is_faithful(before, after)
+            if unfaithful:
+                _refuse("faithfulness", unfaithful)
+                continue
+
+        try:
+            verification = critic(copy.deepcopy(packet), copy.deepcopy(proposal))
+        except Exception as exc:  # noqa: BLE001 — an unverified repair is refused
+            _refuse("critic", f"the independent critic could not run: {exc}")
+            continue
+        if (
+            not isinstance(verification, dict)
+            or verification.get("verdict") != "verified"
+            or bool(verification.get("issues"))
+            or not confidence_policy.accepts(
+                verification.get("confidence"),
+                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+            )
+        ):
+            issues = "; ".join(
+                str(value).strip()
+                for value in list((verification or {}).get("issues") or [])[:4]
+                if str(value).strip()
+            ) if isinstance(verification, dict) else ""
+            _refuse(
+                "critic",
+                f"independent critic verdict "
+                f"{str((verification or {}).get('verdict') or 'missing')!r} at "
+                f"{float((verification or {}).get('confidence') or 0.0):.3f}"
+                + (f" — {issues}" if issues else ""),
+            )
+            continue
+
+        accepted[block_id] = {
+            "mode": _REPAIR_MODE,
+            "canonical_block_raw_sha256": str(
+                canonical_block.get("raw_sha256") or _sha256_text(before)
+            ),
+            "resolved_text": after,
+            "resolved_sha256": _sha256_text(after),
+            "suppressed": suppressed,
+            "repair_confidence": float(proposal.get("confidence") or 0.0),
+            "verification_confidence": float(verification.get("confidence") or 0.0),
+        }
+
+    # All or none. A partially repaired graph is strictly worse than an
+    # unrepaired one: the render would mix repaired and refused blocks and the
+    # gate would still refuse, having spent for it.
+    if unresolved:
+        issues = list(out.get("issues") or [])
+        for refusal in refusals:
+            issues.append({
+                "code": "semantic_source_rich_text_repair_refused",
+                "severity": "warning",
+                "block_ids": [refusal["block_id"]],
+                "message": (
+                    f"Rich-text repair refused for {refusal['block_id']} at the "
+                    f"{refusal['gate']} gate: {refusal['detail']}"
+                ),
+            })
+        out["issues"] = issues
+        out["rich_text_repairs"] = []
+        return unresolved
+
+    for block_id, override in accepted.items():
+        graph_blocks[block_id]["source_override"] = override
+    out["rich_text_repairs"] = [
+        {"block_id": block_id, "suppressed": bool(override["suppressed"])}
+        for block_id, override in accepted.items()
+    ]
+    return []
+
+
 def reconcile_source_anomalies(
     graph: dict[str, Any],
     *,
@@ -3279,6 +4114,19 @@ def reconcile_source_anomalies(
         str(row.get("block_id") or ""): row
         for row in canonical.get("blocks") or [] if isinstance(row, dict)
     }
+    # The rich-text repair runs FIRST and in place, so every path below — the
+    # converter lane, the re-render, the re-validation and the status
+    # derivation — sees the repaired graph and needs no change (register Q74).
+    # It is deliberately independent of ``_SUSPICIOUS_MARKUP_RE``: that regex
+    # names six chemistry/MathML tags, and a stray "$" or an unbalanced
+    # "[Katex]" never reached the lane at all.
+    _repair_rich_text_blocks(
+        out,
+        canonical=canonical,
+        page_bundle=page_bundle,
+        source_path=source_path,
+        allow_automatic_reconciliation=allow_automatic_reconciliation,
+    )
     suspicious_ids = [
         str(block.get("block_id") or "")
         for block in out.get("blocks") or []
@@ -3448,6 +4296,7 @@ def reconcile_source_anomalies(
                 canonical_block,
                 selected_page=selected_page,
                 selected_block=selected_block,
+                policy_v2=_source_fusion_v2(out),
             )
         except (TypeError, ValueError):
             unresolved.append(block_id)
@@ -3672,6 +4521,40 @@ def _graph_source_identity_inventory(graph: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _replayed_structural_role(row: Mapping[str, Any]) -> str:
+    """The binding a classification payload records for an unrecorded section.
+
+    ``_numbered_topic_patch_preview`` replays recorded roles and classifies
+    nothing. A payload section with NO recorded role is one the rebuild has
+    just materialized — a ``PHASE3-NUMBERED-`` projection or a restored
+    virtual parent — which is the repair's entire subject: neutralise it and
+    the heading it stands for is not a main topic in the rebuilt graph at
+    all. ``_forced_structural_roles`` happens to re-force a numbered binding
+    afterwards while the graph does not own its own topics, but it does not
+    cover a restored virtual parent and does not run once it does, so a
+    replay that discards what its payload handed it is a trap either way.
+
+    Only the two STRUCTURAL bindings are replayed, from whichever projection
+    the payload carries: ``baseline_role`` on an unstamped run, and the same
+    fact in ``structural_evidence`` under the structural-baseline stamp, which
+    removes that key. Every other baseline verdict stays unreplayed — "other"
+    in particular, because ``render_semantic_source`` DROPS an "other"
+    heading, which is content loss on a patch whose contract is to preserve
+    every source-owned identity.
+    """
+
+    baseline = str(row.get("baseline_role") or "")
+    if baseline in {"main_topic", "subtopic"}:
+        return baseline
+    evidence = row.get("structural_evidence")
+    if isinstance(evidence, dict):
+        if evidence.get("numbered_main"):
+            return "main_topic"
+        if evidence.get("numbered_sub"):
+            return "subtopic"
+    return ""
+
+
 def _numbered_topic_patch_preview(
     graph: dict[str, Any],
     *,
@@ -3725,8 +4608,21 @@ def _numbered_topic_patch_preview(
                 parent = ""
             preserved.append({
                 "section_id": section_id,
+                # The recorded role is the only authority here: this rebuild
+                # replays an existing verified hierarchy, it does not classify.
+                # A section the graph recorded no role for is one this rebuild
+                # just materialized, and only its structural binding is
+                # replayed — from ``baseline_role`` on an unstamped payload or
+                # from ``structural_evidence`` under the stamp, which removes
+                # that key. Anything else stays the neutral
+                # ``content_heading``: "other" would SUPPRESS the heading at
+                # render time (``render_semantic_source`` drops an "other"
+                # heading), which is content loss on a patch whose whole
+                # contract is to preserve every source-owned identity.
                 "role": str(
-                    prior.get("role") or row.get("baseline_role") or "other"
+                    prior.get("role")
+                    or _replayed_structural_role(row)
+                    or "content_heading"
                 ),
                 "parent_section_id": parent,
                 "confidence": float(prior.get("confidence") or 1.0),
@@ -4042,12 +4938,20 @@ def _build_source_review_state(
             }
         )
     ][:20]
-    candidates = _source_review_candidate_rows(
+    policy_v2 = _source_fusion_v2(graph)
+    rows = _source_review_candidate_rows(
         canonical_block,
         page_bundle=page_bundle,
         source_chars=int(
             (canonical.get("document") or {}).get("source_chars") or 0),
+        policy_v2=policy_v2,
     )
+    # A rejected rendering is EVIDENCE, never an option. It is kept out of
+    # ``candidates`` — which is what ``_source_review_pending`` publishes and
+    # what ``autonomous_resolution`` is allowed to choose from — so widening
+    # the shortlist can never widen what an unattended run may apply.
+    candidates = [row for row in rows if row.get("sealable", True)]
+    rejected = [row for row in rows if not row.get("sealable", True)]
     pdf_sha256 = str((page_bundle or {}).get("pdf_sha256") or "")
     context_hash = _source_review_context_hash(
         graph,
@@ -4081,6 +4985,20 @@ def _build_source_review_state(
             }
             for row in candidates
         ],
+        # Named, non-selectable evidence. The diagnostic schema builds its
+        # ``recommended_target_id`` enum from ``candidates`` alone, so the
+        # diagnostician can SAY that the cubic-lattice crop is the right page
+        # block and still cannot recommend one that will not seal.
+        **({"rejected_candidates": [
+            {
+                "target_id": row["target_id"],
+                "page_number": row["page_number"],
+                "kind": row["kind"],
+                "visible_text": row["visible_text"],
+                "defects": list(row.get("defects") or []),
+            }
+            for row in rejected
+        ]} if rejected else {}),
     }
     diagnostic: dict[str, Any] = {}
     if allow_diagnostic_call and semantic_api_enabled():
@@ -4152,6 +5070,7 @@ def _build_source_review_state(
         "decision_question": question[:8_000],
         "recommended_target_id": recommended,
         "candidates": candidates,
+        **({"rejected_candidates": rejected} if rejected else {}),
         "custom_interpretation_used": bool(
             (revision or {}).get("custom_interpretation_used")),
         "revision": copy.deepcopy(revision or {}),
@@ -4399,6 +5318,24 @@ def _source_review_pending(
         "label": str(row.get("target_id") or ""),
         "text": str(row.get("visible_text") or "")[:8_000],
     } for row in candidates[:23])
+    # A rendering that cannot be sealed is shown, named and explained, but it
+    # never enters ``candidates`` — so it is readable by a person and
+    # unpickable by ``autonomous_resolution``. 1 item + 20 graph errors + 23
+    # candidates + 24 rejected rows stays inside the ``evidence[:100]`` cap.
+    evidence.extend({
+        "page": str(int(row.get("page_number") or 0) or ""),
+        "label": (
+            f"{str(row.get('target_id') or '')} — not applicable: "
+            + (", ".join(str(value) for value in row.get("defects") or [])
+               or "unrenderable")
+        ),
+        "text": str(row.get("visible_text") or "")[:8_000],
+    } for row in (
+        [
+            row for row in state.get("rejected_candidates") or []
+            if isinstance(row, dict)
+        ][:24]
+    ))
     issue_code = str(
         next(
             (
@@ -4495,6 +5432,16 @@ def _apply_human_source_candidate(
     if not isinstance(canonical_block, dict) or not isinstance(graph_block, dict):
         raise ValueError(
             "the disputed source block no longer exists in this source graph")
+    # A v2 target is ``<block_key>#<rendering_id>``; a v1 target is the bare
+    # block key and splits to the same key with the default rendering. The
+    # page lookup takes the KEY — pass the composite and it finds nothing,
+    # which would read as "the PDF changed" on a perfectly good decision.
+    policy_v2 = _source_fusion_v2(graph)
+    block_key, rendering_id = _split_verified_target(target_id)
+    if rendering_id and not policy_v2:
+        raise ValueError(
+            "the selected source-review target names a page rendering this "
+            "source graph was not compiled to apply")
     current_candidate = next(
         (
             row for row in _source_review_candidate_rows(
@@ -4503,8 +5450,10 @@ def _apply_human_source_candidate(
                 source_chars=int(
                     (canonical.get("document") or {}).get(
                         "source_chars") or 0),
+                policy_v2=policy_v2,
             )
             if str(row.get("target_id") or "") == target_id
+            and row.get("sealable", True)
         ),
         None,
     )
@@ -4517,7 +5466,7 @@ def _apply_human_source_candidate(
             "the selected source-review target is no longer a current "
             "deterministic evidence candidate")
     selected_page, selected_block = _page_and_block_by_key(
-        page_bundle, target_id)
+        page_bundle, block_key)
     if (
         not isinstance(selected_page, dict)
         or not isinstance(selected_block, dict)
@@ -4535,6 +5484,8 @@ def _apply_human_source_candidate(
         canonical_block,
         selected_page=selected_page,
         selected_block=selected_block,
+        rendering_id=rendering_id,
+        policy_v2=policy_v2,
     )
     if (
         not resolved
@@ -4561,6 +5512,13 @@ def _apply_human_source_candidate(
         "page_number": int(current_candidate.get("page_number") or 0),
         "reading_order": int(current_candidate.get("reading_order") or 0),
         "selected_block_key": target_id,
+        # The rendering is part of the decision's identity: the same page
+        # block resolves to different source text depending on which of its
+        # renderings the reviewer chose, so a revalidation that dropped this
+        # would re-derive the wrong bytes and refuse a decision that was
+        # correct when it was taken. Written only under v2, so a recorded v1
+        # override is byte-identical.
+        **({"rendering_id": rendering_id} if policy_v2 else {}),
         "resolved_text": resolved,
         "resolved_sha256": _sha256_text(resolved),
         "human_decision_id": str(state.get("decision_id") or ""),
@@ -4574,6 +5532,7 @@ def _apply_human_source_candidate(
     repairs.append({
         "block_id": block_id,
         "selected_block_key": target_id,
+        **({"rendering_id": rendering_id} if policy_v2 else {}),
         "page_number": int(current_candidate.get("page_number") or 0),
         "resolved_via": "human_decision",
     })
@@ -7181,6 +8140,13 @@ def prepare_generation_graph(
         metadata = {
             **(metadata or {}),
             "source_topic_policy_version": source_topic_policy.SOURCE_TOPIC_POLICY_VERSION,
+            # The classification payload carries the printed structure instead
+            # of the regex role verdict (Q74). The stamp goes HERE, beside the
+            # topic-ownership version, because every replay and review-return
+            # path is already behind us: a graph compiled without it keeps its
+            # recorded payload, its ``payload_sha256`` and therefore its warm
+            # phase 3.4 hierarchy batches.
+            STRUCTURAL_BASELINE_KEY: STRUCTURAL_BASELINE_VERSION,
         }
     graph, report = compile_semantic_graph(
         canonical,

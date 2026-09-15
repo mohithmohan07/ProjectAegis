@@ -932,6 +932,12 @@ _SECTION_DIRECTORY_FIELDS = (
     "source_order",
     "source_start",
     "baseline_role",
+    # Q74: under the structural-baseline stamp Phase 3 sends the printed
+    # structure of each heading instead of ``baseline_role``. Exactly one of
+    # the two is present on any given payload, and both are carried through
+    # untouched — this projection has never decided anything, and must not
+    # start by manufacturing the key the stamp deliberately removed.
+    "structural_evidence",
     "parent_section_id",
     "phase3_virtual",
     "structural_number",
@@ -965,9 +971,10 @@ def _section_directory(
             "source_order", int(section.get("source_order") or position)
         )
         row.setdefault("source_start", int(section.get("source_start") or 0))
-        row.setdefault(
-            "baseline_role", str(section.get("baseline_role") or "other")
-        )
+        if "baseline_role" in section:
+            row.setdefault(
+                "baseline_role", str(section.get("baseline_role") or "other")
+            )
         directory.append(row)
     return directory
 
@@ -1155,7 +1162,19 @@ def _section_evidence(
             "relationship": relationship,
             "title": str(section.get("title") or ""),
             "level": int(section.get("level") or 1),
-            "baseline_role": str(section.get("baseline_role") or "other"),
+            # Same rule as the directory: echo whichever structural projection
+            # Phase 3 sent. Defaulting to "other" here would put the role
+            # vocabulary back in front of the model on the evidence row, which
+            # is the one place it is hardest to notice.
+            **(
+                {"baseline_role": str(section.get("baseline_role") or "other")}
+                if "baseline_role" in section else {}
+            ),
+            **(
+                {"structural_evidence": copy.deepcopy(
+                    section.get("structural_evidence") or {})}
+                if "structural_evidence" in section else {}
+            ),
             "body_evidence": bounded,
             "body_chars": len(normalized_body),
             "body_sha256": phase3._sha256_text(normalized_body),
@@ -1251,6 +1270,35 @@ def _critic_payload_for_batch(
     }
 
 
+# Q74: the additive structural-evidence sentence is conditioned on the PAYLOAD,
+# not on a module flag, because ``_cache_key`` hashes ``payload_sha256`` and
+# never the system string. Tie the prompt to the key material and the two move
+# together; tie it to anything else and a re-worded prompt is served from a
+# stale cache entry that was authored under the old one.
+_STRUCTURAL_EVIDENCE_CLASSIFIER_RULE = (
+    "Each section may carry structural_evidence: the number printed on its "
+    "heading, how that heading was written, its depth, and whether it repeats "
+    "the chapter title. That is what the page shows, not a role. Weigh it "
+    "together with the section's own body evidence and decide the role "
+    "yourself: a printed number does not by itself make a teaching division, "
+    "and an unnumbered heading does not stop being one."
+)
+_STRUCTURAL_EVIDENCE_CRITIC_RULE = (
+    "Each section may carry structural_evidence: the number printed on its "
+    "heading, how that heading was written, its depth, and whether it repeats "
+    "the chapter title. Audit each proposed role against that printed "
+    "structure AND the section's body evidence, and flag a role that could "
+    "only have been read off the numbering or the heading's wording."
+)
+
+
+def _payload_carries_structural_evidence(payload: dict[str, Any]) -> bool:
+    return any(
+        isinstance(row, dict) and "structural_evidence" in row
+        for row in payload.get("sections") or []
+    )
+
+
 def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
     sections = [
         row for row in payload.get("sections") or []
@@ -1278,6 +1326,8 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "Preserve physical order, use only opaque IDs, and return every target "
         "exactly once with concise evidence."
     )
+    if _payload_carries_structural_evidence(payload):
+        system += " " + _STRUCTURAL_EVIDENCE_CLASSIFIER_RULE
     policy_active = source_topic_policy.enabled(payload.get("metadata"))
     if policy_active:
         system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
@@ -1385,6 +1435,8 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "parents, wrong parent links, and order drift. Use only supplied IDs. "
         "Return concise repairs only for targeted IDs and never rewrite source."
     )
+    if _payload_carries_structural_evidence(payload):
+        system += " " + _STRUCTURAL_EVIDENCE_CRITIC_RULE
     policy_active = source_topic_policy.enabled(payload.get("metadata"))
     if policy_active:
         system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
