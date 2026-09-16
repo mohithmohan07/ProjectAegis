@@ -473,6 +473,10 @@ class UploadJob(Base):
                 "resume_allowed": value.get("resume_allowed") is not False,
                 "recovery_action": str(value.get("recovery_action") or ""),
                 "recovery": str(value.get("recovery") or ""),
+                **({"automatic_retry_allowed": value["automatic_retry_allowed"] is not False}
+                   if "automatic_retry_allowed" in value else {}),
+                **({"failure_code": str(value["failure_code"] or "")}
+                   if "failure_code" in value else {}),
             }
 
         # Compatibility for the measured job 97, which hit Q24 before the

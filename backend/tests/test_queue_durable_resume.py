@@ -192,6 +192,15 @@ def test_source_integrity_stops_auto_retry_but_same_run_can_resume_after_repair(
     assert failure.recovery_message in marker["message"]
     assert "Re-run generation" not in marker["message"]
     assert "before retrying" in contract._incomplete_done_label(marker)
+    # A refresh/reattach reads the model projection through the API schema,
+    # not the transient result dictionary. The stop must survive that boundary.
+    from app import schemas
+    job.question_inventory = {**(job.question_inventory or {}),
+                              models.GENERATION_RECOVERY_INVENTORY_KEY: marker}
+    db.commit()
+    refreshed = schemas.UploadJobOut.model_validate(job).model_dump()["generation_recovery"]
+    assert refreshed["automatic_retry_allowed"] is False
+    assert refreshed["failure_code"] == code
     assert generation_recovery.blocked_recovery(job) is None
 
     direct = chapter_queue_worker.classify_exception(failure)
