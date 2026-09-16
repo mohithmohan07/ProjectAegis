@@ -490,6 +490,39 @@ test("an ordinary incomplete result retains the checkpoint-resume action", async
   );
 });
 
+test.each([
+  ["restore_source_evidence", "Incomplete — restore and verify source evidence"],
+  ["repair_source_markup", "Incomplete — source markup repair required"],
+])("%s stops generic resume advice while keeping saved work", async (action, label) => {
+  pending.length = 0;
+  render(<RunConsoleProvider><Probe /></RunConsoleProvider>);
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].resolve({run_incomplete: {
+      resume_allowed: true, automatic_retry_allowed: false,
+      recovery_action: action, recovery: "Verify the recorded source issue before retrying.",
+      resume: "Old generic retry advice",
+    }});
+  });
+  expect(screen.getByTestId("status").textContent).toBe("error");
+  expect(screen.getByTestId("progress-label").textContent).toBe(label);
+  expect(screen.getByTestId("console-lines").textContent).toContain("Verify the recorded source issue");
+  expect(screen.getByTestId("console-lines").textContent).not.toContain("Old generic retry advice");
+});
+
+test.each(["batch_wait", "deployment"])("%s is a durable wait, never completed generation", async (reason) => {
+  pending.length = 0;
+  render(<RunConsoleProvider><Probe /></RunConsoleProvider>);
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].onEvent({type: "progress", value: 0.4, label: "Phase 3"});
+    pending[0].resolve({waiting: true, resume_automatic: true, reason});
+  });
+  expect(screen.getByTestId("status").textContent).toBe("paused");
+  expect(screen.getByTestId("progress-label").textContent).toContain("automatic resume");
+  expect(screen.getByTestId("progress-label").textContent).not.toContain("review");
+});
+
 test("a missing Master corrects a premature 100% to an explicit 3/4 result", async () => {
   pending.length = 0;
   render(

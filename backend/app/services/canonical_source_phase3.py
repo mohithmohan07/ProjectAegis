@@ -2971,6 +2971,10 @@ def _critic_source_anomaly_via_openai(
 #: already carried must survive, so a fluent paraphrase is refused even when it
 #: is canonical.
 _REPAIR_MODE = "api_canonicalized_rich_text"
+_RICH_TEXT_REPAIR_POLICY = "source-rich-text-feedback-2026-09-16-v2"
+_RICH_TEXT_REPAIR_ATTEMPTS = 3
+_RICH_TEXT_REPAIR_MEMO = "_rich_text_repair_receipts"
+_RICH_TEXT_REPAIR_DRAFTS = "_rich_text_repair_attempts"
 
 
 def _rich_text_repair_schema() -> dict[str, Any]:
@@ -3058,7 +3062,7 @@ def _repair_rich_text_via_openai(
         if key != "candidate_page_numbers"
     }, ensure_ascii=False, indent=2)
     return phase22._openai_multimodal_json(
-        system=_REPAIR_SYSTEM,
+        system=_REPAIR_SYSTEM + "\n\n" + str(kr.PROMPT_PREAMBLE),
         prompt=prompt,
         pages=_anomaly_evidence_pages(
             source_path, packet.get("candidate_page_numbers") or []
@@ -3080,7 +3084,7 @@ def _critic_rich_text_repair_via_openai(
         "proposal": proposal,
     }, ensure_ascii=False, indent=2)
     return phase22._openai_multimodal_json(
-        system=_REPAIR_CRITIC_SYSTEM,
+        system=_REPAIR_CRITIC_SYSTEM + "\n\n" + str(kr.PROMPT_PREAMBLE),
         prompt=prompt,
         pages=_anomaly_evidence_pages(
             source_path, packet.get("candidate_page_numbers") or []
@@ -3871,6 +3875,99 @@ def _interpret_custom_source_instruction_via_openai(
     )
 
 
+def _repair_proposal_refusal(before: str, proposal: Any) -> tuple[str, str]:
+    """The existing source-critical gates, reusable for author feedback/replay."""
+    if not isinstance(proposal, dict):
+        return "author", "the repair author returned no decision"
+    decision = str(proposal.get("decision") or "")
+    if decision == "review_required":
+        return "author", str(proposal.get("reason") or "the repair author asked for review")
+    if decision not in {"canonicalize", "suppress"}:
+        return "shape", f"unknown repair decision {decision!r}"
+    if not confidence_policy.accepts(
+        proposal.get("confidence"), confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+    ):
+        return "author_confidence", "the repair author is below the source-critical confidence floor"
+    suppressed = decision == "suppress"
+    if proposal.get("suppressed") is not suppressed:
+        return "shape", "the suppressed flag disagrees with the repair decision"
+    after = str(proposal.get("canonical_text") or "")
+    if suppressed and after.strip():
+        return "shape", "a suppressed block may not carry canonical text"
+    if not suppressed and not after.strip():
+        return "shape", "a canonicalized block may not resolve to nothing"
+    if suppressed:
+        if _source_tokens(before):
+            return "suppression", "the block carries readable text and cannot be suppressed"
+    else:
+        unfaithful = _repair_is_faithful(before, after)
+        if unfaithful:
+            return "faithfulness", unfaithful
+    return "", ""
+
+
+def _repair_verification_refusal(verification: Any) -> tuple[str, str]:
+    if not isinstance(verification, dict):
+        return "critic", "the independent critic returned no verification object"
+    if (
+        verification.get("verdict") == "verified"
+        and not verification.get("issues")
+        and confidence_policy.accepts(
+            verification.get("confidence"), confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
+        )
+    ):
+        return "", ""
+    issues = "; ".join(
+        str(value).strip() for value in list(verification.get("issues") or [])[:4]
+        if str(value).strip()
+    )
+    return "critic", (
+        f"independent critic verdict {str(verification.get('verdict') or 'missing')!r} "
+        "did not clear the source-critical verification contract"
+        + (f" — {issues}" if issues else "")
+    )
+
+
+def _accepted_repair_receipt(value: Any, *, key: str, before: str) -> dict | None:
+    """A memo replays only exact-source, hash-pinned, independently verified work."""
+    if not isinstance(value, dict):
+        return None
+    material = {field: value.get(field) for field in (
+        "context_sha256", "proposal", "verification",
+    )}
+    if (
+        material["context_sha256"] != key
+        or value.get("receipt_sha256") != _sha256_json(material)
+        or _repair_proposal_refusal(before, material["proposal"])[0]
+        or _repair_verification_refusal(material["verification"])[0]
+    ):
+        return None
+    return copy.deepcopy(value)
+
+
+def _repair_attempt_history(value: Any, *, key: str) -> list[dict[str, Any]]:
+    """Refuse a corrupt paid-attempt ledger instead of resetting its budget."""
+    if not isinstance(value, dict):
+        raise ValueError("rich-text repair attempt journal is not an object; preserved for recovery")
+    material = {field: value.get(field) for field in ("context_sha256", "attempts")}
+    attempts = material["attempts"]
+    if (
+        material["context_sha256"] != key
+        or value.get("journal_sha256") != _sha256_json(material)
+        or not isinstance(attempts, list)
+        or len(attempts) > _RICH_TEXT_REPAIR_ATTEMPTS
+        or any(
+            not isinstance(item, dict)
+            or item.get("attempt") != position
+            or "proposal" not in item
+            or not str(item.get("request_sha256") or "")
+            for position, item in enumerate(attempts, start=1)
+        )
+    ):
+        raise ValueError("rich-text repair attempt journal integrity mismatch; preserved for recovery")
+    return copy.deepcopy(attempts)
+
+
 def _repair_rich_text_blocks(
     out: dict[str, Any],
     *,
@@ -3880,6 +3977,7 @@ def _repair_rich_text_blocks(
     allow_automatic_reconciliation: bool,
     repair_provider: Any | None = None,
     repair_critic: Any | None = None,
+    repair_cache_dir: Path | None = None,
 ) -> list[str]:
     """Repair the blocks ``validate_graph`` refuses for non-canonical rich text.
 
@@ -3935,6 +4033,14 @@ def _repair_rich_text_blocks(
     accepted: dict[str, dict[str, Any]] = {}
     refusals: list[dict[str, Any]] = []
     unresolved: list[str] = []
+    saved_receipts = (
+        dict(out[_RICH_TEXT_REPAIR_MEMO])
+        if isinstance(out.get(_RICH_TEXT_REPAIR_MEMO), dict) else {}
+    )
+    saved_attempts = (
+        dict(out[_RICH_TEXT_REPAIR_DRAFTS])
+        if isinstance(out.get(_RICH_TEXT_REPAIR_DRAFTS), dict) else {}
+    )
 
     for block_id in targets:
         canonical_block = canonical_blocks.get(block_id)
@@ -3952,99 +4058,157 @@ def _repair_rich_text_blocks(
         packet["rich_text_issues"] = list(
             kr.rich_text_issues(_clean_public_text(before))
         )
-
-        def _refuse(gate: str, detail: str) -> None:
-            unresolved.append(block_id)
-            refusals.append({
-                "block_id": block_id, "gate": gate, "detail": detail,
-            })
-
-        # A repair that cannot run must REFUSE, never raise. The evidence pages
-        # are loaded inside the provider, so an unreadable or absent PDF, a
-        # provider outage or a malformed response would otherwise take down a
-        # run that was about to record an honest pause — turning a recoverable
-        # refusal into a crash. Q13: nothing is guessed silently, and finished
-        # work always ships.
-        try:
-            proposal = provider(copy.deepcopy(packet))
-        except Exception as exc:  # noqa: BLE001 — any failure is a refusal
-            _refuse("author", f"the repair author could not run: {exc}")
-            continue
-        if not isinstance(proposal, dict):
-            _refuse("author", "the repair author returned no decision")
-            continue
-        decision = str(proposal.get("decision") or "")
-        if decision == "review_required":
-            _refuse("author", str(proposal.get("reason") or
-                                  "the repair author asked for review"))
-            continue
-        if decision not in {"canonicalize", "suppress"}:
-            _refuse("author", f"unknown repair decision {decision!r}")
-            continue
-        if not confidence_policy.accepts(
-            proposal.get("confidence"),
-            confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
-        ):
-            _refuse("author_confidence",
-                    f"{float(proposal.get('confidence') or 0.0):.3f} is below "
-                    "the source-critical floor")
-            continue
-
-        suppressed = decision == "suppress"
-        after = "" if suppressed else str(proposal.get("canonical_text") or "")
-        # Non-empty text XOR suppression: a "canonicalize" that resolves to
-        # nothing, or a "suppress" carrying text, is a contradiction and the
-        # graph must not record either.
-        if suppressed and str(proposal.get("canonical_text") or "").strip():
-            _refuse("shape", "a suppressed block may not carry canonical text")
-            continue
-        if not suppressed and not after.strip():
-            _refuse("shape", "a canonicalized block may not resolve to nothing")
-            continue
-
-        if suppressed:
-            # Suppression is only ever correct for a block that carries no
-            # readable content at all — a stray display-math closer, say. A
-            # block with words in it must be re-expressed, never deleted.
-            if _source_tokens(before):
-                _refuse(
-                    "suppression",
-                    "the block carries readable text and cannot be suppressed",
+        # This is an AUTHOR request, not the converter SELECTOR whose evidence
+        # packet we share. Keeping that packet's old "Do not write replacement
+        # text" sentence told the repair author to refuse its own task.
+        packet["instruction"] = (
+            "Re-express refused_block_text faithfully using the supplied verified "
+            "PDF evidence and rich_text_contract. Return the canonicalize/suppress/"
+            "review_required repair schema, including canonical_text. Preserve "
+            "every source word, number, symbol, unit and URL; repair markup only. "
+            "Never inflate confidence to clear a gate; choose review_required "
+            "when the supplied evidence is insufficient."
+        )
+        packet["repair_policy"] = _RICH_TEXT_REPAIR_POLICY
+        packet["rich_text_contract"] = str(kr.PROMPT_PREAMBLE)
+        context_key = _sha256_json({
+            "packet": packet,
+            "canonical_raw_sha256": _sha256_text(str(canonical_block.get("raw_text") or "")),
+            "source_contract_hash": str(out.get("source_contract_hash") or ""),
+            "page_evidence_sha256": _sha256_json(page_bundle),
+            "author_system": _REPAIR_SYSTEM,
+            "critic_system": _REPAIR_CRITIC_SYSTEM,
+        })
+        receipt_path = (
+            Path(repair_cache_dir) / "rich-text-repairs" / f"{context_key}.json"
+            if repair_cache_dir is not None else None
+        )
+        receipt = _accepted_repair_receipt(
+            saved_receipts.get(context_key), key=context_key, before=before,
+        )
+        if receipt is None and receipt_path is not None:
+            try:
+                receipt = _accepted_repair_receipt(
+                    json.loads(receipt_path.read_text(encoding="utf-8")),
+                    key=context_key, before=before,
                 )
-                continue
+            except (OSError, ValueError, TypeError):
+                receipt = None
+        if receipt is not None:
+            proposal = receipt["proposal"]
+            verification = receipt["verification"]
+            saved_receipts[context_key] = receipt
+            out[_RICH_TEXT_REPAIR_MEMO] = saved_receipts
         else:
-            unfaithful = _repair_is_faithful(before, after)
-            if unfaithful:
-                _refuse("faithfulness", unfaithful)
-                continue
+            attempt_path = (
+                Path(repair_cache_dir) / "rich-text-repair-attempts" / f"{context_key}.json"
+                if repair_cache_dir is not None else None
+            )
+            history: list[dict[str, Any]] = []
+            if attempt_path is not None and attempt_path.exists():
+                try:
+                    journal = json.loads(attempt_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, UnicodeDecodeError) as exc:
+                    raise ValueError(
+                        "rich-text repair attempt journal cannot be read; preserved for recovery"
+                    ) from exc
+                history = _repair_attempt_history(journal, key=context_key)
+            elif context_key in saved_attempts:
+                history = _repair_attempt_history(saved_attempts[context_key], key=context_key)
 
-        try:
-            verification = critic(copy.deepcopy(packet), copy.deepcopy(proposal))
-        except Exception as exc:  # noqa: BLE001 — an unverified repair is refused
-            _refuse("critic", f"the independent critic could not run: {exc}")
-            continue
-        if (
-            not isinstance(verification, dict)
-            or verification.get("verdict") != "verified"
-            or bool(verification.get("issues"))
-            or not confidence_policy.accepts(
-                verification.get("confidence"),
-                confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
-            )
-        ):
-            issues = "; ".join(
-                str(value).strip()
-                for value in list((verification or {}).get("issues") or [])[:4]
-                if str(value).strip()
-            ) if isinstance(verification, dict) else ""
-            _refuse(
-                "critic",
-                f"independent critic verdict "
-                f"{str((verification or {}).get('verdict') or 'missing')!r} at "
-                f"{float((verification or {}).get('confidence') or 0.0):.3f}"
-                + (f" — {issues}" if issues else ""),
-            )
-            continue
+            def persist_attempts() -> None:
+                material = {"context_sha256": context_key, "attempts": copy.deepcopy(history)}
+                journal = {**material, "journal_sha256": _sha256_json(material)}
+                if attempt_path is not None:
+                    _atomic_write(attempt_path, json.dumps(journal, ensure_ascii=False, indent=2))
+                saved_attempts[context_key] = journal
+                out[_RICH_TEXT_REPAIR_DRAFTS] = saved_attempts
+
+            feedback: list[dict[str, str]] = []
+            proposal = None
+            gate, detail = "author", "the repair author returned no decision"
+            for attempt in range(1, _RICH_TEXT_REPAIR_ATTEMPTS + 1):
+                request = copy.deepcopy(packet)
+                request["repair_attempt"] = attempt
+                if feedback:
+                    request["repair_feedback"] = copy.deepcopy(feedback)
+                    request["previous_proposal"] = copy.deepcopy(proposal)
+                request_sha = _sha256_json(request)
+                if attempt <= len(history):
+                    recorded = history[attempt - 1]
+                    if recorded["request_sha256"] != request_sha:
+                        raise ValueError(
+                            "rich-text repair attempt request identity mismatch; preserved for recovery"
+                        )
+                    proposal = copy.deepcopy(recorded["proposal"])
+                else:
+                    try:
+                        proposal = provider(request)
+                    except Exception as exc:  # transport failures consume no authored-result slot
+                        gate, detail = "author", f"the repair author could not run: {exc}"
+                        break
+                    recorded = {
+                        "attempt": attempt, "request_sha256": request_sha,
+                        "proposal": copy.deepcopy(proposal),
+                    }
+                    history.append(recorded)
+                    # This write precedes EVERY critic call. A deployment or
+                    # transient critic outage must resume this paid draft.
+                    persist_attempts()
+                gate, detail = _repair_proposal_refusal(before, proposal)
+                if not gate:
+                    critic_request_sha = _sha256_json({"packet": packet, "proposal": proposal})
+                    if "verification" in recorded:
+                        if recorded.get("critic_request_sha256") != critic_request_sha:
+                            raise ValueError(
+                                "rich-text repair critic request identity mismatch; preserved for recovery"
+                            )
+                        verification = copy.deepcopy(recorded["verification"])
+                    else:
+                        try:
+                            verification = critic(copy.deepcopy(packet), copy.deepcopy(proposal))
+                        except Exception as exc:  # keep the draft pending; outages are not verdicts
+                            gate, detail = "critic", f"the independent critic could not run: {exc}"
+                            break
+                        recorded["verification"] = copy.deepcopy(verification)
+                        recorded["critic_request_sha256"] = critic_request_sha
+                        persist_attempts()
+                    gate, detail = _repair_verification_refusal(verification)
+                if not gate:
+                    break
+                refusal = {"gate": gate, "detail": detail}
+                if recorded.get("refusal") != refusal:
+                    recorded["refusal"] = refusal
+                    persist_attempts()
+                if gate in {"author", "author_confidence"}:
+                    # Missing/illegible evidence and honestly low confidence do
+                    # not improve through an identical local re-ask.
+                    break
+                feedback.append({"gate": gate, "detail": detail})
+            if gate:
+                unresolved.append(block_id)
+                refusals.append({
+                    "block_id": block_id, "gate": gate, "detail": detail,
+                    "attempt": attempt,
+                    "rich_text_issue_codes": list(packet["rich_text_issues"]),
+                })
+                continue
+            material = {
+                "context_sha256": context_key,
+                "proposal": copy.deepcopy(proposal),
+                "verification": copy.deepcopy(verification),
+            }
+            receipt = {**material, "receipt_sha256": _sha256_json(material)}
+            # Persist each independently accepted decision BEFORE asking about
+            # another block. A later refusal or cooperative deployment pause
+            # must not discard and charge again for this finished decision.
+            if receipt_path is not None:
+                _atomic_write(receipt_path, json.dumps(receipt, ensure_ascii=False, indent=2))
+            saved_receipts[context_key] = receipt
+            out[_RICH_TEXT_REPAIR_MEMO] = saved_receipts
+
+        suppressed = proposal["decision"] == "suppress"
+        after = "" if suppressed else str(proposal.get("canonical_text") or "")
 
         accepted[block_id] = {
             "mode": _REPAIR_MODE,
@@ -4074,11 +4238,16 @@ def _repair_rich_text_blocks(
                 ),
             })
         out["issues"] = issues
+        out["rich_text_repair_refusals"] = [
+            {key: value for key, value in refusal.items() if key != "detail"}
+            for refusal in refusals
+        ]
         out["rich_text_repairs"] = []
         return unresolved
 
     for block_id, override in accepted.items():
         graph_blocks[block_id]["source_override"] = override
+    out["rich_text_repair_refusals"] = []
     out["rich_text_repairs"] = [
         {"block_id": block_id, "suppressed": bool(override["suppressed"])}
         for block_id, override in accepted.items()
@@ -4095,6 +4264,7 @@ def reconcile_source_anomalies(
     provider: AnomalyProvider | None = None,
     critic: AnomalyCritic | None = None,
     allow_automatic_reconciliation: bool = True,
+    repair_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Repair converter-only semantic markup using verified PDF block IDs.
 
@@ -4126,6 +4296,7 @@ def reconcile_source_anomalies(
         page_bundle=page_bundle,
         source_path=source_path,
         allow_automatic_reconciliation=allow_automatic_reconciliation,
+        repair_cache_dir=repair_cache_dir,
     )
     suspicious_ids = [
         str(block.get("block_id") or "")
@@ -7098,16 +7269,135 @@ def graph_topic_excerpts(
     return out
 
 
+class SourceEvidenceMismatch(ValueError):
+    """A precise source-integrity refusal; never permission to reconvert."""
+
+    failure_code = "source_evidence_mismatch"
+    resume_allowed = True
+    automatic_retry_allowed = False
+    recovery_action = "restore_source_evidence"
+
+    def __init__(self, reason: str, *, graph: dict[str, Any],
+                 canonical: dict[str, Any], metadata: dict[str, Any],
+                 pdf_sha256: str = "") -> None:
+        self.reason_code = reason
+        self.evidence_identity = {
+            "reason": reason,
+            "expected_pdf_sha256": str((graph.get("vision_evidence") or {}).get("pdf_sha256") or ""),
+            "actual_pdf_sha256": pdf_sha256,
+            "expected_source_contract_hash": str(graph.get("source_contract_hash") or ""),
+            "actual_source_contract_hash": source_contract_hash(canonical),
+            "expected_semantic_context_hash": str(graph.get("semantic_context_hash") or ""),
+            "actual_semantic_context_hash": semantic_context_hash(metadata),
+        }
+        explanations = {
+            "original_pdf_changed": "The original PDF bytes differ from the saved source decision.",
+            "original_pdf_missing": "The original PDF needed to verify the saved source decision is unavailable.",
+            "saved_page_evidence_missing": "The saved verified PDF page evidence is unavailable.",
+            "source_contract_changed": "The canonical source contract differs from the saved source decision.",
+            "semantic_context_changed": "The chapter or frozen policy context differs from the saved source decision.",
+            "saved_review_seal_invalid": "The saved source-review rendering or decision seal does not validate against its recorded evidence.",
+        }
+        super().__init__(
+            explanations.get(reason, "The saved source evidence cannot be verified.")
+            + " Restore the matching source artifacts for this run; its paid decisions "
+            "and checkpoints are retained, and no model retry was started. "
+            + f"[{reason}]"
+        )
+        self.recovery_message = (
+            explanations.get(reason, "The saved source evidence cannot be verified.")
+            + " Restore and verify the matching original PDF and saved source artifacts "
+            "before retrying this same checkpoint. Keep the existing run and paid "
+            "decisions; automatic retries are paused."
+        )
+
+
+def _source_review_mismatch_reason(graph: dict[str, Any], *,
+                                  canonical: dict[str, Any], metadata: dict[str, Any],
+                                  pdf_sha256: str) -> str:
+    expected_pdf = str((graph.get("vision_evidence") or {}).get("pdf_sha256") or "")
+    if expected_pdf and expected_pdf != pdf_sha256:
+        return "original_pdf_changed" if pdf_sha256 else "saved_page_evidence_missing"
+    if not _source_contract_hash_matches(graph.get("source_contract_hash"), canonical):
+        return "source_contract_changed"
+    if graph.get("semantic_context_hash") != semantic_context_hash(metadata):
+        return "semantic_context_changed"
+    return "saved_review_seal_invalid"
+
+
+def _saved_page_evidence(
+    artifact_dir: Path, *, graphs: list[dict[str, Any]],
+    canonical: dict[str, Any], metadata: dict[str, Any], pdf_sha256: str,
+) -> dict[str, Any] | None:
+    """Reuse a paid graph's evidence before applying today's reader defaults.
+
+    A compiler/ingestion version is not the identity of the PDF. Re-extracting
+    here can change a verified block's rendering, overwrite the original
+    evidence, and strand its sealed review. The old bundle is reusable only
+    when the PDF bytes and the complete current graph/review gates agree.
+    """
+    if not graphs:
+        return None
+    graph = graphs[0]
+    paths = [Path(artifact_dir) / name for name in
+             (VISION_ACSD_FILENAME, page_acsd.GPT_PAGE_ACSD_FILENAME)]
+    bundles = []
+    for path in paths:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            bundles.append(value)
+    for candidate in graphs:
+        if str((candidate.get("vision_evidence") or {}).get("pdf_sha256") or "") != pdf_sha256:
+            continue
+        for bundle in bundles:
+            evidence = candidate.get("vision_evidence") or {}
+            if (bundle.get("pdf_sha256") != pdf_sha256
+                    or bundle.get("schema_version") != evidence.get("schema_version")
+                    or not isinstance(bundle.get("pages"), list)
+                    or len(bundle["pages"]) != evidence.get("page_count")
+                    or not all(isinstance(page, dict) for page in bundle["pages"])):
+                continue
+            if _compatible_source_review_graph(
+                candidate, canonical=canonical, metadata=metadata, page_bundle=bundle,
+            ) is not None:
+                return bundle
+    if str((graph.get("vision_evidence") or {}).get("pdf_sha256") or "") != pdf_sha256:
+        reason = "original_pdf_changed"
+    elif not _source_contract_hash_matches(graph.get("source_contract_hash"), canonical):
+        reason = "source_contract_changed"
+    elif graph.get("semantic_context_hash") != semantic_context_hash(metadata):
+        reason = "semantic_context_changed"
+    elif not bundles:
+        reason = "saved_page_evidence_missing"
+    else:
+        reason = "saved_review_seal_invalid"
+    raise SourceEvidenceMismatch(reason, graph=graph, canonical=canonical,
+                                 metadata=metadata, pdf_sha256=pdf_sha256)
+
+
 def load_page_evidence(
     source_path: Path,
     artifact_dir: Path,
     *,
     job_id: int | None = None,
+    saved_graphs: list[dict[str, Any]] | None = None,
+    canonical: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if not vision_enabled() or source_path.suffix.lower() != ".pdf":
+    if source_path.suffix.lower() != ".pdf":
         return None
     artifact_path = Path(artifact_dir) / VISION_ACSD_FILENAME
     pdf_sha = page_acsd._pdf_sha256(source_path)
+    if saved_graphs:
+        return _saved_page_evidence(
+            artifact_dir, graphs=saved_graphs,
+            canonical=canonical or {}, metadata=metadata or {}, pdf_sha256=pdf_sha,
+        )
+    if not vision_enabled():
+        return None
 
     def _validated(path: Path) -> dict[str, Any] | None:
         # The schema gate uses the producer's constant: a hardcoded
@@ -7972,12 +8262,37 @@ def prepare_generation_graph(
     verify_semantics: bool = True,
     resume_review_graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Read the paid graph before a current-reader cache probe can replace its
+    # evidence. load_graph intentionally filters incompatible source hashes;
+    # that filter must not hide a saved decision and permit new provider work.
+    saved_graphs: list[dict[str, Any]] = []
+    artifact_graph = None
+    if verify_semantics:
+        try:
+            artifact_graph = json.loads(
+                (Path(artifact_dir) / GRAPH_FILENAME).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        if not isinstance(artifact_graph, dict):
+            artifact_graph = None
+        saved_graphs = [value for value in (resume_review_graph, artifact_graph)
+                        if isinstance(value, dict)
+                        and value.get("classification_mode") == "api_classified_and_verified"
+                        and (value.get("vision_evidence") or {}).get("pdf_sha256")]
     page_bundle = None
     if source_path is not None and source_path.exists():
         page_bundle = load_page_evidence(
             source_path,
             artifact_dir,
             job_id=(active_session() or {}).get("job_id"),
+            saved_graphs=saved_graphs,
+            canonical=canonical,
+            metadata=metadata,
+        )
+    elif saved_graphs:
+        raise SourceEvidenceMismatch(
+            "original_pdf_missing", graph=saved_graphs[0], canonical=canonical,
+            metadata=metadata,
         )
 
     def _automatic_reconciliation_allowed() -> bool:
@@ -7988,7 +8303,7 @@ def prepare_generation_graph(
         return True
 
     if verify_semantics:
-        artifact_graph = load_graph(artifact_dir, canonical)
+        artifact_graph = load_graph(artifact_dir, canonical) or artifact_graph
         cached = load_verified_generation_graph(
             artifact_dir,
             canonical,
@@ -8013,11 +8328,12 @@ def prepare_generation_graph(
                 page_bundle=page_bundle,
             )
             if validated_resume is None:
-                raise ValueError(
-                    "The saved source-review checkpoint no longer matches the "
-                    "current original-PDF evidence or semantic source. Restore "
-                    "the original file, or replace it and convert again; no "
-                    "model retry was started."
+                raise SourceEvidenceMismatch(
+                    _source_review_mismatch_reason(
+                        resume_review_graph, canonical=canonical, metadata=metadata,
+                        pdf_sha256=str((page_bundle or {}).get("pdf_sha256") or "")),
+                    graph=resume_review_graph, canonical=canonical, metadata=metadata,
+                    pdf_sha256=str((page_bundle or {}).get("pdf_sha256") or ""),
                 )
         validated_artifact = _compatible_source_review_graph(
             artifact_graph,
@@ -8037,19 +8353,20 @@ def prepare_generation_graph(
             artifact_pdf_sha256
             and current_pdf_sha256 != artifact_pdf_sha256
         ):
-            raise ValueError(
-                "The cached semantic graph no longer matches the current "
-                "original-PDF evidence. Restore the original file, or replace "
-                "it and convert again; no model retry was started."
+            raise SourceEvidenceMismatch(
+                "original_pdf_changed", graph=artifact_graph, canonical=canonical,
+                metadata=metadata, pdf_sha256=current_pdf_sha256,
             )
         if (
             _has_human_selected_source_overrides(artifact_graph)
             and validated_artifact is None
         ):
-            raise ValueError(
-                "The human-corrected source graph no longer matches the "
-                "current original-PDF evidence. Restore the original file, "
-                "or replace it and convert again; no model retry was started."
+            raise SourceEvidenceMismatch(
+                _source_review_mismatch_reason(
+                    artifact_graph, canonical=canonical, metadata=metadata,
+                    pdf_sha256=current_pdf_sha256),
+                graph=artifact_graph, canonical=canonical, metadata=metadata,
+                pdf_sha256=current_pdf_sha256,
             )
         unresolved_candidates = [validated_resume, validated_artifact]
         for candidate in unresolved_candidates:
@@ -8073,6 +8390,7 @@ def prepare_generation_graph(
                     canonical=canonical,
                     page_bundle=page_bundle,
                     source_path=source_path,
+                    repair_cache_dir=artifact_dir,
                     allow_automatic_reconciliation=True,
                 )
             session = active_session()
@@ -8161,6 +8479,7 @@ def prepare_generation_graph(
         canonical=canonical,
         page_bundle=page_bundle,
         source_path=source_path,
+        repair_cache_dir=artifact_dir,
         allow_automatic_reconciliation=_automatic_reconciliation_allowed(),
     )
     semantic_source = render_semantic_source(graph, canonical)

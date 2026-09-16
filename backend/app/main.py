@@ -22,7 +22,7 @@ from .services import type_coverage_fixer_contract
 from .services import language_topology_grade_contract
 from .services import four_output_release_contract
 from .services import assessment_release_service
-from .services import storage_capacity
+from .services import storage_capacity, run_control, run_notifications
 from .api import (
     admin as admin_api,
     auth as auth_api,
@@ -30,6 +30,7 @@ from .api import (
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
     chapter_batches as chapter_batches_api,
+    run_dashboard as run_dashboard_api,
     data as data_api,
     native_auth as native_auth_api,
     source_artifacts as source_artifacts_api,
@@ -98,24 +99,22 @@ def bootstrap() -> None:
                 "complete Master publication reconciliation failed",
                 exc_info=True,
             )
-        # A Step 2 run lives on a worker thread inside THIS process, and its
-        # "running" flag is a process-local lock. Any job still marked
-        # master_building when a fresh process starts belongs to a worker that
-        # no longer exists, so retire it with a named reason instead of
-        # leaving it building forever.
+        # Recover active historical HTTP runs into durable queue tasks. Existing
+        # leases and review boundaries remain untouched; paid checkpoints and
+        # submitted batches are reused by the worker after startup.
         try:
             from .services import build_concepts_release as concept_release
 
             interrupted = concept_release.sweep_interrupted_master_builds(db)
             if interrupted:
                 logging.getLogger(__name__).warning(
-                    "retired %d interrupted Master build(s): %s",
+                    "queued %d interrupted run(s) for automatic resume: %s",
                     len(interrupted), interrupted,
                 )
         except Exception:
             db.rollback()
             logging.getLogger(__name__).warning(
-                "interrupted Master build sweep failed", exc_info=True,
+                "interrupted run recovery failed", exc_info=True,
             )
         # A batch-pushed run that Step 01 finished without its Concept-review
         # marker (Q64) is stranded until the marker exists. Restore it.
@@ -155,7 +154,10 @@ def bootstrap() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    run_control.reset()
+    restore_shutdown_handlers = run_control.install_shutdown_handlers()
     bootstrap()
+    run_notifications.start(SessionLocal)
     drive_checkpoints.initialize_checkpoint_backup(SessionLocal)
     # The batch console's worker. Its startup sweep runs BEFORE any thread it
     # owns, so a lease held by a process that no longer exists is recovered
@@ -164,8 +166,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        run_control.request_pause()
         chapter_queue_worker.shutdown_chapter_queue()
+        run_notifications.stop()
         drive_checkpoints.shutdown_checkpoint_backup()
+        restore_shutdown_handlers()
 
 
 app = FastAPI(
@@ -195,6 +200,7 @@ def health():
     # gives operators the capacity state while Master preflight refuses safely.
     return {
         "status": "ok",
+        "release": os.environ.get("AEGIS_RELEASE_SHA", ""),
         "storage": storage_capacity.health_status(),
     }
 
@@ -215,6 +221,7 @@ app.include_router(directory_api.router, dependencies=_authenticated)
 app.include_router(build_assessments_api.router, dependencies=_authenticated)
 app.include_router(build_concepts_api.router, dependencies=_authenticated)
 app.include_router(chapter_batches_api.router, dependencies=_authenticated)
+app.include_router(run_dashboard_api.router, dependencies=_authenticated)
 app.include_router(source_artifacts_api.router, dependencies=_authenticated)
 app.include_router(data_api.router, dependencies=_authenticated)
 app.include_router(tagging_api.router, dependencies=_authenticated)

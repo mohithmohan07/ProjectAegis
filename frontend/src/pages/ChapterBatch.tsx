@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, isNonTransientStatus } from "../api/client";
 import { useAsync } from "../hooks";
 import type {
@@ -53,6 +53,7 @@ export interface ChapterBatchQuery {
   subject: string;
   q: string;
   state: string;
+  catalogue?: "active" | "history" | "all";
   page: number;
 }
 
@@ -75,7 +76,7 @@ export function useChapterBatchRows(query: ChapterBatchQuery): ChapterBatchRowsS
   const [reloadToken, setReloadToken] = useState(0);
   const dataRef = useRef<ChapterBatchPage | null>(null);
 
-  const { board, grade, subject, q, state, page } = query;
+  const { board, grade, subject, q, state, page, catalogue = "active" } = query;
 
   useEffect(() => {
     let live = true;
@@ -116,7 +117,7 @@ export function useChapterBatchRows(query: ChapterBatchQuery): ChapterBatchRowsS
       inFlight = true;
       try {
         const next = await api.chapterBatchList({
-          board, grade, subject, q, state, page,
+          board, grade, subject, q, state, page, catalogue,
         });
         if (!live) return;
         dataRef.current = next;
@@ -150,7 +151,7 @@ export function useChapterBatchRows(query: ChapterBatchQuery): ChapterBatchRowsS
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [board, grade, subject, q, state, page, reloadToken]);
+  }, [board, grade, subject, q, state, page, catalogue, reloadToken]);
 
   const reload = useCallback(() => setReloadToken((t) => t + 1), []);
 
@@ -186,6 +187,7 @@ function useChapterBatchFilters() {
     subject: params.get("subject") ?? "",
     q: params.get("q") ?? "",
     state: params.get("state") ?? "",
+    catalogue: params.get("catalogue") === "history" ? "history" : params.get("catalogue") === "all" ? "all" : "active",
     page: Number.isFinite(pageParam) && pageParam > 0 ? Math.floor(pageParam) : 1,
   };
 
@@ -240,7 +242,7 @@ export function nextSlots(from: Date = new Date(), count = 8): string[] {
   const out: string[] = [];
   const cursor = new Date(from.getTime());
   cursor.setSeconds(0, 0);
-  cursor.setMinutes(cursor.getMinutes() > 30 ? 60 : 30);
+  cursor.setMinutes(cursor.getMinutes() >= 30 ? 60 : 30);
   for (let index = 0; index < count; index += 1) {
     out.push(cursor.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     cursor.setMinutes(cursor.getMinutes() + 30);
@@ -254,7 +256,7 @@ export function slotIso(label: string, from: Date = new Date()): string | undefi
   if (!label.trim()) return undefined;
   const cursor = new Date(from.getTime());
   cursor.setSeconds(0, 0);
-  cursor.setMinutes(cursor.getMinutes() > 30 ? 60 : 30);
+  cursor.setMinutes(cursor.getMinutes() >= 30 ? 60 : 30);
   for (let index = 0; index < 48; index += 1) {
     const shown = cursor.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     if (shown === label) return cursor.toISOString();
@@ -264,10 +266,8 @@ export function slotIso(label: string, from: Date = new Date()): string | undefi
 }
 
 export default function ChapterBatch() {
-  // The batch lane (register Q73). Off by default: a single chapter has
-  // nobody to share a wave with, and a person watching one run should not
-  // wait for the provider's queue.
-  const [runTogether, setRunTogether] = useState(false);
+  // Generation from this worklist is always an explicit discounted Batch API push.
+  // Even a single chapter qualifies; upload is staging, never a paid action.
   const [slot, setSlot] = useState("");
   const { query, setFilter } = useChapterBatchFilters();
   const { data, error, loading, stopped, reload, patchRows } =
@@ -431,7 +431,7 @@ export default function ChapterBatch() {
           step === "publish"
             ? { chapter_id: entry.row.chapter_id, lanes: entry.lanes }
             : { chapter_id: entry.row.chapter_id });
-        if (step === "publish" || !runTogether) {
+        if (step === "publish") {
           return api.chapterBatchPush(step, payload);
         }
         return api.chapterBatchPush(step, payload, {
@@ -458,7 +458,7 @@ export default function ChapterBatch() {
         setPushing(null);
       }
     },
-    [applyResult, runTogether, slot],
+    [applyResult, slot],
   );
 
   const confirmPublish = useCallback(async () => {
@@ -478,11 +478,18 @@ export default function ChapterBatch() {
     <>
       <h1>Chapters</h1>
       <div className="subtitle">
-        Every chapter in the catalogue. Stage a source PDF, push the batch,
-        pick the Concept files up when Step 01 finishes, upload the reviewed
-        files, then publish the reviewed Masters to the database and the CMS
-        workbook.
+        Upload sources, select chapters, then start a discounted Batch API run.
+        Uploading only saves your files. Review the Concept files after Step 01,
+        build Masters in Step 02, and publish when ready.
       </div>
+
+      <div className="row chapter-workflow-guide">
+        <span><strong>1</strong> Stage source files</span>
+        <span><strong>2</strong> Select chapters together</span>
+        <span><strong>3</strong> Start Batch API</span>
+        <Link className="button-link ghost" to="/dashboard">Run &amp; cost dashboard</Link>
+      </div>
+      <div className="hint mt-8">You can close this page. Queued chapters and saved progress remain on the server.</div>
 
       {queue && (
         <div className="card chapter-queue" data-testid="chapter-queue-summary">
@@ -492,7 +499,9 @@ export default function ChapterBatch() {
             <span className={queue.blocked ? "badge yellow" : "badge"}>
               {queue.blocked} blocked
             </span>
-            <span className="badge">capacity {queue.capacity}</span>
+            <span className="badge">Batch capacity {queue.batch_capacity ?? queue.capacity}</span>
+            {queue.batch_master_capacity !== undefined && <span className="badge">Master capacity {queue.batch_master_capacity}</span>}
+            {queue.recovering !== undefined && queue.recovering > 0 && <span className="badge yellow">{queue.recovering} recovering</span>}
             <div className="spacer" />
             {queue.worker_alive ? (
               <span className="badge green" data-testid="chapter-worker-alive">
@@ -561,6 +570,17 @@ export default function ChapterBatch() {
               ))}
             </select>
           </div>
+        </div>
+        <div className="row mt-12">
+          <div className="field">
+            <label className="field-label" htmlFor="cb-catalogue">Catalogue</label>
+            <select id="cb-catalogue" value={query.catalogue} onChange={(e) => setFilter({ catalogue: e.target.value as ChapterBatchQuery["catalogue"] })}>
+              <option value="active">Current chapters</option>
+              <option value="history">Previous catalogue</option>
+              <option value="all">Current and previous chapters</option>
+            </select>
+          </div>
+          <span className="hint">Previous catalogue entries keep their runs and downloads.</span>
         </div>
         <div className="field chapter-search">
           <label className="field-label" htmlFor="cb-search">Search chapters</label>
@@ -684,48 +704,29 @@ export default function ChapterBatch() {
       {selected.size > 0 && (
         <div className="chapter-actionbar" data-testid="chapter-actionbar">
           <strong>{selected.size} selected</strong>
-          <label className="chapter-cohort" title={
-            "Run these chapters together so their model calls go to the "
-            + "provider in one batch, at the batch price. They start on the "
-            + "slot you choose, and each stage waits for the whole group."
-          }>
-            <input
-              type="checkbox"
-              checked={runTogether}
-              onChange={(event) => setRunTogether(event.target.checked)}
-              data-testid="push-cohort"
-            />
-            Run together at the batch price
+          <span className="badge accent" data-testid="push-cohort">Batch API · discounted</span>
+          <label className="chapter-cohort" htmlFor="chapter-batch-slot">
+            Start
+            <select id="chapter-batch-slot" value={slot} onChange={(event) => setSlot(event.target.value)} data-testid="push-slot">
+              <option value="">Now</option>
+              {nextSlots().map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
           </label>
-          {runTogether && (
-            <label className="chapter-cohort">
-              from
-              <select
-                value={slot}
-                onChange={(event) => setSlot(event.target.value)}
-                data-testid="push-slot"
-              >
-                <option value="">now</option>
-                {nextSlots().map((value) => (
-                  <option key={value} value={value}>{value}</option>
-                ))}
-              </select>
-            </label>
-          )}
+          <span className="hint">Provider processing may take up to 24 hours per wave. No full-price fallback.</span>
           <div className="spacer" />
           <button
             disabled={step01Rows.length === 0 || pushing !== null}
             onClick={() => void runPush("step01", step01Rows)}
             data-testid="push-step01"
           >
-            Run Step 01 ({step01Rows.length} of {selected.size})
+            Start Batch · Step 01 ({step01Rows.length} of {selected.size})
           </button>
           <button
             disabled={step02Rows.length === 0 || pushing !== null}
             onClick={() => void runPush("step02", step02Rows)}
             data-testid="push-step02"
           >
-            Run Step 02 ({step02Rows.length} of {selected.size})
+            Start Batch · Step 02 ({step02Rows.length} of {selected.size})
           </button>
           <button
             disabled={publishRows.length === 0 || pushing !== null}
@@ -842,6 +843,7 @@ function ChapterRowView({
             {` · ${row.board} · Grade ${row.grade} · ${row.subject}`}
             {row.unit ? ` · ${row.unit}` : ""}
           </div>
+          {row.catalogue_active === false && <span className="badge">Previous catalogue</span>}
           {row.source_filename && (
             <div className="hint">{row.source_filename}</div>
           )}
@@ -860,6 +862,10 @@ function ChapterRowView({
             </div>
           )}
           {showProgress && row.stage && <div className="hint">{row.stage}</div>}
+          {row.queue.cohort_id && <div className="hint">Batch API{row.queue.start_after ? ` · scheduled ${new Date(row.queue.start_after).toLocaleString()}` : ""}</div>}
+          {row.state === "recovering" && <div className="hint">Restoring saved progress. Do not start a duplicate run.</div>}
+          {row.saved_progress != null && <div className="hint">Saved at {Math.round(row.saved_progress * 100)}%{row.saved_stage ? ` · ${row.saved_stage}` : ""}. Waiting to resume.</div>}
+          {row.started_by_email && <div className="hint">Started by {row.started_by_email}</div>}
         </td>
         <td>
           <ChapterStepPips row={row} />
@@ -875,6 +881,10 @@ function ChapterRowView({
             onPublish={onPublish}
             onOpenDrawer={onToggleOpen}
           />
+          {row.can.upload_source && row.job_id && (
+            <ChapterRowUpload chapterId={row.chapter_id} slot="source" disabled={busy}
+              sourceBook={row.source_book} onUploaded={onRowUpdated} label="Replace source PDF" scope="replace" compact />
+          )}
         </td>
       </tr>
       {open && (
@@ -940,7 +950,7 @@ function PrimaryAction({
         onClick={() => onRun("step01")}
         id={`chapter-${row.chapter_id}-run-step01`}
       >
-        Run Step 01
+        Start Batch · Step 01
       </button>
     );
   }
@@ -1006,7 +1016,7 @@ function PrimaryAction({
         onClick={() => onRun("step02")}
         id={`chapter-${row.chapter_id}-run-step02`}
       >
-        Run Step 02
+        Start Batch · Step 02
       </button>
     );
   }

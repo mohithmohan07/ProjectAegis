@@ -454,6 +454,9 @@ def build(
 
     metadata.update(generation_quality_policy.fields(release))
     metadata.update(generation_repair_policy.fields(release))
+    from . import column_spec
+    if isinstance(release.get(column_spec.POLICY_KEY), Mapping):
+        metadata[column_spec.POLICY_KEY] = copy.deepcopy(release[column_spec.POLICY_KEY])
     if generation_repair_policy.active(release) and release.get(model_provider.PROFILE_KEY) is not None:
         metadata[model_provider.PROFILE_KEY] = model_provider.validate_profile(release[model_provider.PROFILE_KEY])
     if release.get("learning_kind") == "pre":

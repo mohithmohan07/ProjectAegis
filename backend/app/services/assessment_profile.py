@@ -966,7 +966,7 @@ def resolve_for_metadata(
         # Completing a previously unknown selector is supported above. Bind
         # its adapter at the same boundary, while leaving legacy profiles
         # and profiles with an already-known subject unchanged.
-        resolved[column_spec.POLICY_KEY] = column_spec.for_metadata(run_metadata)
+        resolved[column_spec.POLICY_KEY] = column_spec.from_metadata(run_metadata)
     if output_vocabulary.POLICY_KEY not in resolved and not was_resolved:
         # New runs adopt the owner's closed CMS catalogue. An already-resolved
         # profile without it is historical evidence, never an implicit upgrade.

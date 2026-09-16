@@ -67,6 +67,11 @@ def project_type_owner_hub_placements(
     untouched.
     """
 
+    from .. import generation_quality_policy as quality
+    if host_result.get("semantic_case_ownership") == quality.V5:
+        # The independent content-based Place decision owns support material.
+        # A taxonomy identity cannot override its certified teaching home.
+        return dict(placements)
     out = dict(placements)
     hub_placements = {
         str(qid): str(concept_id)
@@ -234,6 +239,7 @@ def figure_pool(env: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _place_checker(
     batch: list[dict[str, Any]],
     concept_ids: set[str],
+    *, caption_policy: bool = False,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     expected = {row["item_ref"]: row for row in batch}
 
@@ -280,6 +286,10 @@ def _place_checker(
                 )
             if not _normal(row.get("rationale")):
                 defects.append(f"{ref} has no rationale")
+            if caption_policy and expected[ref]["pool_kind"] == "figure" and not disposition:
+                caption = _normal(row.get("public_caption"))
+                if not caption or "BLK-" in caption or caption == ref:
+                    defects.append(f"{ref} needs a source-grounded public_caption without internal block IDs")
         missing = sorted(set(expected) - seen)
         if missing:
             defects.append("undecided item(s): " + ", ".join(missing))
@@ -291,9 +301,20 @@ def _place_checker(
 def _live_place(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
     from .. import generation
+    from .. import generation_quality_policy as quality
+
+    system = prompts.PLACE_SYSTEM
+    if quality.source_output_corrections(payload):
+        system += (
+            " Under the recorded Corrections 2.0 policy, extend each placed "
+            "figure response object with required public_caption. Keep a printed "
+            "figure number/caption exactly; if absent, author a concise description "
+            "of the supplied image without inventing a number or using a BLK ID. "
+            "Hub items and decorative_or_duplicate dispositions need no caption."
+        )
 
     return generation._openai_json(
-        prompts.PLACE_SYSTEM, prompts.render(payload),
+        system, prompts.render(payload),
         purpose="concept_mapping",
         image_urls=image_inputs(payload) if "visual_evidence" in payload else _payload_image_urls(payload),
     )
@@ -302,9 +323,18 @@ def _live_place(payload: dict[str, Any]) -> dict[str, Any]:
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
     from .. import generation
+    from .. import generation_quality_policy as quality
+
+    system = prompts.PLACE_CRITIC_SYSTEM
+    if quality.source_output_corrections(payload):
+        system += (
+            " Also check every placed figure's public_caption against its supplied "
+            "source image and printed caption. Flag invented labels or facts, "
+            "omitted printed figure numbers, internal IDs and placeholders."
+        )
 
     return generation._openai_json(
-        prompts.PLACE_CRITIC_SYSTEM, prompts.render(payload),
+        system, prompts.render(payload),
         purpose="advisory_critic",
         image_urls=image_inputs(payload) if "visual_evidence" in payload else _payload_image_urls(payload),
     )
@@ -360,6 +390,7 @@ def place(
     "review_flags": {item_ref: [flags]}}``.
     """
     from . import fixer as fixer_mod
+    from .. import generation_quality_policy as quality
 
     env = envelope_mod.validate(env)
     pool = [*hub_pool(env), *figure_pool(env)]
@@ -455,13 +486,24 @@ def place(
             "settled_concepts": concepts_payload,
             "pool": batch,
         }
+        caption_policy = quality.source_output_corrections(env)
+        if caption_policy:
+            payload.update(quality.fields(env))
+            payload["rules"] += (
+                " Every placed figure also carries public_caption. Preserve the exact "
+                "printed figure number and caption when supplied. When there is no "
+                "printed caption, describe what the supplied image actually shows in "
+                "a concise learner-facing phrase; never invent a figure number, use "
+                "an internal BLK identifier, or repeat a placeholder. The independent "
+                "critic checks this wording against the source image."
+            )
         decision = decide_with_visual_evidence(
             kind="place.container02",
             unit_id=f"pool#{start}",
             envelope_sha256=envelope_sha,
             payload=payload,
             provider=provider,
-            checker=_place_checker(batch, known_concept_ids),
+            checker=_place_checker(batch, known_concept_ids, caption_policy=caption_policy),
             critic=critic,
             store=store,
             policy_version=POLICY_VERSION,
@@ -498,6 +540,9 @@ def place(
                 figure_placements[ref] = disposition or str(
                     verdict.get("concept_id") or ""
                 )
+                if quality.source_output_corrections(env) and not disposition:
+                    figure_meta[ref]["caption"] = _normal(verdict.get("public_caption"))
+                    figure_meta[ref]["caption_policy"] = quality.V5
             else:
                 hub_placements[ref] = str(verdict.get("concept_id") or "")
 

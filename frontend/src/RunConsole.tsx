@@ -370,7 +370,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
               continue;
             }
             if (job.generation_running) continue;
-            const blockedRecovery = nonResumableJobRecovery(job);
+            const blockedRecovery = actionRequiredJobRecovery(job);
             if (blockedRecovery) {
               note(incompleteRecoveryMessage(blockedRecovery), "error");
               const recovered = reattach.recoverResult
@@ -550,7 +550,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           await visibilitySleep(delay);
           continue;
         }
-        const blockedRecovery = nonResumableJobRecovery(job);
+        const blockedRecovery = actionRequiredJobRecovery(job);
         if (blockedRecovery) {
           note(incompleteRecoveryMessage(blockedRecovery), "error");
           const recovered = reattach.recoverResult
@@ -819,18 +819,32 @@ interface IncompleteRun {
   error?: string;
   message?: string;
   resume_allowed?: boolean;
+  automatic_retry_allowed?: boolean;
   recovery_action?: string;
   recovery?: string;
   resume?: string;
 }
 
 function incompleteProgressLabel(incomplete: IncompleteRun): string {
+  if (incomplete.recovery_action === "restore_source_evidence") {
+    return "Incomplete — restore and verify source evidence";
+  }
+  if (incomplete.recovery_action === "repair_source_markup") {
+    return "Incomplete — source markup repair required";
+  }
+  if (incomplete.automatic_retry_allowed === false && incomplete.resume_allowed !== false) {
+    return "Incomplete — action required before retrying";
+  }
   return incomplete.resume_allowed === false
     ? "Incomplete — new upload and conversion required"
     : "Incomplete — resume to finish";
 }
 
 function incompleteRecoveryMessage(incomplete: IncompleteRun): string {
+  if (incomplete.automatic_retry_allowed === false && incomplete.resume_allowed !== false) {
+    return incomplete.recovery ?? incomplete.message
+      ?? "Saved work is retained. Resolve the recorded issue before retrying this run.";
+  }
   if (incomplete.resume_allowed === false) {
     return incomplete.recovery
       ?? incomplete.message
@@ -841,14 +855,15 @@ function incompleteRecoveryMessage(incomplete: IncompleteRun): string {
     ?? "Generation did not complete; resume from the saved checkpoint to finish.";
 }
 
-function nonResumableJobRecovery(data: unknown): GenerationRecovery | null {
+function actionRequiredJobRecovery(data: unknown): GenerationRecovery | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const recovery = (data as Record<string, unknown>).generation_recovery;
   if (
     !recovery
     || typeof recovery !== "object"
     || Array.isArray(recovery)
-    || (recovery as Record<string, unknown>).resume_allowed !== false
+    || ((recovery as Record<string, unknown>).resume_allowed !== false
+      && (recovery as Record<string, unknown>).automatic_retry_allowed !== false)
   ) {
     return null;
   }
@@ -873,6 +888,7 @@ function resultWithIncompleteRecovery<T>(
 function isPausedResult(data: unknown): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   const result = data as Record<string, unknown>;
+  if (result.waiting === true) return true;
   if (result.status === "awaiting_decision" && Boolean(result.pending_decision)) {
     return true;
   }
@@ -918,6 +934,12 @@ function isHistoricalResult(data: unknown, operation?: "concept" | "master"): bo
 }
 
 function pauseLabel(data: unknown): string {
+  if (data && typeof data === "object" && !Array.isArray(data)
+      && (data as Record<string, unknown>).waiting === true) {
+    return (data as Record<string, unknown>).reason === "batch_wait"
+      ? "Waiting for Batch API — automatic resume"
+      : "Run suspended — automatic resume from saved work";
+  }
   if (
     data && typeof data === "object" && !Array.isArray(data)
     && (data as Record<string, unknown>).status === "awaiting_decision"

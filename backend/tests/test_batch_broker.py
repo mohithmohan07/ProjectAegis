@@ -213,23 +213,26 @@ def test_a_wave_whose_record_lost_its_batch_id_is_found_by_its_wave_id(tmp_path)
     assert store.response(sha)["body"]["choices"][0]["message"]["content"] == "found"
 
 
-def test_a_wave_that_never_reached_the_provider_is_abandoned_not_replayed(tmp_path):
+def test_an_uncertain_legacy_submission_remains_open_not_rebought(tmp_path):
     store = bb.BatchStore(tmp_path / "batch")
     store.put_wave({"wave_id": "nevercreated00", "state": "preparing", "batch_id": "",
                     "entries": [{"custom_id": "x", "request_sha256": "x"}]})
     broker = bb.BatchBroker(FakeApi(), store=store)
     assert broker.recover() == 0
-    assert store.wave("nevercreated00")["state"] == "abandoned"
+    assert store.wave("nevercreated00")["state"] == "preparing"
+    assert store.open_waves(), "a missing listing cannot prove no batch was accepted"
 
 
 # --------------------------------------------------------------------------- #
 # Never strands a run
 # --------------------------------------------------------------------------- #
 
-def test_a_refused_submission_sends_the_caller_back_to_the_ordinary_call(tmp_path):
+def test_an_uncertain_submission_pauses_without_changing_price_lane(tmp_path, monkeypatch):
+    monkeypatch.setenv(bb.DEADLINE_SECONDS, "0.15")
     broker = _broker(tmp_path, FakeApi(fail_submit=True))
-    with pytest.raises(bb.BatchUnavailable):
+    with pytest.raises(bb.BatchPending):
         broker.call(_body("refused"))
+    assert broker._store.open_waves()[0]["state"] == "submission_unknown"
     broker.stop()
 
 
@@ -259,17 +262,18 @@ def test_a_failed_line_releases_only_its_own_caller(tmp_path):
     broker.stop()
 
 
-def test_a_batch_that_never_completes_times_the_caller_out_and_is_cancelled(tmp_path, monkeypatch):
-    monkeypatch.setenv(bb.DEADLINE_SECONDS, "1")
+def test_slow_batch_stays_open_and_resume_attaches_without_cancellation(tmp_path, monkeypatch):
+    monkeypatch.setenv(bb.DEADLINE_SECONDS, "0.15")
     api = FakeApi(status="in_progress")
     broker = _broker(tmp_path, api)
-    with pytest.raises(bb.BatchUnavailable):
+    with pytest.raises(bb.BatchPending):
         broker.call(_body("slow"))
     assert api.submissions, "the wave was submitted; only the answer never came"
-    # The dispatcher gives up on its own deadline and cancels, so nothing is
-    # left running at the provider's expense.
-    threading.Event().wait(2.0)
-    assert api.cancelled, "an abandoned wave must be cancelled"
+    assert not api.cancelled, "a waiter timeout must preserve purchased work"
+    assert broker._store.open_waves()
+    api._status = "completed"
+    assert broker.call(_body("slow"))["choices"][0]["message"]["content"] == "ok"
+    assert len(api.submissions) == 1
     broker.stop()
 
 
@@ -405,4 +409,269 @@ def test_a_healed_answer_serves_every_later_caller(tmp_path):
 
     assert broker.call(body)["choices"][0]["message"]["content"] == "good"
     assert len(api.submissions) == 2, "the healed answer is served, not re-bought"
+    broker.stop()
+
+
+def _saved_wave(store, api, body, *, wave_id="surviving", fresh=False):
+    sha = bb.request_sha256(body)
+    api.submissions.append((wave_id, [{"custom_id": sha, "body": body}]))
+    store.put_wave({"wave_id": wave_id, "batch_id": f"batch_{wave_id}",
+                    "state": "submitted", "line_count": 1,
+                    "created_at_ns": time.time_ns(),
+                    "entries": [{"request_sha256": sha, "body": body,
+                                 "fresh": fresh}]})
+    return wave_id
+
+
+def test_restart_attaches_to_still_running_wave_and_polls_without_another_boot(tmp_path):
+    body = _body("restart while provider still runs")
+    api = FakeApi(status="in_progress")
+    store = bb.BatchStore(tmp_path / "batch")
+    _saved_wave(store, api, body)
+    broker = bb.BatchBroker(api, store=store)
+    assert broker.recover() == 0
+    out = []
+    thread = threading.Thread(target=lambda: out.append(broker.call_result(body)))
+    thread.start()
+    # A new wave would be submitted by this point under the old implementation.
+    time.sleep(0.12)
+    assert len(api.submissions) == 1
+    api._status = "completed"
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert out[0].body["choices"][0]["message"]["content"] == "ok"
+    assert len(api.submissions) == 1
+    broker.stop()
+    assert store.wave("surviving")["state"] == "harvested"
+
+
+def test_fresh_retry_after_restart_attaches_to_its_pending_retry_wave(tmp_path):
+    body = _body("fresh restart")
+    sha = bb.request_sha256(body)
+    api = FakeApi(status="in_progress", answers={sha: _completion("repaired")})
+    store = bb.BatchStore(tmp_path / "batch")
+    store.put_response(sha, _completion("bad"), batch_id="older")
+    _saved_wave(store, api, body, fresh=True)
+    broker = bb.BatchBroker(api, store=store)
+    out = []
+    thread = threading.Thread(target=lambda: out.append(broker.call(body, fresh=True)))
+    thread.start()
+    time.sleep(0.1)
+    api._status = "completed"
+    thread.join(timeout=2)
+    assert out[0]["choices"][0]["message"]["content"] == "repaired"
+    assert len(api.submissions) == 1
+    assert store.response(sha)["body"]["choices"][0]["message"]["content"] == "repaired"
+    broker.stop()
+
+
+def test_lost_submission_response_is_found_before_any_resubmission(tmp_path):
+    class LostResponseApi(FakeApi):
+        def submit(self, jsonl, *, wave_id):
+            super().submit(jsonl, wave_id=wave_id)
+            raise TimeoutError("batch created but the response was lost")
+
+    api = LostResponseApi()
+    broker = _broker(tmp_path, api)
+    result = broker.call_result(_body("lost create response"))
+    assert result.body["choices"][0]["message"]["content"] == "ok"
+    assert api.listed >= 1
+    assert len(api.submissions) == 1
+    broker.stop()
+    assert not broker._store.open_waves()
+
+
+def test_temporary_result_download_failure_retains_paid_wave_for_retry(tmp_path):
+    class FlakyDownloadApi(FakeApi):
+        def __init__(self):
+            super().__init__()
+            self.downloads = 0
+
+        def results(self, batch_id):
+            self.downloads += 1
+            if self.downloads == 1:
+                raise ConnectionError("output download interrupted")
+            return super().results(batch_id)
+
+    api = FlakyDownloadApi()
+    store = bb.BatchStore(tmp_path / "batch")
+    _saved_wave(store, api, _body("download retry"))
+    broker = bb.BatchBroker(api, store=store)
+    assert broker.recover() == 0
+    assert store.open_waves(), "failed download must not mark the wave harvested"
+    assert broker.recover() == 1
+    assert not store.open_waves()
+    assert len(api.submissions) == 1
+
+
+def test_slow_wave_does_not_block_independent_wave_submission(tmp_path):
+    class IndependentApi(FakeApi):
+        def status(self, batch_id):
+            return "in_progress" if batch_id == "batch_surviving" else "completed"
+
+    api = IndependentApi()
+    store = bb.BatchStore(tmp_path / "batch")
+    _saved_wave(store, api, _body("slow old chapter"))
+    broker = bb.BatchBroker(api, store=store)
+    assert broker.call(_body("independent new chapter"))["choices"]
+    assert len(api.submissions) == 2
+    assert store.wave("surviving")["state"] == "submitted"
+    broker.stop()
+
+
+def test_shared_and_cached_responses_expose_one_new_receipt(tmp_path):
+    broker = _broker(tmp_path, FakeApi())
+    body = _body("same paid response")
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(broker.call_result(body)))
+               for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert len(out) == 4
+    assert sum(not row.reused for row in out) == 1
+    replay = broker.call_result(body)
+    assert replay.reused
+    assert len({row.receipt_id for row in out + [replay]}) == 1
+    broker.stop()
+
+
+def test_shutdown_preserves_pending_wave_for_restart_without_provider_cancel(tmp_path, monkeypatch):
+    monkeypatch.setenv(bb.QUIET_SECONDS, "10")
+    api = FakeApi()
+    store = bb.BatchStore(tmp_path / "batch")
+    broker = bb.BatchBroker(api, store=store)
+    failures = []
+
+    def ask():
+        try:
+            broker.call(_body("shutdown before submission"))
+        except bb.BatchPending as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    for _ in range(100):
+        if broker._pending:
+            break
+        time.sleep(0.001)
+    broker.stop()
+    thread.join(timeout=2)
+    assert len(failures) == 1
+    assert api.submissions == []
+    assert not api.cancelled
+    assert store.open_waves()[0]["state"] == "prepared"
+    restarted = bb.BatchBroker(api, store=store)
+    assert restarted.call(_body("shutdown before submission"))["choices"]
+    assert len(api.submissions) == 1
+    restarted.stop()
+
+
+def test_live_adapter_searches_later_pages_during_reconciliation():
+    from types import SimpleNamespace
+
+    class Page:
+        def __init__(self, data, next_page=None):
+            self.data, self.next_page = data, next_page
+
+        def has_next_page(self):
+            return self.next_page is not None
+
+        def get_next_page(self):
+            return self.next_page
+
+    second = Page([SimpleNamespace(id="older-batch", metadata={"aegis_wave": "wanted"})])
+    first = Page([SimpleNamespace(id="newer-batch", metadata={})], second)
+    api = bb.OpenAIBatchApi(lambda: SimpleNamespace(
+        batches=SimpleNamespace(list=lambda **kwargs: first)))
+    assert api.find("wanted") == "older-batch"
+
+
+def test_live_adapter_disables_hidden_sdk_retries_on_batch_creation():
+    from types import SimpleNamespace
+
+    selected_options = []
+    creates = []
+
+    def create(**kwargs):
+        creates.append(kwargs)
+        return SimpleNamespace(id="paid-once")
+
+    def with_options(**kwargs):
+        selected_options.append(kwargs)
+        return SimpleNamespace(batches=SimpleNamespace(create=create))
+
+    client = SimpleNamespace(
+        files=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(id="input")),
+        with_options=with_options,
+    )
+    api = bb.OpenAIBatchApi(lambda: client)
+    assert api.submit(b"{}\\n", wave_id="durable") == "paid-once"
+    assert selected_options == [{"max_retries": 0}]
+    assert len(creates) == 1
+    assert creates[0]["metadata"] == {"aegis_wave": "durable"}
+
+
+def test_paid_receipt_ledger_retains_retries_and_original_owner(tmp_path):
+    broker = _broker(tmp_path, FakeApi())
+    body = _body("receipt survives cache replacement")
+    first = broker.call_result(body, owner_job_id=41)
+    reused = broker.call_result(body, owner_job_id=99)
+    second = broker.call_result(body, fresh=True, owner_job_id=41)
+    broker.stop()
+    assert first.owner_job_id == reused.owner_job_id == second.owner_job_id == 41
+    assert reused.reused and reused.receipt_id == first.receipt_id
+    ledger = broker._store.paid_receipts()
+    assert len(ledger) == 2
+    assert {item["receipt_id"] for item in ledger} == {first.receipt_id, second.receipt_id}
+    assert all(item["owner_job_id"] == 41 for item in ledger)
+    assert all("cost_estimate" in item for item in ledger)
+    assert all(item["usage"]["prompt_tokens"] == 11 for item in ledger)
+    assert broker._store.response(bb.request_sha256(body))["batch_id"] == second.batch_id
+
+
+def test_early_deploy_pause_releases_waiter_before_broker_shutdown(tmp_path, monkeypatch):
+    """SIGTERM precedes Uvicorn's HTTP drain; don't wait for lifespan stop."""
+    pausing = [False]
+    monkeypatch.setattr(bb.run_control, "pausing", lambda: pausing[0])
+    api = FakeApi(status="in_progress")
+    broker = _broker(tmp_path, api)
+    failures = []
+
+    def ask():
+        try:
+            broker.call(_body("early deployment pause"))
+        except bb.BatchPending as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    for _ in range(200):
+        if api.submissions:
+            break
+        time.sleep(0.005)
+    assert api.submissions
+    pausing[0] = True
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert failures and failures[0].batch_id
+    assert not broker._stop.is_set(), "early pause must work before broker.stop"
+    assert not api.cancelled
+    assert broker._store.open_waves()[0]["state"] == "submitted"
+    broker.stop()
+
+
+def test_early_deploy_pause_keeps_prepared_wave_without_submitting(tmp_path, monkeypatch):
+    monkeypatch.setattr(bb.run_control, "pausing", lambda: True)
+    api = FakeApi()
+    broker = bb.BatchBroker(api, store=bb.BatchStore(tmp_path / "batch"))
+    body = _body("prepared when deployment starts")
+    waiter = bb._Waiter(sha=bb.request_sha256(body), body=body)
+    record = broker._prepare_wave([waiter])
+    broker.recover()
+    assert api.submissions == []
+    assert api.listed == 0
+    assert broker._store.wave(record["wave_id"])["state"] == "prepared"
+    assert not api.cancelled
     broker.stop()

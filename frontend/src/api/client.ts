@@ -2,6 +2,7 @@ import type {
   BlueprintBatch,
   BoardNode,
   ChapterBatchDetail,
+  RunDashboard,
   ChapterBatchPage,
   ChapterBatchPushResult,
   ChapterBatchRow,
@@ -694,6 +695,7 @@ export const api = {
       subject?: string;
       q?: string;
       state?: string;
+      catalogue?: "active" | "history" | "all";
       page?: number;
       page_size?: number;
     } = {},
@@ -710,6 +712,8 @@ export const api = {
   },
   /** The row plus the full job, for the drawer only: the list row never
    * carries release payloads or the question inventory. */
+  runDashboard: (params: Record<string, string | number> = {}) =>
+    http<RunDashboard>(`/run-dashboard?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`),
   chapterBatchDetail: (chapterId: number) =>
     http<ChapterBatchDetail>(`/chapter-batches/${chapterId}`),
   /**
@@ -766,7 +770,7 @@ export const api = {
       body: JSON.stringify({
         step,
         rows,
-        ...(options?.cohort ? { cohort: true } : {}),
+        ...(step !== "publish" ? { cohort: options?.cohort ?? true } : {}),
         ...(options?.startAt ? { start_at: options.startAt } : {}),
       }),
     }),

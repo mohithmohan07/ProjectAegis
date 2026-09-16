@@ -11,6 +11,7 @@ os.environ["AEGIS_USE_LIVE"] = "0"
 # claim whatever another test left queued and try to generate it for real.
 # Tests that exercise the worker drive it directly instead.
 os.environ["AEGIS_QUEUE_WORKER"] = "0"
+os.environ["AEGIS_NOTIFICATION_WORKER"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -312,3 +313,12 @@ def first_chapter(client):
 def first_concept(client, first_chapter):
     detail = client.get(f"/directory/chapters/{first_chapter['id']}").json()
     return detail["topics"][0]["concepts"][0]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_deployment_control():
+    """A TestClient shutdown must not mark the next simulated server draining."""
+    from app.services import run_control
+    run_control.reset()
+    yield
+    run_control.reset()

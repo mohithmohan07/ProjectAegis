@@ -517,6 +517,7 @@ def build_release_bulk_import_workbook(
     as a known asymmetry rather than papered over.
     """
     from ..bulk_import import writer as bi_writer
+    from . import column_spec
     resolved = normalize_lane(lane)
     payload = release_payload(job, lane=resolved)
     if payload is None:
@@ -537,9 +538,13 @@ def build_release_bulk_import_workbook(
     # the Source book named on the upload page — the same value every
     # Master row carries in ``question_source``.
     publication = str(job.source_book or "")
+    # None preserves historical unstamped exports. A recorded policy is
+    # passed through both transient and published Concept download paths.
+    column_policy = payload.get(column_spec.POLICY_KEY)
     if bool(summary.get("database_uploaded")) and result_ids:
         return bi_writer.write_concepts_workbook(
             db, result_ids, layout_id=layout_id, publication=publication,
+            column_policy=column_policy,
         )
 
     chapter, concepts, _records, defects = transient_release_hierarchy(
@@ -567,6 +572,7 @@ def build_release_bulk_import_workbook(
                     sheet_layout=sheet_layout,
                     export_scope=export_scope,
                     publication=publication,
+                    column_policy=column_policy,
                 ),
                 start=1,
             ):

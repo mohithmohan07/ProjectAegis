@@ -17,13 +17,14 @@ worker and queue code, then pins the fix:
 from __future__ import annotations
 
 import time
+from datetime import timedelta
 
 import pytest
 
 from app import models
 from app.db import SessionLocal
 from app.services import build_concepts_release as release_svc
-from app.services import chapter_batches, chapter_queue_worker, semantic_recovery
+from app.services import chapter_batches, chapter_queue, chapter_queue_worker, semantic_recovery
 from tests.test_chapter_batch_console import (
     _chapter, _job, _marker, _only_this_task, _row, session,  # noqa: F401
 )
@@ -173,7 +174,8 @@ def test_a_refunded_collision_on_the_last_attempt_is_requeued_not_failed(
     row = _row(session, chapter, job)
     task = models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="leased", lanes=[],
-        attempt=2, max_attempts=2, lease_owner="worker:test",
+        attempt=2, max_attempts=2, lease_owner=chapter_queue.WORKER_TOKEN,
+        cohort_id="refund-test",
     )
     session.add(task)
     session.commit()
@@ -195,6 +197,7 @@ def test_a_refunded_collision_on_the_last_attempt_is_requeued_not_failed(
     settled = session.get(models.ChapterBatchTask, task.id)
     # Back in line with the attempt given back: a collision is not a try.
     assert settled.state == "queued"
+    assert settled.start_after is not None, "the refunded delay must survive restart"
     assert settled.attempt == 1
     assert settled.failure_code == ""
     assert "held this upload" in settled.last_error
@@ -206,6 +209,11 @@ def test_a_refunded_collision_on_the_last_attempt_is_requeued_not_failed(
     assert ran == []
 
     worker._backoff_until[task.id] = 0.0
+    # A new process loses the in-memory timer, but still must honor the
+    # recorded delay. Advance the database clock only after proving that.
+    assert worker._dispatch_once() == 0
+    after_delay = settled.start_after + timedelta(seconds=1)
+    monkeypatch.setattr(chapter_queue, "_now", lambda: after_delay)
     assert worker._dispatch_once() == 1
     _drain(worker)
     assert ran == [task.id]

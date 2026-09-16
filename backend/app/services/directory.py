@@ -527,9 +527,14 @@ def concept_tag(board: str, grade: str, subject: str, chapter_title: str,
 # Browsing
 # --------------------------------------------------------------------------- #
 
-def tree(db: Session) -> list[dict]:
+def tree(db: Session, *, include_history: bool = False) -> list[dict]:
     """Full Board > Grade > Subject > Unit > Chapter tree (chapters carry counts)."""
-    chapters = db.query(models.Chapter).order_by(models.Chapter.id).all()
+    query = db.query(models.Chapter)
+    if not include_history:
+        query = query.filter(models.Chapter.catalogue_active.is_not(False))
+    chapters = query.order_by(
+        models.Chapter.catalogue_order, models.Chapter.id,
+    ).all()
     root: dict = {}
     for ch in chapters:
         board = root.setdefault(ch.board or "Unknown", {})

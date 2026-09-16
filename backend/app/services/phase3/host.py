@@ -412,7 +412,7 @@ def _live_host(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.HOST_SYSTEM, prompts.render(payload), purpose="concept_mapping", image_urls=image_inputs(payload)
+        prompts.host_system(payload), prompts.render(payload), purpose="concept_mapping", image_urls=image_inputs(payload)
     )
 
 
@@ -871,6 +871,14 @@ def host(
                 ),
             }),
         }
+        if quality.semantic_case_ownership(env):
+            from . import prompts as prompts_mod
+            payload.update(quality.fields(env))
+            payload["rules"] = payload["rules"].replace(
+                "A textbook Activity, experiment or discussion unit goes to the "
+                "related NORMAL concept, never to a Culmination.",
+                prompts_mod.SEMANTIC_ACTIVITY_RULE,
+            )
         decision = decide_with_visual_evidence(
             kind="host.units",
             unit_id=unit_id,
@@ -1149,6 +1157,12 @@ def consolidate_type_ownership(
     Types by the choice is a legitimate outcome — the verdict's rules
     forbid spreading.
     """
+
+    if quality.semantic_case_ownership(env):
+        # Per-question and per-Case model verdicts remain authoritative.
+        # Assemble gives each decided concept its own Type identity, rather
+        # than moving content to satisfy a shared answering-form identity.
+        return {**hosts, "semantic_case_ownership": quality.V5}
 
     from . import fixer as fixer_mod
     from . import prompts as prompts_mod

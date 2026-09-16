@@ -5,19 +5,10 @@ each in its own thread. There is nothing clever here on purpose: the hard parts
 are the lease (``chapter_queue``) and the honesty of the outcomes, not the
 threading.
 
-**Admission is the part that decides whether this feature works.** The provider
-gate is a process-wide semaphore of ``AEGIS_OPENAI_MAX_CONCURRENCY`` slots, and
-``config.phase3_decision_workers`` fan-outs contend for it: one Step 01 presents
-about one fan-out, one Step 02 presents two because the Post and Pre Master
-lanes overlap. Over-subscribing does not merely slow a run down — sustained
-queueing past ``AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS`` FAILS it, after real
-money has been spent. So the worker holds a reserve back for interactive use
-and refuses to start more work than the gate can carry.
-
-The honest throughput that follows from those numbers is written down in
-``docs/chapter-batch-console-contract.md`` §7 and is not flattering: on the
-current machine a twelve-hour night clears roughly a dozen Step 01s or about
-six Step 02s. Raising the concurrency knobs is not a lever; it is the failure.
+Explicit synchronous work shares the provider semaphore and reserves capacity
+for interactive use. Selected Batch tasks use the separate chapter and Master
+limits: provider work waits durably outside that semaphore. A deployment stops
+new admission, retains active leases while work yields, and resumes saved steps.
 """
 from __future__ import annotations
 
@@ -29,7 +20,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .. import config, models
-from . import chapter_batches, chapter_queue, process_memory
+from . import chapter_batches, chapter_queue, process_memory, run_control
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +50,8 @@ def max_concurrent_masters() -> int:
 def live_broker():
     """The process's wave broker, bound to the OpenAI credentials in use.
 
-    One per process, deliberately: the saving comes from cohort chapters
-    sharing a wave, and two brokers would cut every wave in half.
+    One per process so concurrent chapters share durable waves and request
+    deduplication. The batch discount itself is per request, not per wave width.
     """
     from . import batch_broker, model_provider
 
@@ -88,9 +79,8 @@ def cohort_concurrency() -> int:
     at that number (register Q57). The heartbeat's ``chapter queue memory:``
     line is what turns it into a measurement. Raise it against that log.
 
-    A synchronous FALLBACK inside a cohort run still takes an ordinary
-    provider slot, which is why this does not remove the gate — it sits
-    beside it.
+    Cohorts never switch to synchronous pricing. The synchronous gate remains
+    for explicitly ordinary runs, independently of this chapter limit.
     """
     return max(1, _int_env("AEGIS_QUEUE_COHORT_CONCURRENCY", 6))
 
@@ -205,6 +195,7 @@ class ChapterQueueWorker:
         self._sleep = sleep
         self._wake = threading.Condition()
         self._stopping = False
+        self._draining = False
         self._supervisor: threading.Thread | None = None
         self._heartbeat: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -269,13 +260,22 @@ class ChapterQueueWorker:
         self._heartbeat.start()
 
     def stop(self, *, wait: bool = True, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + max(0.0, timeout)
         with self._wake:
             self._stopping = True
+            self._draining = True
             self._wake.notify_all()
         if wait and self._supervisor is not None:
-            self._supervisor.join(timeout=timeout)
-        self._supervisor = None
-        self._heartbeat = None
+            self._supervisor.join(timeout=max(0.0, deadline - time.monotonic()))
+        # Paid calls reach the cooperative provider boundary and requeue their
+        # task. During this bounded drain, heartbeat continues protecting every
+        # still-running lease. Anything not yet yielded keeps its TTL for boot.
+        while wait and self._in_flight_ids() and time.monotonic() < deadline:
+            with self._wake:
+                self._wake.wait(min(0.1, max(0.0, deadline - time.monotonic())))
+        self._draining = False
+        if self._supervisor is not None and not self._supervisor.is_alive():
+            self._supervisor = None
 
     def nudge(self) -> None:
         """Wake the supervisor now — a push should not wait for the poll."""
@@ -292,7 +292,8 @@ class ChapterQueueWorker:
             "alive": self.alive(),
             "started_at": self._started_at,
             "in_flight": in_flight,
-            "capacity": max_concurrent_runs(),
+            **capacity_details(),
+            "draining": self._stopping,
             "provider_reserve": provider_reserve(),
         }
 
@@ -312,6 +313,8 @@ class ChapterQueueWorker:
         by this machine's capacity rather than by the synchronous provider
         gate (register Q73).
         """
+        if self._stopping or run_control.pausing():
+            return False
         with self._lock:
             in_flight = dict(self._in_flight)
         if kind in _PUBLISH_KINDS:
@@ -325,10 +328,9 @@ class ChapterQueueWorker:
             value for value in in_flight.values() if value in _GENERATION_KINDS
         ]
         if cohort:
-            # A cohort runs wide on purpose: narrow it and the waves narrow
-            # with it, which is the entire saving. Its requests queue at the
-            # provider, so the fan-out budget below does not apply — only
-            # this machine's own capacity does.
+            # A wider cohort improves throughput; every selected request keeps
+            # the batch price regardless of wave width. The machine's memory,
+            # rather than its synchronous provider fan-out, bounds concurrency.
             if len(generation) >= cohort_concurrency():
                 return False
             if kind == "step02":
@@ -344,6 +346,10 @@ class ChapterQueueWorker:
                 if not _volume_can_hold_a_master_batch():
                     return False
             return True
+        if admission_shortfall():
+            # This concerns synchronous fan-out only. It must not disable a
+            # strict Batch queue, whose work waits at the provider instead.
+            return False
         if len(generation) >= max_concurrent_runs():
             return False
         if kind == "step02":
@@ -377,6 +383,8 @@ class ChapterQueueWorker:
                     self._wake.wait(poll_seconds())
 
     def _dispatch_once(self) -> int:
+        if self._stopping or run_control.pausing():
+            return 0
         db = self._session_factory()
         started = 0
         try:
@@ -394,7 +402,7 @@ class ChapterQueueWorker:
                 # 2026). Ordering mechanics only; no content is judged.
                 held: models.ChapterBatchTask | None = None
                 for task in chapter_queue.claimable(db, kinds=kinds):
-                    if self._stopping:
+                    if self._stopping or run_control.pausing():
                         return started
                     if int(task.id) in running:
                         # ``claimable`` includes a lease that has expired, which
@@ -469,6 +477,7 @@ class ChapterQueueWorker:
             self._note_job(task_id, task, db)
             verdict = chapter_queue.reconcile_before_dispatch(db, task)
             if verdict is not None:
+                _record_failure_outcome(db, task, verdict)
                 chapter_queue.finish(
                     db, task_id, state=verdict["state"],
                     failure_code=verdict.get("failure_code", ""),
@@ -478,6 +487,15 @@ class ChapterQueueWorker:
             outcome = self._runner(db, task)
             self._settle(db, task_id, outcome)
             _schedule_checkpoint_backup(db, task)
+        except run_control.RunDeferred as exc:
+            # Scheduling suspension is not failed content, and must not reach
+            # a failure notification or exhaust the real failure-attempt cap.
+            db.rollback()
+            chapter_queue.requeue(
+                db, task_id, error=str(exc), refund_attempt=True,
+                delay_seconds=exc.delay, reason=exc.reason,
+            )
+            _schedule_checkpoint_backup(db, task)
         except Exception as exc:  # noqa: BLE001 — recorded, never lost
             log.warning("chapter queue: task %s failed", task_id, exc_info=True)
             try:
@@ -485,7 +503,10 @@ class ChapterQueueWorker:
                 # settling the task is the one write that must still land —
                 # otherwise the row stays leased and looks busy forever.
                 db.rollback()
-                self._settle(db, task_id, classify_exception(exc))
+                outcome = classify_exception(exc)
+                _record_failure_outcome(db, task, outcome, error=exc)
+                outcome["_failure_observed"] = True
+                self._settle(db, task_id, outcome)
                 _schedule_checkpoint_backup(db, task)
             except Exception:  # noqa: BLE001
                 log.error(
@@ -514,7 +535,7 @@ class ChapterQueueWorker:
         """
         try:
             row = db.get(models.ChapterBatchRow, int(task.batch_row_id or 0))
-            job_id = int(getattr(row, "job_id", 0) or 0)
+            job_id = int(getattr(task, "job_id", 0) or getattr(row, "job_id", 0) or 0)
         except Exception:  # noqa: BLE001 — a diagnostic never fails a run
             job_id = 0
         with self._lock:
@@ -522,6 +543,8 @@ class ChapterQueueWorker:
 
     def _settle(self, db, task_id: int, outcome: dict[str, Any]) -> None:
         state = str(outcome.get("state") or "failed")
+        if not outcome.get("_failure_observed"):
+            _record_failure_outcome(db, db.get(models.ChapterBatchTask, task_id), outcome)
         if state == "retry":
             task = db.get(models.ChapterBatchTask, int(task_id))
             attempts = int(task.attempt or 0) if task else 0
@@ -545,6 +568,9 @@ class ChapterQueueWorker:
                 chapter_queue.requeue(
                     db, task_id, error=str(outcome.get("error") or ""),
                     refund_attempt=refund,
+                    delay_seconds=(float(outcome.get("delay_seconds") or collision_backoff_seconds())
+                                   if refund else poll_seconds()),
+                    reason=str(outcome.get("failure_code") or ""),
                 )
                 return
             chapter_queue.finish(
@@ -661,7 +687,7 @@ class ChapterQueueWorker:
         )
 
     def _beat(self) -> None:
-        while not self._stopping:
+        while not self._stopping or self._draining:
             # ``self._sleep`` and not ``time.sleep``: the seam is already on
             # the constructor, and without using it here the heartbeat is a
             # thread no test can step — which is why the beat was untested
@@ -720,11 +746,37 @@ def _schedule_checkpoint_backup(db, task) -> None:
         return
     try:
         row = db.get(models.ChapterBatchRow, int(task.batch_row_id))
-        if row is not None and row.job_id:
-            drive_checkpoints.schedule_checkpoint_backup(int(row.job_id))
+        job_id = int(getattr(task, "job_id", 0) or getattr(row, "job_id", 0) or 0)
+        if job_id:
+            drive_checkpoints.schedule_checkpoint_backup(job_id)
     except Exception:  # noqa: BLE001 — a mirror is an assist, never a gate
         log.debug("chapter queue: could not queue a checkpoint backup",
                   exc_info=True)
+
+
+def _record_failure_outcome(db, task, outcome, *, error=None) -> None:
+    """Capture before settlement clears the lease; waiting is not failure."""
+    try:
+        state = str(outcome.get("state") or "failed")
+        if state not in {"failed", "blocked", "retry"} or outcome.get("refund_attempt"):
+            return
+        if task is None:
+            return
+        from . import failure_reports
+        job_id = getattr(task, "job_id", None)
+        if not job_id:
+            row = db.get(models.ChapterBatchRow, task.batch_row_id)
+            job_id = getattr(row, "job_id", None)
+        disposition = state
+        if state == "retry" and int(task.attempt or 0) >= int(task.max_attempts or 0):
+            disposition = "failed"
+        failure_reports.record_failure(
+            db, job_id, error, task=task, disposition=disposition,
+            origin="queue", failure_code=str(outcome.get("failure_code") or ""),
+            message=str(outcome.get("error") or ""),
+        )
+    except Exception:
+        log.warning("chapter queue: failure evidence unavailable")
 
 
 def classify_exception(exc: BaseException) -> dict[str, Any]:
@@ -734,7 +786,23 @@ def classify_exception(exc: BaseException) -> dict[str, Any]:
     is it worth another charge, or is it over. Nothing is guessed from the
     words in a message — each case is a typed exception the pipeline raises.
     """
-    from . import storage_capacity, uploads
+    from . import batch_broker, storage_capacity, uploads
+
+    if isinstance(exc, batch_broker.BatchPending):
+        return {"state": "retry", "refund_attempt": True,
+                "failure_code": "batch_wait", "delay_seconds": 30,
+                "error": str(exc)}
+    if isinstance(exc, batch_broker.BatchUnavailable):
+        return {"state": "failed", "failure_code": "batch_failed", "error": str(exc)}
+
+    from .canonical_source_phase3 import SourceEvidenceMismatch
+    from .canonical_source_phase221_fallback import CanonicalSourceGateError
+    if isinstance(exc, (SourceEvidenceMismatch, CanonicalSourceGateError)):
+        return {
+            "state": "blocked", "blocked_kind": "source_integrity",
+            "failure_code": exc.failure_code,
+            "error": exc.recovery_message,
+        }
 
     if isinstance(exc, uploads.JobAlreadyRunningError):
         # Another route holds the per-job lock. This was never a real try, so
@@ -787,7 +855,17 @@ def run_task(db, task: models.ChapterBatchTask) -> dict[str, Any]:
             "state": "failed", "failure_code": "job_missing",
             "error": "the staged upload for this chapter is gone",
         }
+    run_control.check()
+    if task.job_id and int(task.job_id) != int(row.job_id):
+        return {"state": "failed", "failure_code": "source_replaced",
+                "error": "this task belongs to an earlier source upload"}
     kind = str(task.kind or "")
+    if kind in ("step01", "step02"):
+        job = db.get(models.UploadJob, int(task.job_id or row.job_id))
+        if job is not None:
+            job.execution_mode = "batch" if task.cohort_id else "synchronous"
+            job.requested_chapter_id = int(row.chapter_id)
+            db.commit()
     if kind == "step01":
         return _run_step01(db, row, task)
     if kind == "step02":
@@ -806,12 +884,7 @@ def _job_owner(db, job_id: int) -> str:
 
 
 def _cohort_session(task):
-    """Bind the wave broker for a cohort task; a plain task is untouched.
-
-    A run outside a cohort must never be parked in someone else's wave: it
-    has nobody to share a wave with, so batching it would only add the
-    provider's queue time to a run a person is watching.
-    """
+    """Bind selected Batch tasks; explicitly synchronous tasks stay unbound."""
     from . import batch_broker
 
     if not str(getattr(task, "cohort_id", "") or ""):
@@ -829,7 +902,7 @@ def _run_step01(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     from . import build_concepts_release_contract as release_contract
     from . import openai_usage, progress, uploads
 
-    job_id = int(row.job_id)
+    job_id = int(getattr(task, "job_id", 0) or row.job_id)
     # Every service call below resolves the job through ``uploads.get_job``,
     # which filters on ``owner_sub``. Passing the person who pushed the button
     # would raise UploadJobNotFound before a single call. Who acted is recorded
@@ -875,7 +948,7 @@ def _run_step02(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     from . import build_concepts_release_contract as release_contract
     from . import openai_usage, progress, uploads
 
-    job_id = int(row.job_id)
+    job_id = int(getattr(task, "job_id", 0) or row.job_id)
     owner_sub = _job_owner(db, job_id)
     # The Master build takes its own atomic storage reservation inside
     # ``_build_master_siblings``; a refusal arrives here as StorageCapacityError
@@ -951,6 +1024,12 @@ def _after_generation(db, job_id: int, result: Any) -> dict[str, Any]:
                 "state": "failed", "failure_code": "non_resumable",
                 "error": str(incomplete.get("recovery") or message),
             }
+        if incomplete.get("automatic_retry_allowed") is False:
+            return {
+                "state": "blocked", "blocked_kind": "source_integrity",
+                "failure_code": str(incomplete.get("failure_code") or "run_incomplete"),
+                "error": str(incomplete.get("recovery") or message),
+            }
         return {
             "state": "retry", "failure_code": "run_incomplete",
             "error": message,
@@ -991,7 +1070,7 @@ def _run_publish(db, row: models.ChapterBatchRow, task) -> dict[str, Any]:
     from . import build_concepts_release_publication as release_publication
     from . import master_review, openai_usage, progress
 
-    job_id = int(row.job_id)
+    job_id = int(getattr(task, "job_id", 0) or row.job_id)
     owner_sub = _job_owner(db, job_id)
     lanes = [str(lane) for lane in (task.lanes or [])]
     if not lanes:
@@ -1116,11 +1195,9 @@ def initialize_chapter_queue(session_factory) -> ChapterQueueWorker | None:
         return None
     shortfall = admission_shortfall()
     if shortfall:
-        # Starting anyway would admit step01s and leave every step02 queued
-        # forever, silently. Loud and stopped beats quiet and stuck.
-        _disabled_reason = shortfall
-        log.error("chapter queue worker NOT started: %s", shortfall)
-        return None
+        # A missing synchronous budget cannot disable strict Batch work.
+        # The corresponding reason remains visible in capacity_details().
+        log.warning("chapter queue: synchronous admission unavailable; Batch remains enabled: %s", shortfall)
     _disabled_reason = ""
     if _worker is not None:
         return _worker
@@ -1135,6 +1212,9 @@ def shutdown_chapter_queue() -> None:
     if _worker is not None:
         _worker.stop()
         _worker = None
+    from . import batch_broker
+
+    batch_broker.reset_process_broker()
 
 
 def current_worker() -> ChapterQueueWorker | None:
@@ -1151,4 +1231,18 @@ def worker_alive() -> bool:
 
 
 def capacity() -> int:
-    return max_concurrent_runs()
+    return cohort_concurrency()
+
+
+def capacity_details() -> dict[str, Any]:
+    from . import batch_broker
+
+    return {
+        "capacity": cohort_concurrency(),
+        "batch_capacity": cohort_concurrency(),
+        "batch_master_capacity": cohort_masters(),
+        "synchronous_capacity": max_concurrent_runs(),
+        "synchronous_master_capacity": max_concurrent_masters(),
+        "synchronous_admission_reason": admission_shortfall(),
+        "broker": batch_broker.process_status(),
+    }

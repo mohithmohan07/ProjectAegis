@@ -27,7 +27,7 @@ def test_upload_syllabus_populates_tree(client, db):
         "/data/syllabus/upload",
         files={"files": ("UnitChapter_List__CBSE.xlsx", data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["created"] >= 1
 

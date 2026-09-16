@@ -16,6 +16,12 @@ export default function Home() {
       </div>
 
       <div className="grid cols-2 mt-8">
+        <button className="module-card" onClick={() => nav("/chapters")}>
+          <div className="module-title">Chapters · Batch API</div><div className="module-desc">Stage source files, select chapters together and start discounted batch generation.</div>
+        </button>
+        <button className="module-card" onClick={() => nav("/dashboard")}>
+          <div className="module-title">Run &amp; cost dashboard</div><div className="module-desc">Track chapter stages, recovery, total spend and individual run costs.</div>
+        </button>
         <button className="module-card" onClick={() => nav("/build-assessments")}>
           <div className="module-title">1 · Build Assessments</div>
           <div className="module-desc">

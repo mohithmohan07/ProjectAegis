@@ -860,7 +860,9 @@ def _deposit_concepts(
     # sealed before generation-quality v2 was assembled with, or the final
     # certificate recompute below would refuse the sealed payload.
     records = concept_refiner.refine_chapter(
-        records, format_culminations=format_culminations)
+        records, format_culminations=format_culminations,
+        source_examples=generation._inventory_source_examples(inventory),
+        source_key=generation._inventory_coverage_key)
     # The final deposit boundary must be resilient when the API repair pass
     # fails or returns generic/misclassified learner analysis. Preserve valid
     # Misconceptions and/or Error Analysis, and add the deterministic fallback
@@ -916,7 +918,9 @@ def _deposit_concepts(
             records = generation._canonicalize_concept_rich_text(records)
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
-        records = concept_refiner.renumber_types_continuously(records)
+        records = concept_refiner.renumber_types_continuously(
+            records, source_examples=generation._inventory_source_examples(inventory),
+            source_key=generation._inventory_coverage_key)
         records = concept_validator.ensure_valid_learner_analysis(records)
         coverage = generation._rendered_inventory_coverage_defects(
             records, inventory)

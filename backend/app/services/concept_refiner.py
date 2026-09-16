@@ -784,7 +784,28 @@ def reduce_type_sections(details: str) -> str:
     return details
 
 
-def renumber_types_continuously(records: list[dict]) -> list[dict]:
+def renumber_types_continuously(records: list[dict], *, source_examples=(), source_key=None) -> list[dict]:
+    """Format the hierarchy while preserving exact inventory-owned questions."""
+    from . import rendered_source_spans
+
+    source_examples = tuple(source_examples)
+    restores = []
+    try:
+        for record in records:
+            details = str(record.get("concept_details") or "")
+            masked, restore = rendered_source_spans.mask_examples(
+                details, source_examples, comparison_key=source_key)
+            restores.append((record, restore))
+            if masked != details:
+                record["concept_details"] = masked
+        return _renumber_types_continuously(records)
+    finally:
+        for record, restore in restores:
+            if record.get("concept_details"):
+                record["concept_details"] = restore(record["concept_details"])
+
+
+def _renumber_types_continuously(records: list[dict]) -> list[dict]:
     """Renumber Types continuously without making an ownership verdict.
 
     ONE chapter-wide continuous sequence -> "Type 01", "Type 02", ... shared
@@ -1217,6 +1238,7 @@ def ensure_misconceptions(records: list[dict]) -> list[dict]:
 
 def refine_chapter(
     records: list[dict], *, format_culminations: bool = True,
+    source_examples=(), source_key=None,
 ) -> list[dict]:
     """Full deterministic refinement pass over a chapter's ordered records.
 
@@ -1247,4 +1269,4 @@ def refine_chapter(
             details = normalize_analysis_sections(details)
             rec["concept_details"] = details
     records = ensure_analysis_sections(records)
-    return renumber_types_continuously(records)
+    return renumber_types_continuously(records, source_examples=source_examples, source_key=source_key)

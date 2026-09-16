@@ -386,6 +386,7 @@ def _queued_task(session, code):
     row = _row(session, chapter, job)
     task = models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
     )
     session.add(task)
     session.commit()
@@ -463,21 +464,25 @@ def test_an_expired_lease_of_a_running_task_is_never_reclaimed(session):
     assert recovered["requeued"] == 1
 
 
-def test_a_crash_loop_exhausts_its_budget_instead_of_spinning(session):
+def test_restarts_resume_without_exhausting_the_content_failure_budget(session, monkeypatch):
     task = _queued_task(session, "10CBMA_T19")
-    for _ in range(2):
+    clock = [datetime.utcnow()]
+    monkeypatch.setattr(chapter_queue, "_now", lambda: clock[0])
+    for _ in range(3):
+        clock[0] += timedelta(seconds=2)
         claimed = chapter_queue.claim(session, task.id)
         assert claimed is not None
         session.query(models.ChapterBatchTask).filter(
             models.ChapterBatchTask.id == task.id
-        ).update({"lease_expires_at": datetime.utcnow() - timedelta(minutes=1)})
+        ).update({"lease_expires_at": clock[0] - timedelta(minutes=1)})
         session.commit()
         chapter_queue.reclaim_orphans(session, in_flight=[])
     session.expire_all()
     settled = session.get(models.ChapterBatchTask, task.id)
-    assert settled.attempt == 2
-    assert settled.state == "failed"
+    assert settled.attempt == 0
+    assert settled.state == "queued"
     assert settled.failure_code == "worker_restart"
+    assert settled.start_after > clock[0]
 
 
 def test_heartbeat_fails_once_the_lease_is_lost(session):
@@ -557,6 +562,8 @@ def test_admission_holds_a_reserve_back_from_the_provider_gate(monkeypatch):
 
 
 def test_one_publish_at_a_time(monkeypatch):
+    monkeypatch.setattr(chapter_queue_worker.config, "OPENAI_MAX_CONCURRENCY", 48)
+    monkeypatch.setattr(chapter_queue_worker.config, "phase3_decision_workers", lambda: 16)
     worker = chapter_queue_worker.ChapterQueueWorker(SessionLocal)
     assert worker.admits("publish") is True
     worker._in_flight = {9: "publish"}
@@ -625,6 +632,7 @@ def test_the_worker_claims_runs_and_settles_a_row(session, monkeypatch):
     row = _row(session, chapter, job)
     session.add(models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
     ))
     session.commit()
 
@@ -665,7 +673,7 @@ def test_the_worker_claims_runs_and_settles_a_row(session, monkeypatch):
 
 
 def test_a_retryable_failure_goes_back_in_line_until_the_budget_is_spent(
-    session,
+    session, monkeypatch,
 ):
     _only_this_task(session)
     chapter = _chapter(session, code="10CBMA_T31")
@@ -673,6 +681,7 @@ def test_a_retryable_failure_goes_back_in_line_until_the_budget_is_spent(
     row = _row(session, chapter, job)
     session.add(models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
         max_attempts=2,
     ))
     session.commit()
@@ -685,7 +694,10 @@ def test_a_retryable_failure_goes_back_in_line_until_the_budget_is_spent(
     )
     import time as _time
 
+    clock = [datetime.utcnow()]
+    monkeypatch.setattr(chapter_queue, "_now", lambda: clock[0])
     for _ in range(3):
+        clock[0] += timedelta(seconds=10)
         worker._dispatch_once()
         for _ in range(200):
             if not worker._in_flight_ids():
@@ -712,6 +724,7 @@ def test_a_blocked_step_never_burns_another_attempt(session):
     row = _row(session, chapter, job)
     session.add(models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
         max_attempts=2,
     ))
     session.commit()
@@ -801,6 +814,7 @@ def test_a_queued_run_is_mirrored_like_every_other_run(session, monkeypatch):
     row = _row(session, chapter, job)
     session.add(models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
     ))
     session.commit()
 
@@ -833,6 +847,7 @@ def test_a_failed_run_is_mirrored_too(session, monkeypatch):
     row = _row(session, chapter, job)
     session.add(models.ChapterBatchTask(
         batch_row_id=row.id, kind="step01", state="queued", lanes=[],
+        cohort_id="test-batch",
         max_attempts=1,
     ))
     session.commit()

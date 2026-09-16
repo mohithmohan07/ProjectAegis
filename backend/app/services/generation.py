@@ -3009,8 +3009,8 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
     endpoint returns, so the SDK's own model validates it and every line
     below this point — usage recording, finish-reason handling, refusal
     handling, JSON parsing — stays exactly as it is for both paths. A body
-    the SDK cannot read is transport trouble, not a decision: the caller
-    falls back to the ordinary request.
+    the SDK cannot read is a transport failure. Batch-selected runs never
+    silently fall back to full-price synchronous requests.
     """
     from openai.types.chat import ChatCompletion
 
@@ -3023,37 +3023,47 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
 
 
 def batched_completion(body: Mapping[str, Any], *, provider: str, fresh: bool = False):
-    """Answer one request body from the cohort's wave, or return ``None``.
+    """Use the selected Batch transport without a full-price fallback.
 
-    ``None`` means "make the ordinary call you were going to make": this run
-    is not in a cohort, the route is not OpenAI, or the wave could not answer
-    in time. Every provider call in the app goes through this one door, so a
-    cohort is billed at the batch price for its WHOLE run — the source read
-    included — and a lone run is untouched.
-
-    A batched wait deliberately does not hold a synchronous provider slot:
-    the request is queued at the provider, and holding the gate would stall
-    the machine for the length of the wave.
+    Only an explicitly synchronous run returns None. A pending paid batch
+    suspends the worker at a durable boundary, outside semantic retry loops.
     """
-    broker = batch_broker.bound() if provider == "openai" else None
+    from . import run_control, model_routing_run, openai_usage
+
+    run_control.check()
+    broker = batch_broker.bound()
     if broker is None:
         return None
+    if provider != "openai":
+        raise batch_broker.BatchUnavailable(
+            "This recorded provider cannot use OpenAI Batch. Choose an "
+            "explicit synchronous run to continue its historical route."
+        )
     openai_usage.record_service_started()
     try:
-        response = _chat_completion_from_body(broker.call(body, fresh=fresh))
-    except batch_broker.BatchUnavailable as exc:
-        progress.log(
-            f"Batch wave unavailable ({exc}); making the ordinary request "
-            "for this one.",
-            level="info",
+        result = broker.call_result(
+            body, fresh=fresh, owner_job_id=model_routing_run.current_job_id(),
         )
-        return None
+        response = _chat_completion_from_body(result.body)
+    except batch_broker.BatchPending as exc:
+        openai_usage.record_batch_pending(
+            batch_id=exc.batch_id, request_sha256=exc.request_sha256,
+            wave_id=exc.wave_id,
+        )
+        raise run_control.RunDeferred(str(exc), reason="batch_wait", delay=30) from exc
     except BaseException as exc:
         openai_usage.record_attempt_outcome("provider_error", error=exc)
         raise
     finally:
         openai_usage.record_service_ended()
-    openai_usage.record_batched_attempt()
+    openai_usage.record_batched_attempt(
+        reused=(result.reused or (
+            result.owner_job_id is not None
+            and model_routing_run.current_job_id() is not None
+            and result.owner_job_id != model_routing_run.current_job_id()
+        )), batch_id=result.batch_id,
+        request_sha256=result.request_sha256, receipt_id=result.receipt_id,
+    )
     return response
 
 
@@ -3316,6 +3326,10 @@ def _openai_json(
                     response_schema.validate_response(response)
                 openai_usage.record_attempt_outcome("success")
                 return response
+            except batch_broker.BatchUnavailable:
+                # A provider-rejected batch is a transport failure, not bad
+                # author JSON and not permission to purchase an identical retry.
+                raise
             except OpenAIQueueTimeoutError as exc:
                 openai_usage.record_attempt_outcome("queue_timeout", error=exc)
                 raise
@@ -4647,6 +4661,11 @@ def _figure_hub_note(figure: dict) -> str:
         note = f"Figure — {caption.rstrip(' .:-')}"
         alt = caption
     else:
+        from . import generation_quality_policy as _quality_policy
+        if figure.get("caption_policy") == _quality_policy.V5:
+            # A v5 Place decision must author a public caption. Refuse a
+            # broken recorded decision rather than minting an internal ID.
+            raise ValueError("placed figure is missing its model-authored public caption")
         marker = block_id or "source figure"
         note = f"Figure — {marker}"
         alt = f"Figure {block_id}".strip() if block_id else "Figure"
@@ -4660,6 +4679,34 @@ def _figure_hub_note(figure: dict) -> str:
             # caption note still records the placement.
             pass
     return kr.canonicalize_rich_text(note)
+
+
+def _deduplicate_shared_hub_images(details: str) -> str:
+    """Remove repeated Hub assets by exact URL, retaining every question embed.
+
+    The same source image may legitimately support separate questions. Those
+    copies remain with each complete question; only redundant support copies
+    of the identical asset URL are projected away. Caption text remains.
+    """
+    sections = cr.split_sections(details)
+    seen = {
+        match.group("src")
+        for label, content in sections if not cr.is_activity_hub_label(label)
+        for match in kr._CANONICAL_IMAGE_TAG_RE.finditer(content)
+    }
+    output = []
+    for label, content in sections:
+        if cr.is_activity_hub_label(label):
+            def keep_first(match):
+                url = match.group("src")
+                if url in seen:
+                    return ""
+                seen.add(url)
+                return match.group(0)
+            content = kr._CANONICAL_IMAGE_TAG_RE.sub(keep_first, content)
+            content = re.sub(r"[ \t]+(?=\n|$)", "", content)
+        output.append((label, content))
+    return cr.join_sections(output)
 
 
 def _figure_placement_markers(record: dict) -> list[dict]:
@@ -4729,8 +4776,13 @@ def _normalize_activity_hubs_from_inventory(
 
     target_by_qid: dict[str, int] = {}
     q14_hub_overrides: dict[str, tuple[int, int]] = {}
+    from . import generation_quality_policy as _quality_policy
+    semantic_placement = any(_quality_policy.semantic_case_ownership(row) for row in records)
     for item in items:
         qid = str(item.get("qid") or "").strip()
+        if semantic_placement and qid in placed_by_qid:
+            target_by_qid[qid] = placed_by_qid[qid]
+            continue
         # Q14 is the explicit precedence rule: a reusable Type's final QID
         # owner outranks per-question routing.  After Phase 3 Host projects
         # that owner into ``_aegis_release_qids``, a later Hub normalization
@@ -4812,7 +4864,13 @@ def _normalize_activity_hubs_from_inventory(
                 _figure_hub_note(figure),
             )
 
-    out = _align_activity_examples_with_hubs(out, inventory)
+    if not semantic_placement:
+        out = _align_activity_examples_with_hubs(out, inventory)
+    else:
+        for record in out:
+            record["concept_details"] = _deduplicate_shared_hub_images(
+                record.get("concept_details") or ""
+            )
     if out != records:
         if items:
             progress.log(
@@ -4879,6 +4937,16 @@ def _hub_inventory_contract_violations(
             record.get("concept_details") or "")
         if expected_notes:
             expected_body = " ".join(expected_notes)
+            from . import generation_quality_policy as _quality_policy
+            if _quality_policy.source_output_corrections(record):
+                expected_details = cr.join_sections([
+                    (label, content)
+                    for label, content in cr.split_sections(record.get("concept_details") or "")
+                    if not cr.is_activity_hub_label(label)
+                ] + [("Activity/Info Hub", expected_body)])
+                expected_body = cr.activity_hub_body(
+                    _deduplicate_shared_hub_images(expected_details)
+                )
             if _inventory_comparison_text(
                 actual_body
             ).strip() != _inventory_comparison_text(
@@ -14253,7 +14321,10 @@ def _inventory_coverage_key(text: str) -> str:
     # exercises") because the validator rejects them. The authoritative
     # inventory prompt still carries the source pointer, so both sides of the
     # coverage comparison must see the same neutralized wording.
-    value = concept_cleanup.scrub_validator_artifacts(value)
+    from . import generation_quality_policy as _quality_policy
+    value = concept_cleanup.scrub_validator_artifacts(
+        value, keep_tables=_quality_policy.bound_source_output_corrections()
+    )
     return value.replace("…", "...")
 
 
@@ -14555,6 +14626,11 @@ def _activity_example_hub_alignment_violations(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
     """Assessable Activity Examples and Hub copies must share one concept row."""
+    from . import generation_quality_policy as _quality_policy
+    if any(_quality_policy.semantic_case_ownership(row) for row in records):
+        # Source support and the question it contextualises have independent
+        # recorded semantic placements; formatting must not re-decide either.
+        return []
     violations: list[dict] = []
     for item in (inventory or {}).get("items") or []:
         if not item.get("_activity_origin"):
@@ -15409,7 +15485,7 @@ def _append_inventory_example_to_record(
 
 
 def _dedupe_rendered_inventory_examples(
-    records: list[dict], inventory: dict | None,
+    records: list[dict], inventory: dict | None, *, source_inventory: dict | None = None,
 ) -> tuple[list[dict], int]:
     """Keep the first Exact inventory Example; drop later duplicates."""
     expected_keys = {
@@ -15463,6 +15539,11 @@ def _dedupe_rendered_inventory_examples(
     for record in records:
         rec = dict(record)
         details = rec.get("concept_details") or ""
+        from . import rendered_source_spans
+        details, restore_source = rendered_source_spans.mask_examples(
+            details, _inventory_source_examples(source_inventory or inventory),
+            comparison_key=_inventory_coverage_key,
+        )
         sections = cr.split_sections(details)
         types_idx = next(
             (
@@ -15502,7 +15583,7 @@ def _dedupe_rendered_inventory_examples(
                 removed_carriers: list[str] = []
                 collapsed_note = ""
                 for example in examples:
-                    key = _inventory_coverage_key(example)
+                    key = _inventory_coverage_key(restore_source(example))
                     if key in expected_keys:
                         if key in seen:
                             removed += 1
@@ -15572,7 +15653,8 @@ def _dedupe_rendered_inventory_examples(
             else:
                 sections.pop(types_idx)
             rec["concept_details"] = cr.join_sections(sections)
-            cr.carry_type_origin_metadata(record, rec)
+            cr.carry_type_origin_metadata({**record, "concept_details": details}, rec)
+            rec["concept_details"] = restore_source(rec["concept_details"])
         out.append(rec)
     return out, removed
 
@@ -15633,6 +15715,7 @@ def _align_activity_examples_with_hubs(
         ordered, _removed = _dedupe_rendered_inventory_examples(
             [candidate[index] for index in order],
             {"items": [item]},
+            source_inventory=inventory,
         )
         rebuilt = [dict(record) for record in candidate]
         for position, index in enumerate(order):
@@ -15647,7 +15730,10 @@ def _align_activity_examples_with_hubs(
             "final Activity/Info Hub concept.",
             level="success",
         )
-    return cr.renumber_types_continuously(out)
+    return cr.renumber_types_continuously(
+        out, source_examples=_inventory_source_examples(inventory),
+        source_key=_inventory_coverage_key,
+    )
 
 
 def _repair_rendered_inventory_coverage(
@@ -15783,6 +15869,43 @@ def _repair_rendered_inventory_coverage(
     return out
 
 
+class RenderedInventoryCoverageError(RuntimeError):
+    """An exact coverage failure with durable source identity diagnostics."""
+
+    def __init__(self, message: str, diagnostics: dict):
+        self.coverage_diagnostics = diagnostics
+        missing = ", ".join(diagnostics["missing_qids"]) or "none"
+        duplicate = ", ".join(diagnostics["duplicate_qids"]) or "none"
+        super().__init__(f"{message}; missing QIDs: {missing}; duplicate QIDs: {duplicate}")
+
+
+def _rendered_inventory_coverage_error(message: str, *, stage: str, records: list[dict],
+                                     inventory: dict | None, defects: dict,
+                                     before: list[dict] | None = None) -> RenderedInventoryCoverageError:
+    affected = set(defects["missing"]) | set(defects["duplicate"])
+    identities = []
+    for item in (inventory or {}).get("items") or []:
+        qid = str(item.get("qid") or "").strip()
+        if qid not in affected:
+            continue
+        identities.append({
+            "qid": qid,
+            "source_kind": str(item.get("source_kind") or ""),
+            "source_label": str(item.get("source_label") or ""),
+            "expected_question_sha256": hashlib.sha256(_inventory_task_text(item).encode()).hexdigest(),
+            "recorded_owner_rows": [index for index, row in enumerate(records)
+                                    if qid in (row.get("_aegis_release_qids") or [])],
+            "rendered_rows": _rendered_inventory_example_locations(records, item),
+            "before_placement_rows": _rendered_inventory_example_locations(before, item) if before is not None else None,
+            "hub_rows": _activity_hub_locations(records, item) if item.get("_activity_origin") else [],
+        })
+    diagnostics = {"version": 1, "code": "rendered_inventory_coverage", "stage": stage,
+                   "missing_qids": list(defects["missing"]), "duplicate_qids": list(defects["duplicate"]),
+                   "source_identities": identities}
+    progress.log("Source inventory coverage diagnostics: " + json.dumps(diagnostics, sort_keys=True), level="error")
+    return RenderedInventoryCoverageError(message, diagnostics)
+
+
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
@@ -15817,11 +15940,12 @@ def _enforce_rendered_inventory_coverage(
     if defects["duplicate"]:
         out, defects = _via_fixer(out, defects)
     if defects["duplicate"]:
-        raise RuntimeError(
+        raise _rendered_inventory_coverage_error(
             "rendered Types failed exact inventory coverage: "
             f"{len(defects['missing'])} missing, "
             f"{len(defects['duplicate'])} duplicate "
-            "source question(s)"
+            "source question(s)", stage="coverage_repair", records=out,
+            inventory=inventory, defects=defects,
         )
     if defects["missing"]:
         # Last-chance force place before enforcing the exact-once contract.
@@ -15834,36 +15958,40 @@ def _enforce_rendered_inventory_coverage(
         if defects["duplicate"] or defects["missing"]:
             out, defects = _via_fixer(out, defects)
         if defects["duplicate"]:
-            raise RuntimeError(
+            raise _rendered_inventory_coverage_error(
                 "rendered Types failed exact inventory coverage: "
                 f"{len(defects['missing'])} missing, "
                 f"{len(defects['duplicate'])} duplicate "
-                "source question(s)"
+                "source question(s)", stage="coverage_repair", records=out,
+                inventory=inventory, defects=defects,
             )
         if defects["missing"]:
-            raise RuntimeError(
+            raise _rendered_inventory_coverage_error(
                 "rendered Types failed exact inventory coverage with "
                 f"{len(defects['missing'])} still-missing placeable "
                 f"source question(s): {', '.join(defects['missing'][:8])}"
                 + ("…" if len(defects["missing"]) > 8 else "")
-                + ".",
+                + ".", stage="coverage_repair", records=out,
+                inventory=inventory, defects=defects,
             )
     # Coverage may already be exact while later merge/refinement passes have
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
     # (Chapter-wide Examples stay wherever the Host pass routed them — a
     # Culmination row included; the legacy relocation pass is retired.)
+    before_placement = copy.deepcopy(out)
     out = _align_activity_examples_with_hubs(out, inventory)
     terminal_defects = _rendered_inventory_coverage_defects(out, inventory)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
         out, terminal_defects = _via_fixer(out, terminal_defects)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
-        raise RuntimeError(
+        raise _rendered_inventory_coverage_error(
             "rendered Types failed exact inventory coverage after final "
             "placement: "
             f"{len(terminal_defects['missing'])} missing, "
             f"{len(terminal_defects['duplicate'])} duplicate source "
-            "question(s)"
+            "question(s)", stage="final_placement", records=out,
+            inventory=inventory, defects=terminal_defects, before=before_placement,
         )
     return out
 
@@ -23182,7 +23310,9 @@ def concepts_from_mmd(
                     f"{len(coverage_before_resume_repair['duplicate'])} duplicate.",
                     level="success",
                 )
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 out = cv.ensure_valid_learner_analysis(out)
                 out = _canonicalize_concept_rich_text(out)
                 final_checkpoint_changed = True
@@ -23204,7 +23334,9 @@ def concepts_from_mmd(
             out = _enforce_rendered_inventory_coverage(
                 out, question_task_inventory, mined_types,
                 fixer=p3_fixer.default_provider())
-            out = cr.renumber_types_continuously(out)
+            out = cr.renumber_types_continuously(
+                out, source_examples=_inventory_source_examples(question_task_inventory),
+                source_key=_inventory_coverage_key)
             out = cv.ensure_valid_learner_analysis(out)
             out = _canonicalize_concept_rich_text(out)
             resumed_coverage_repaired = True
@@ -23238,7 +23370,9 @@ def concepts_from_mmd(
             out = _disambiguate_certified_split_type_cases(
                 out, question_task_inventory, mined_types)
             if out != before_type_heading_repair:
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 final_checkpoint_changed = True
 
             out, rich_text_repaired = _repair_final_rich_text_via_api(
@@ -23267,7 +23401,9 @@ def concepts_from_mmd(
             out = _disambiguate_certified_split_type_cases(
                 out, question_task_inventory, mined_types)
             if out != before_final_type_heading_repair:
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 final_checkpoint_changed = True
             before_final_reground = out
             out = _reground_drifted_final_source_claims(out)

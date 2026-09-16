@@ -1,4 +1,4 @@
-"""Versioned, envelope-frozen policy: a paired correction on every analysis item.
+"""Versioned, envelope-frozen paired corrections and concept coverage.
 
 Under this policy every Misconception/Error Analysis inventory item (Post
 ``analyse`` and Pre ``preanalyse``) carries ``correction`` — what is
@@ -9,13 +9,19 @@ composer numbers declared fields. Frozen on NEW envelopes by
 ``concept_topology_contract`` exactly like ``prelearning_foundation_policy``;
 a sealed envelope without ``KEY`` keeps byte-identical payloads, decision
 keys, checker and render (register Q68).
+
+V2 additionally authors source-grounded pairs for ordinary concepts the
+chapter inventory did not cover. V1 retains its original sparse inventory,
+payloads, decision keys and author/critic instructions.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 KEY = "_analysis_correction_policy"
-VERSION = "analysis-correction-2026-09-13"
+VERSION_V1 = "analysis-correction-2026-09-13"
+VERSION = "analysis-correction-2026-09-16-v2"
+SUPPORTED_VERSIONS = frozenset({VERSION_V1, VERSION})
 
 AUTHOR_INSTRUCTION = (
     "CORRECTION POLICY (named in this request): every item also carries "
@@ -41,19 +47,74 @@ CRITIC_INSTRUCTION = (
 )
 
 
-def active(value: Mapping[str, Any] | None) -> bool:
-    """True when a payload, or an envelope's metadata, names the policy."""
+COVERAGE_AUTHOR_INSTRUCTION = (
+    "Complete the named concept's misconception coverage using the full "
+    "evidence and settled teaching supplied. This policy requires a meaningful "
+    "misconception with a paired correction for every ordinary concept; "
+    "culmination rows are not targets. The earlier chapter inventory is kept, "
+    "and this request addresses a concept it did not cover. Author the "
+    "incorrect belief a learner could plausibly hold about THIS concept and "
+    "the accurate explanation that resolves it. Judge plausibility, grounding, "
+    "distinctness and the useful amount of content from the source, never "
+    "generic filler, a canned misconception or a false claim about what the "
+    "textbook says. A misconception need not be printed explicitly in the "
+    "source: its correction must follow from the supplied teaching. Preserve "
+    "the concept's grade and learning scope; a simple concept needs a simple, "
+    "specific pair, not advanced terminology or extra teaching. In Pre, use "
+    "only the captured prerequisite and Pre teaching, never introduce the "
+    "current chapter's new teaching. Read the existing analysis to avoid "
+    "repeating its pairs. Return JSON {\"items\": [{\"kind\": "
+    "\"misconception|error_analysis\", \"text\": \"incorrect belief or step\", "
+    "\"correction\": \"what is true and why\", \"evidence\": "
+    "\"specific supplied evidence references\", \"rationale\": "
+    "\"why this pair is plausible and belongs to this concept\"}]}. "
+    "Include a misconception; additional distinct items are your judgment. "
+    "Do not supply item IDs, numbering or section labels: these are composed "
+    "after this recorded decision. Every field is required and non-empty."
+)
+COVERAGE_CRITIC_INSTRUCTION = (
+    "Independently review the proposed misconception coverage for the named "
+    "concept against ALL the supplied evidence and existing analysis. Flag "
+    "an implausible misconception, generic or copied filler, a correction "
+    "that merely negates/restates its belief, unsupported or inaccurate "
+    "teaching, an item belonging to another concept, or complexity outside "
+    "the supplied grade and Pre/Post scope. The requirement is a meaningful "
+    "misconception with a paired correction on each ordinary concept. "
+    "Preserve the author's judgment in the response and report disagreement "
+    "as advisory issues, never silently rewrite an item. Return JSON with "
+    "verdict (verified|revise), confidence, and issues (an array of strings)."
+)
+
+
+def version(value: Mapping[str, Any] | None) -> str:
+    """Read the recorded stamp; never upgrade a sealed v1 envelope."""
     if not isinstance(value, Mapping):
-        return False
-    if value.get(KEY) == VERSION:
-        return True
+        return ""
+    stamp = value.get(KEY)
+    if isinstance(stamp, str) and stamp in SUPPORTED_VERSIONS:
+        return stamp
     metadata = value.get("metadata")
-    return isinstance(metadata, Mapping) and metadata.get(KEY) == VERSION
+    if isinstance(metadata, Mapping):
+        stamp = metadata.get(KEY)
+        if isinstance(stamp, str) and stamp in SUPPORTED_VERSIONS:
+            return stamp
+    return ""
+
+
+def active(value: Mapping[str, Any] | None) -> bool:
+    """Both policy versions require paired corrections."""
+    return bool(version(value))
+
+
+def covers_every_concept(value: Mapping[str, Any] | None) -> bool:
+    """Only newly frozen v2 envelopes require complete concept coverage."""
+    return version(value) == VERSION
 
 
 def fields(value: Mapping[str, Any] | None) -> dict[str, str]:
     """Carry the stamp onto a payload without minting it on historical ones."""
-    return {KEY: VERSION} if active(value) else {}
+    recorded = version(value)
+    return {KEY: recorded} if recorded else {}
 
 
 def rules_sentence(value: Mapping[str, Any] | None) -> str:
@@ -71,4 +132,5 @@ def critic_instruction(payload: Mapping[str, Any] | None) -> str:
 
 def suffix(payload: Mapping[str, Any] | None) -> str:
     """Readable policy marker for the recorded decision's policy_version."""
-    return ";" + VERSION if active(payload) else ""
+    recorded = version(payload)
+    return ";" + recorded if recorded else ""

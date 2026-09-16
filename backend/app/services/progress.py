@@ -474,7 +474,7 @@ def stream(
         floor_token = _progress_floor.set(
             max(0.0, min(1.0, float(initial_progress or 0.0)))
         )
-        from . import openai_usage
+        from . import openai_usage, run_control
 
         usage_token = openai_usage.start_tracking()
         try:
@@ -493,7 +493,16 @@ def stream(
             ):
                 result = {**result, "openai_usage": summary}
             publish({"type": "result", "data": result, "ts": time.time()})
+        except run_control.RunDeferred as exc:
+            publish({
+                "type": "result", "data": {"waiting": True,
+                "resume_automatic": True, "reason": exc.reason,
+                "message": str(exc)}, "ts": time.time(),
+            })
         except Exception as exc:  # noqa: BLE001 — surface to the client stream
+            if journal_job_id and not getattr(exc, "_aegis_failure_report_id", None):
+                from . import failure_reports
+                failure_reports.record_failure_for_job(journal_job_id, exc, origin="stream")
             publish({
                 "type": "error",
                 "message": str(exc) or exc.__class__.__name__,

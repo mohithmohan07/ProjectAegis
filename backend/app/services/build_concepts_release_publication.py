@@ -441,7 +441,8 @@ def upload_release_to_database(
                 # The receipt compares against the normalization THIS
                 # release was staged under (Q68); a v2 row that keeps
                 # "Fig. 7.7" is not a reviewer edit.
-                keep_figures=generation_quality_policy.figure_references_kept(payload))
+                keep_figures=generation_quality_policy.figure_references_kept(payload),
+                keep_tables=generation_quality_policy.table_references_kept(payload))
             diverged = [
                 field
                 for field in (

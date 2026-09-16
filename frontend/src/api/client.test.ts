@@ -284,7 +284,7 @@ test("a push sends one request naming the step and every row", async () => {
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,
-    json: async () => ({ step: "step01", push_group_id: "g", results: [] }),
+    json: async () => ({ step: "step01", cohort: true, push_group_id: "g", results: [] }),
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -294,7 +294,7 @@ test("a push sends one request naming the step and every row", async () => {
   const [url, init] = fetchMock.mock.calls[0];
   expect(String(url)).toContain("/chapter-batches/push");
   expect(JSON.parse((init as { body: string }).body)).toEqual({
-    step: "step01",
+    step: "step01", cohort: true,
     rows: [{ chapter_id: 1 }, { chapter_id: 2 }],
   });
 });

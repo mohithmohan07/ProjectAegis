@@ -1898,3 +1898,23 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   .chapter-actionbar { gap: 8px; }
   .chapter-actionbar button { flex: 1 1 auto; }
 }
+
+/* Chapter operations: compact, responsive and shared with the established theme. */
+.chapter-workflow-guide { gap: 20px; margin-top: 16px; flex-wrap: wrap; }
+.chapter-workflow-guide strong { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 6px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-fg); }
+.chapter-cohort { display: flex; align-items: center; gap: 8px; }
+.chapter-cohort select { min-width: 90px; }
+.dashboard-toolbar { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; }
+.dashboard-toolbar .field:first-child { flex: 1 1 240px; }
+.dashboard-toolbar .field { margin-bottom: 0; }
+.dashboard-stat .value { font-size: clamp(24px, 2.4vw, 34px); margin: 8px 0; overflow-wrap: anywhere; }
+.dashboard-accent { border-color: var(--accent-ring); background: var(--accent-tint); }
+.dashboard-cost-strip { display: flex; gap: 24px; flex-wrap: wrap; }
+.dashboard-cost-strip > div { flex: 1 1 140px; }
+.dashboard-cost-strip strong { display: block; font-size: 21px; margin: 5px 0; }
+.dashboard-state-list { display: grid; gap: 6px; }
+.dashboard-state { display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%; padding: 9px 0; text-align: left; }
+button.dashboard-state { padding: 9px 12px; }
+.dashboard-money { white-space: nowrap; }
+.dashboard-money .badge { margin-left: 5px; }
+@media (max-width: 760px) { .dashboard-toolbar > .field { width: 100%; } .dashboard-cost-strip { gap: 16px; } }

@@ -3692,6 +3692,26 @@ def _refresh_task_figure_issues(
     report["issues"] = kept
 
 
+class CanonicalSourceGateError(ValueError):
+    """Complete source-gate evidence for the private durable failure report."""
+
+    failure_code = "source_canonical_gate"
+    resume_allowed = True
+    automatic_retry_allowed = False
+    recovery_action = "repair_source_markup"
+    recovery_message = (
+        "Diagnose and repair the reported canonical-source markup before retrying "
+        "this same run. The verified PDF pages and paid decisions are retained; "
+        "automatic retries and silent reconversion are paused."
+    )
+
+    def __init__(self, message: str, issues: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.validation_diagnostics = {
+            "code": "source_canonical_gate", "issues": copy.deepcopy(issues),
+        }
+
+
 def _accept_gate_issues_with_flags(
     canonical: dict[str, Any],
     report: dict[str, Any],
@@ -3716,11 +3736,16 @@ def _accept_gate_issues_with_flags(
         }]
     if fatal:
         codes = ", ".join(
-            str(issue.get("code") or "unknown") for issue in fatal[:8]
+            str(issue.get("code") or "unknown")
+            + (f" ({issue['qid']})" if issue.get("qid") else "")
+            + (": " + "/".join(str(code) for code in issue["rich_text_issues"])
+               if issue.get("rich_text_issues") else "")
+            for issue in fatal[:8]
         )
-        raise ValueError(
+        raise CanonicalSourceGateError(
             "verified GPT page extraction did not pass the deterministic "
-            "canonical-source gate" + (f": {codes}" if codes else "")
+            "canonical-source gate" + (f": {codes}" if codes else ""),
+            fatal,
         )
 
     if advisory:
@@ -4385,7 +4410,14 @@ def _compose_task_display_prompt(
             tags.append(kr.image(url, display_captions[url]))
         except ValueError:
             continue
-    return kr.canonicalize_rich_text(" ".join([body, *tags]).strip()).strip()
+    # The verified wording remains source authority, but restoring it must not
+    # undo the core compiler's lossless task-display normalization. In
+    # particular, canonicalize_rich_text alone leaves bare source equations
+    # and formulae outside wrappers, causing a sealed paid page bundle to fail
+    # the same Phase 2 gate on every reconstruction attempt. The shared task
+    # serializer wraps only unambiguous math with unchanged unwrapped bytes;
+    # malformed/ambiguous content remains visible to the existing strict gate.
+    return structure.canonical_task_display(" ".join([body, *tags]).strip())
 
 
 def apply_page_acsd_relationships(

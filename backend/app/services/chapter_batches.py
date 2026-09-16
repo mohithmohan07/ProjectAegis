@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -121,7 +121,11 @@ def _signal_columns() -> list[Any]:
         job.owner_sub,
         job.run_id,
         job.run_state,
+        job.started_by_email,
         job.created_at,
+        _extract(job.question_inventory, "$._aegis_run_recovery_request").label("recovery_request"),
+        _extract(job.generation_checkpoint, "$.stage").label("saved_checkpoint_stage"),
+        _extract(job.generation_checkpoint, "$.progress").label("saved_checkpoint_progress"),
         _extract(job.question_inventory, f"$.{_MARKER_KEY}").label("marker"),
         _extract(job.question_inventory, f"$.{_RECOVERY_KEY}").label("recovery"),
         _extract(
@@ -159,6 +163,10 @@ def job_signals(db: Session, job_ids: Sequence[int]) -> dict[int, dict[str, Any]
             "owner_sub": str(mapping["owner_sub"] or ""),
             "run_id": str(mapping["run_id"] or ""),
             "run_state": _as_mapping(mapping["run_state"]),
+            "started_by_email": str(mapping["started_by_email"] or ""),
+            "recovery_request": _as_mapping(mapping["recovery_request"]),
+            "saved_checkpoint_stage": str(mapping["saved_checkpoint_stage"] or ""),
+            "saved_checkpoint_progress": mapping["saved_checkpoint_progress"] or 0,
             "created_at": mapping["created_at"],
             "marker": _as_mapping(mapping["marker"]),
             "recovery": _as_mapping(mapping["recovery"]),
@@ -191,6 +199,10 @@ def signals_from_job(job: models.UploadJob) -> dict[str, Any]:
         "owner_sub": str(job.owner_sub or ""),
         "run_id": str(job.run_id or ""),
         "run_state": _as_mapping(job.run_state),
+        "started_by_email": str(job.started_by_email or ""),
+        "recovery_request": _as_mapping(inventory.get("_aegis_run_recovery_request")),
+        "saved_checkpoint_stage": str((job.generation_checkpoint or {}).get("stage") or ""),
+        "saved_checkpoint_progress": (job.generation_checkpoint or {}).get("progress") or 0,
         "created_at": job.created_at,
         "marker": _as_mapping(inventory.get(_MARKER_KEY)),
         "recovery": dict(job.generation_recovery or {}),
@@ -396,6 +408,12 @@ def derive_state(
         return {"state": _QUEUED_STATE.get(task.kind, "step01_queued"),
                 "blocked_kind": "", "blocked_reason": "", "error_message": ""}
 
+    recovery_request = signals.get("recovery_request") or {}
+    if recovery_request.get("status") == "blocked" and (signals.get("run_state") or {}).get("status") == "waiting":
+        return {"state": "blocked", "blocked_kind": "restart_recovery",
+                "blocked_reason": str(recovery_request.get("reason") or "Saved run needs recovery attention"),
+                "error_message": ""}
+
     pending = signals.get("pending_decision") or {}
     if pending:
         return {
@@ -577,6 +595,7 @@ def _queue_view(
 ) -> dict[str, Any]:
     if task is None:
         return {
+            "cohort_id": "", "start_after": None,
             "task_id": None, "kind": None, "state": None, "position": None,
             "attempt": 0, "max_attempts": 0, "blocked_kind": "",
             "failure_code": "", "last_error": "", "enqueued_by_email": "",
@@ -584,6 +603,8 @@ def _queue_view(
         }
     return {
         "task_id": int(task.id),
+        "cohort_id": str(task.cohort_id or ""),
+        "start_after": _iso(task.start_after),
         "kind": str(task.kind or ""),
         "state": str(task.state or ""),
         "position": position,
@@ -635,11 +656,19 @@ def project_row(
     run_state = (signals or {}).get("run_state") or {}
     state = verdict["state"]
     running = state in {"step01_running", "step02_running", "publish_running"}
+    saved = not running and bool(
+        state == "recovering" or
+        (task and task.state == "queued" and (task.started_at or task.failure_code)) or
+        ((signals or {}).get("recovery_request") or {}).get("status") == "queued"
+    )
     return {
         "chapter_id": int(chapter.id),
         "chapter_code": str(chapter.chapter_code or ""),
         "chapter_title": str(chapter.chapter_title or ""),
         "chapter_display_name": str(chapter.chapter_display_name or ""),
+        "catalogue_active": chapter.catalogue_active is not False,
+        "catalogue_revision": str(chapter.catalogue_revision or ""),
+        "catalogue_order": int(chapter.catalogue_order or 0),
         "board": str(chapter.board or ""),
         "grade": str(chapter.grade or ""),
         # The subject the DIRECTORY shows, so this table and the Build
@@ -657,6 +686,7 @@ def project_row(
         ),
         "source_book": str(batch_row.source_book if batch_row else ""),
         "staged_by_email": str(batch_row.created_by_email if batch_row else ""),
+        "started_by_email": str((signals or {}).get("started_by_email") or ""),
         "source_staged_at": _iso(batch_row.source_staged_at if batch_row else None),
         "state": state,
         "state_label": _STATE_LABELS.get(state, state),
@@ -664,6 +694,8 @@ def project_row(
         # queued row borrowing the last run's stage would read as progress.
         "stage": str(run_state.get("stage") or "") if running else "",
         "progress": float(run_state.get("progress") or 0.0) if running else 0.0,
+        "saved_stage": str(run_state.get("stage") or (signals or {}).get("saved_checkpoint_stage") or "") if saved else "",
+        "saved_progress": max(0.0, min(1.0, float(run_state.get("progress") or (signals or {}).get("saved_checkpoint_progress") or 0))) if saved else None,
         "workflow_status": str((signals or {}).get("marker", {}).get("status") or ""),
         "lanes": lanes,
         "blocked_kind": verdict["blocked_kind"],
@@ -760,7 +792,15 @@ def queue_positions(db: Session) -> dict[int, int]:
     return {int(row[0]): index for index, row in enumerate(rows, start=1)}
 
 
-def facets(db: Session) -> dict[str, Any]:
+def _catalogue_clause(catalogue: str):
+    if catalogue == "history":
+        return models.Chapter.catalogue_active.is_(False)
+    if catalogue == "all":
+        return True
+    return models.Chapter.catalogue_active.is_not(False)
+
+
+def facets(db: Session, *, catalogue: str = "active") -> dict[str, Any]:
     """Filter values from the catalogue itself.
 
     Not from ``bulk_import.GRADES``, which lists 01,02,03,06,07,08,09,10 and
@@ -769,7 +809,7 @@ def facets(db: Session) -> dict[str, Any]:
     rows = db.execute(
         select(
             models.Chapter.board, models.Chapter.grade, models.Chapter.subject,
-        ).group_by(
+        ).where(_catalogue_clause(catalogue)).group_by(
             models.Chapter.board, models.Chapter.grade, models.Chapter.subject,
         )
     ).all()
@@ -798,6 +838,8 @@ def facets(db: Session) -> dict[str, Any]:
 
 
 def queue_summary(db: Session, *, capacity: int, worker_alive: bool) -> dict[str, Any]:
+    from . import chapter_queue_worker, run_control
+
     counts = dict(
         db.execute(
             select(
@@ -807,11 +849,13 @@ def queue_summary(db: Session, *, capacity: int, worker_alive: bool) -> dict[str
         ).all()
     )
     return {
+        **chapter_queue_worker.capacity_details(),
         "running": int(counts.get("leased") or 0),
         "queued": int(counts.get("queued") or 0),
         "blocked": int(counts.get("blocked") or 0),
         "capacity": int(capacity),
         "worker_alive": bool(worker_alive),
+        "draining": run_control.pausing(),
     }
 
 
@@ -823,6 +867,7 @@ def list_page(
     subject: str = "",
     q: str = "",
     state: str = "",
+    catalogue: str = "active",
     page: int = 1,
     page_size: int = 25,
     capacity: int = 0,
@@ -840,7 +885,8 @@ def list_page(
     page = max(1, int(page or 1))
     page_size = max(1, min(200, int(page_size or 25)))
 
-    query = db.query(models.Chapter)
+    catalogue = catalogue if catalogue in {"active", "history", "all"} else "active"
+    query = db.query(models.Chapter).filter(_catalogue_clause(catalogue))
     if board:
         query = query.filter(models.Chapter.board == board)
     if grade:
@@ -883,7 +929,9 @@ def list_page(
         )
     query = query.order_by(
         models.Chapter.board.asc(), models.Chapter.grade.asc(),
-        models.Chapter.subject.asc(), models.Chapter.unit.asc(),
+        models.Chapter.subject.asc(),
+        case((models.Chapter.catalogue_order > 0, 0), else_=1).asc(),
+        models.Chapter.catalogue_order.asc(), models.Chapter.unit.asc(),
         models.Chapter.chapter_code.asc(), models.Chapter.id.asc(),
     )
 
@@ -921,7 +969,8 @@ def list_page(
         "page_size": page_size,
         "total": int(total),
         "total_pages": int(total_pages),
-        "facets": facets(db),
+        "catalogue": catalogue,
+        "facets": facets(db, catalogue=catalogue),
         "states": [
             {"value": value, "label": label, "tone": tone}
             for value, label, tone in STATES

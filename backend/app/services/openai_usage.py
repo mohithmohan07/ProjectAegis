@@ -211,6 +211,7 @@ class UsageAccumulator:
     stages: dict[tuple[str, str], StageUsage] = field(default_factory=dict)
     stage_models: dict[tuple[str, str, str], ModelUsage] = field(default_factory=dict)
     attempts: list[dict[str, Any]] = field(default_factory=list)
+    billed_receipt_ids: set[str] = field(default_factory=set, repr=False)
     mechanical_spans: list[dict[str, Any]] = field(default_factory=list)
     missing_usage_responses: int = 0
     untracked_response_count: int = 0
@@ -465,14 +466,18 @@ class UsageAccumulator:
             "usage_complete": usage_complete,
             "known_usage_estimated_cost_usd": known_cost,
             "attempt_count": len(attempt_rows),
-            "provider_request_count": sum(bool(row.get("service_started_at")) for row in attempt_rows),
+            "provider_request_count": sum(bool(row.get("service_started_at")) and not row.get("reused") for row in attempt_rows),
             "pending_request_count": pending_count,
             "unresolved_usage_request_count": unresolved_count,
             "missing_usage_response_count": self.missing_usage_responses,
             "untracked_response_count": self.untracked_response_count,
-            "attempt_coverage_complete": self.untracked_response_count == 0 and sum(bool(row.get("usage_reported")) for row in attempt_rows) == request_count,
+            "attempt_coverage_complete": self.untracked_response_count == 0 and sum(bool(row.get("usage_reported")) and not row.get("reused") for row in attempt_rows) == request_count,
             "cost_matrix_complete": usage_complete,
             "request_attempts": copy.deepcopy(attempt_rows) if include_attempts else [],
+            "billed_receipt_ids": sorted(self.billed_receipt_ids),
+            "completed_batch_receipt_ids": sorted({str(row["receipt_id"]) for row in attempt_rows
+                                                   if row.get("receipt_id") and row.get("usage_reported")}),
+            "pending_batch_attempts": _pending_batch_attempts(attempt_rows),
             "latest_request": copy.deepcopy(self.latest_request),
             "attempt_details_included": include_attempts,
             "mechanical_spans": copy.deepcopy(spans) if include_attempts else [],
@@ -548,7 +553,7 @@ class UsageAccumulator:
             row.update({
                 "attempt_count": len(attempts),
                 "provider_request_count": sum(
-                    bool(attempt.get("service_started_at")) for attempt in attempts
+                    bool(attempt.get("service_started_at")) and not attempt.get("reused") for attempt in attempts
                 ),
                 "pending_request_count": pending,
                 "unresolved_usage_request_count": unresolved,
@@ -556,7 +561,7 @@ class UsageAccumulator:
                 "usage_complete": unresolved == 0,
                 "attempt_coverage_complete": (
                     self.provider_untracked_responses.get(provider, 0) == 0
-                    and sum(bool(attempt.get("usage_reported")) for attempt in attempts)
+                    and sum(bool(attempt.get("usage_reported")) and not attempt.get("reused") for attempt in attempts)
                     == item.request_count
                 ),
             })
@@ -658,7 +663,10 @@ def _request_usage_counts(
     for item in attempts:
         missing_response = item.get("usage_status") in {"missing", "incomplete"}
         tracked_missing_responses += bool(missing_response)
-        if item.get("usage_reported"):
+        if item.get("usage_reported") or item.get("resolved_receipt_id"):
+            continue
+        if item.get("outcome") == "batch_pending":
+            pending += 1
             continue
         if missing_response:
             unresolved += 1
@@ -723,13 +731,13 @@ def _stage_attempt_fields(row: StageUsage, attempts: list[dict[str, Any]]) -> di
     usage_complete = not unresolved_count
     return {
         "attempt_count": len(attempts),
-        "provider_request_count": sum(bool(item.get("service_started_at")) for item in attempts),
+        "provider_request_count": sum(bool(item.get("service_started_at")) and not item.get("reused") for item in attempts),
         "pending_request_count": pending_count,
         "unresolved_usage_request_count": unresolved_count,
         "missing_usage_response_count": row.missing_usage_responses,
         "known_usage_estimated_cost_usd": round(float(row.estimated_cost_usd), 12),
         "usage_complete": usage_complete,
-        "attempt_coverage_complete": sum(bool(item.get("usage_reported")) for item in attempts) >= row.request_count,
+        "attempt_coverage_complete": sum(bool(item.get("usage_reported")) and not item.get("reused") for item in attempts) >= row.request_count,
         "pricing_complete": row.pricing_complete,
         "estimated_cost_usd": round(float(row.estimated_cost_usd), 12) if row.pricing_complete and usage_complete else None,
     }
@@ -763,6 +771,7 @@ def request_attempt(*, requested_model: str, purpose: str = "", provider: str = 
         "queue_seconds": 0.0, "service_seconds": 0.0,
         "backoff_seconds": 0.0, "backoff_intervals": [],
         "outcome": "queued", "usage_reported": False,
+        "delivery_mode": "synchronous", "reused": False,
     }
     with _MUTATION_LOCK:
         accumulator.attempts.append(row)
@@ -787,17 +796,71 @@ def request_attempt(*, requested_model: str, purpose: str = "", provider: str = 
             _emit_usage_update()
 
 
-def record_batched_attempt() -> None:
+def record_batched_attempt(*, reused: bool = False, batch_id: str = "",
+                           request_sha256: str = "", receipt_id: str = "") -> None:
     """Mark the active attempt as answered by a batch wave (register Q73).
 
-    The provider prices a batched request at half the synchronous rate, so
-    the receipt has to say which lane answered it: a cohort run mixes
-    batched waves with synchronous fallbacks, and reporting both at the
-    same rate would overstate the bill of one and understate the other.
+    The receipt records the actual delivery mode and provider identity.
+    Reusing a saved answer retains its original receipt without buying or
+    pricing another provider response.
     """
     attempt = _active_attempt.get()
     if attempt is not None:
-        attempt["batched"] = True
+        with _MUTATION_LOCK:
+            attempt.update({
+                "batched": True, "delivery_mode": "batch", "reused": bool(reused),
+                "batch_id": str(batch_id), "request_sha256": str(request_sha256),
+                "receipt_id": str(receipt_id or (
+                    f"{batch_id}:{request_sha256}" if batch_id and request_sha256 else "")),
+            })
+
+
+def record_batch_pending(*, batch_id: str = "", request_sha256: str = "",
+                         wave_id: str = "") -> None:
+    """Preserve the provider request identity when its durable wave suspends."""
+    record_batched_attempt(batch_id=batch_id, request_sha256=request_sha256)
+    attempt = _active_attempt.get()
+    if attempt is not None:
+        with _MUTATION_LOCK:
+            attempt["wave_id"] = str(wave_id)
+            attempt["outcome"] = "batch_pending"
+        _emit_usage_update()
+
+
+def _pending_batch_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [{field: str(row.get(field) or "") for field in (
+        "attempt_id", "batch_id", "request_sha256", "wave_id", "stage", "lane", "provider",
+    )} for row in attempts if row.get("outcome") == "batch_pending"
+       and not row.get("usage_reported") and not row.get("resolved_receipt_id")]
+
+
+def settle_batch_pending(summary: dict[str, Any], receipt_ids: set[str]) -> dict[str, Any]:
+    """Close only deferred attempts whose exact paid provider line is known.
+
+    This changes pending counters, never the frozen monetary ledger. A request
+    hash without a batch id is insufficient: an earlier retry can share it.
+    """
+    pending = summary.get("pending_batch_attempts") or _pending_batch_attempts(summary.get("request_attempts") or [])
+    resolved = {item["attempt_id"]: item for item in pending
+                if item.get("batch_id") and item.get("request_sha256")
+                and f'{item["batch_id"]}:{item["request_sha256"]}' in receipt_ids}
+    if not resolved:
+        return summary
+    result = copy.deepcopy(summary)
+    result["pending_batch_attempts"] = [item for item in pending if item["attempt_id"] not in resolved]
+    for attempt in result.get("request_attempts") or []:
+        item = resolved.get(attempt.get("attempt_id"))
+        if item:
+            attempt["resolved_receipt_id"] = f'{item["batch_id"]}:{item["request_sha256"]}'
+    for row in [result, *(result.get("stages") or []), *(result.get("providers") or [])]:
+        count = sum(1 for item in resolved.values() if (
+            row is result or
+            ("stage" in row and item["stage"] == str(row.get("stage") or "") and item["lane"] == str(row.get("lane") or "")) or
+            ("provider" in row and _provider_key(item["provider"]) == row["provider"])
+        ))
+        if count:
+            row["pending_request_count"] = max(0, _int(row.get("pending_request_count")) - count)
+    return result
 
 
 def record_service_started() -> None:
@@ -899,11 +962,21 @@ def bind_persisted_summary(
     key = str(persistence_key)
     if key not in accumulator.persistence_baselines:
         accumulator.persistence_baselines[key] = _closed_baseline(persisted)
+        accumulator.billed_receipt_ids.update(_known_batch_receipt_ids(persisted))
     accumulator.visible_persistence_key = key
     return merge_summaries(
         accumulator.persistence_baselines[key],
         accumulator.summary(),
     )
+
+
+def _known_batch_receipt_ids(summary: dict[str, Any]) -> set[str]:
+    """Receipt identities survive compact snapshots without repricing them."""
+    ids = {str(value) for value in summary.get("billed_receipt_ids") or [] if value}
+    ids.update(str(attempt["receipt_id"]) for attempt in summary.get("request_attempts") or []
+               if isinstance(attempt, dict) and attempt.get("receipt_id")
+               and not attempt.get("reused") and attempt.get("usage_status") == "reported")
+    return ids
 
 
 def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
@@ -913,6 +986,8 @@ def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
     derived counters change: this accumulator cannot receive those responses.
     """
     baseline = copy.deepcopy(summary)
+    batch_pending = baseline.get("pending_batch_attempts") or _pending_batch_attempts(baseline.get("request_attempts") or [])
+    baseline["pending_batch_attempts"] = batch_pending
     # Resolve old explicit provider identities before compact streaming drops
     # the attempt ledger. Full and compact resumes must show the same split.
     sources = _provider_rows_from_summary(baseline)
@@ -922,10 +997,16 @@ def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
                               if source.get("provider") == row["provider"]], receipts=False)
     for row in [baseline, *(baseline.get("stages") or []), *(baseline.get("providers") or [])]:
         pending, unresolved = _summary_usage_counts(row)
-        if not pending:
+        durable_pending = len([item for item in batch_pending if (
+            row is baseline or
+            ("stage" in row and item["stage"] == str(row.get("stage") or "") and item["lane"] == str(row.get("lane") or "")) or
+            ("provider" in row and _provider_key(item["provider"]) == row["provider"])
+        )])
+        interrupted = max(0, pending - durable_pending)
+        if not interrupted:
             continue
-        row["pending_request_count"] = 0
-        row["unresolved_usage_request_count"] = unresolved + pending
+        row["pending_request_count"] = pending - interrupted
+        row["unresolved_usage_request_count"] = unresolved + interrupted
         row["usage_complete"] = False
         row["estimated_cost_usd"] = None
         if row is baseline:
@@ -1129,7 +1210,20 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         stage, lane = progress.current_stage(), progress.current_lane()
     except Exception:  # pragma: no cover - attribution must never break billing
         stage, lane = "", ""
+    receipt_id = str((attempt or {}).get("receipt_id") or "")
     with _MUTATION_LOCK:
+        reused = bool((attempt or {}).get("reused")) or bool(
+            receipt_id and receipt_id in accumulator.billed_receipt_ids)
+        if receipt_id and not reused and usage_status == "reported":
+            accumulator.billed_receipt_ids.add(receipt_id)
+        if reused:
+            # A persisted batch answer is evidence of an earlier provider
+            # request, not a newly billed completion. Keep the original
+            # reported token counts below and attribute zero NEW usage.
+            usage_status = "reused"
+            accounting_basis = "reused_batch_receipt"
+            if attempt is not None:
+                attempt["reused"] = True
         if attempt is None:
             accumulator.untracked_response_count += 1
             accumulator.provider_untracked_responses[provider_key] = (
@@ -1142,7 +1236,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "actual_service_tier": _get(response, "service_tier") or None,
                 "request_id": _get(response, "_request_id") or _get(response, "request_id") or None,
                 "response_id": _get(response, "id") or None,
-                "usage_reported": usage is not None,
+                "usage_reported": usage is not None or reused,
                 "usage_status": usage_status,
                 "outcome": "response_received",
                 "reported_input_tokens": reported_input,
@@ -1152,7 +1246,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "reported_total_tokens": reported_total,
                 "usage_accounting_basis": accounting_basis,
             })
-        if usage_status != "reported":
+        if usage_status not in {"reported", "reused"}:
             if attempt is not None:
                 attempt["usage_reported"] = False
             accumulator.missing_usage_responses += 1
@@ -1163,7 +1257,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 (stage, lane), StageUsage(stage=stage, lane=lane),
             )
             stage_row.missing_usage_responses += 1
-    if usage is None:
+    if usage is None and not reused:
         _emit_usage_update()
         _emit_charge_log(model=model, attempt=attempt, amount_inr=None, cumulative=console_summary())
         return accumulator.summary(include_attempts=False)
@@ -1178,7 +1272,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     )
     cached_tokens = min(input_tokens, cached_tokens)
     cache_write_tokens = min(max(input_tokens - cached_tokens, 0), cache_write_tokens)
-    response_cost = (
+    response_cost = Decimal("0") if reused else (
         _request_cost(
             model=model,
             input_tokens=input_tokens, cached_input_tokens=cached_tokens,
@@ -1187,9 +1281,12 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         )
         if usage_status == "reported" and priceable_tier else None
     )
+    if reused:
+        input_tokens = cached_tokens = cache_write_tokens = output_tokens = reasoning_tokens = total_tokens = 0
     accumulator.add(
         model=model,
         provider=provider_key,
+        request_count=0 if reused else 1,
         input_tokens=input_tokens,
         cached_input_tokens=cached_tokens,
         cache_write_tokens=cache_write_tokens,
@@ -1215,8 +1312,12 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         currency_receipt = {
             "stage": stage, "lane": lane, "model": model, "provider": provider_key,
             "estimated_cost_usd": float(response_cost) if response_cost is not None else None,
-            "estimated_cost_inr": usage_currency.to_inr(response_cost, quote or None),
+            "estimated_cost_inr": 0.0 if reused else usage_currency.to_inr(response_cost, quote or None),
             **_fx_fields(quote),
+            "delivery_mode": (attempt or {}).get("delivery_mode", "unknown"),
+            "reused": reused, "receipt_id": receipt_id,
+            "batch_id": (attempt or {}).get("batch_id", ""),
+            "request_sha256": (attempt or {}).get("request_sha256", ""),
         }
         accumulator.currency_receipts.append(currency_receipt)
     if attempt is not None:
@@ -1230,7 +1331,8 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "total_tokens": total_tokens,
                 "estimated_cost_usd": float(response_cost) if response_cost is not None else None,
                 "pricing_as_of": PRICING_AS_OF,
-                "pricing_basis": ("incomplete_usage_receipt" if usage_status != "reported" else
+                "pricing_basis": ("reused_batch_receipt" if reused else
+                                  "incomplete_usage_receipt" if usage_status != "reported" else
                                   "standard_text_token_rates" if response_cost is not None else
                                   "unpriced_model_or_service_tier"),
                 "pricing_effective_date": _pricing_date(priced_at).isoformat(),
@@ -1594,6 +1696,16 @@ def _merge_provider_rows(
 
 def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     """Merge persisted/run summaries without repricing historical usage."""
+    resolved_receipts: set[str] = set()
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        resolved_receipts.update(_known_batch_receipt_ids(summary))
+        resolved_receipts.update(str(value) for value in summary.get("completed_batch_receipt_ids") or [] if value)
+        resolved_receipts.update(str(row["receipt_id"]) for row in summary.get("request_attempts") or []
+                                 if isinstance(row, dict) and row.get("receipt_id") and row.get("usage_reported"))
+    summaries = tuple(settle_batch_pending(summary, resolved_receipts) if isinstance(summary, dict) else summary
+                      for summary in summaries)
     accumulator = UsageAccumulator()
     saved_cost = Decimal("0")
     pricing_complete = True
@@ -1702,6 +1814,12 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
             stage = str(row.get("stage") or "")
             timings[stage] = timings.get(stage, 0.0) + max(0.0, _float(row.get("elapsed_seconds")))
     merged["request_attempts"] = list(attempts.values())
+    merged["billed_receipt_ids"] = sorted(set().union(*(
+        _known_batch_receipt_ids(summary) for summary in valid_summaries)))
+    merged["completed_batch_receipt_ids"] = sorted(resolved_receipts)
+    pending_batch_attempts = {row["attempt_id"]: copy.deepcopy(row) for summary in valid_summaries
+                             for row in summary.get("pending_batch_attempts") or []}
+    merged["pending_batch_attempts"] = list(pending_batch_attempts.values())
     merged["mechanical_spans"] = list(mechanical_spans.values())
     merged["mechanical_span_count"] = sum(_int(row.get("mechanical_span_count")) for row in valid_summaries)
     merged["mechanical_wall_seconds"] = round(sum(_float(row.get("mechanical_wall_seconds")) for row in valid_summaries), 6)
@@ -1714,7 +1832,7 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         else sum(_int(row.get("attempt_count")) for row in valid_summaries)
     )
     merged["provider_request_count"] = (
-        sum(bool(row.get("service_started_at")) for row in attempts.values()) if details_included
+        sum(bool(row.get("service_started_at")) and not row.get("reused") for row in attempts.values()) if details_included
         else sum(_int(row.get("provider_request_count")) for row in valid_summaries)
     )
     merged["missing_usage_response_count"] = sum(_int(row.get("missing_usage_response_count")) for row in valid_summaries)
@@ -1761,6 +1879,72 @@ def _pricing_for(model: str, *, priced_at: float | None = None) -> Pricing | Non
         if lowered.startswith(prefix):
             return pricing
     return None
+
+
+def estimate_batch_receipt(receipt: dict[str, Any], *, for_storage: bool = False) -> dict[str, Any]:
+    """Project one durable broker receipt without recording another charge.
+
+    This is for reconciling paid responses whose original job usage journal
+    never reached a checkpoint. Callers deduplicate by receipt_id and preserve
+    unknown historical overlaps. Rates use the receipt timestamp; INR is an
+    explicitly dated display conversion, not a reconstructed invoice amount.
+    The broker freezes this once with for_storage=True at harvest. Reads
+    preserve that snapshot; an older unpriced receipt remains unresolved.
+    """
+    from . import usage_currency
+
+    frozen = receipt.get("cost_estimate")
+    if isinstance(frozen, dict):
+        return copy.deepcopy(frozen)
+    usage = receipt.get("usage")
+    model = str(receipt.get("model") or "unknown")
+    priced_at = _float(receipt.get("recorded_at")) or None
+    details = _get(usage, "prompt_tokens_details") or _get(usage, "input_tokens_details")
+    input_tokens = _reported_count(_first_present(usage, "prompt_tokens", "input_tokens"))
+    output_tokens = _reported_count(_first_present(usage, "completion_tokens", "output_tokens"))
+    cached = _reported_count(_get(details, "cached_tokens")) or 0
+    cache_write = _reported_count(_get(details, "cache_write_tokens")) or 0
+    total = _reported_count(_get(usage, "total_tokens"))
+    complete = input_tokens is not None and output_tokens is not None
+    if complete and (cached > input_tokens or cache_write > input_tokens - cached
+                     or (total is not None and total != input_tokens + output_tokens)):
+        complete = False
+    tier = str(receipt.get("service_tier") or "").lower()
+    priceable_tier = tier in {"", "default", "standard", "auto", "batch", "flex"}
+    try:
+        priced_date = _pricing_date(priced_at) if priced_at is not None else None
+    except (ValueError, OverflowError, OSError):
+        priced_date = None
+    historical_rate_available = priced_date is not None and priced_date >= date.fromisoformat(PRICING_AS_OF)
+    cost = _request_cost(model=model, input_tokens=input_tokens or 0,
+                         cached_input_tokens=cached, cache_write_tokens=cache_write,
+                         output_tokens=output_tokens or 0, priced_at=priced_at, batched=True
+                         ) if for_storage and historical_rate_available and complete and priceable_tier else None
+    pricing = _pricing_for(model, priced_at=priced_at) if for_storage and historical_rate_available else None
+    fx = {}
+    if for_storage:
+        try:
+            fx = usage_currency.snapshot()
+        except (ValueError, TypeError, KeyError, OSError):
+            pass
+    return {
+        "receipt_id": str(receipt.get("receipt_id") or ""),
+        "owner_job_id": receipt.get("owner_job_id"),
+        "delivery_mode": "batch", "provider": "openai", "model": model,
+        "request_count": 1, "input_tokens": input_tokens, "output_tokens": output_tokens,
+        "cached_input_tokens": cached, "cache_write_tokens": cache_write,
+        "total_tokens": total if total is not None else (
+            input_tokens + output_tokens if complete else None),
+        "estimated_cost_usd": float(cost) if cost is not None else None,
+        "known_usage_estimated_cost_usd": float(cost) if cost is not None else 0.0,
+        "estimated_cost_inr": usage_currency.to_inr(cost, fx or None),
+        "usage_complete": complete, "pricing_complete": cost is not None,
+        "pricing_as_of": PRICING_AS_OF,
+        "pricing_effective_date": priced_date.isoformat() if priced_date is not None else None,
+        "pricing_source": pricing.source if pricing else None,
+        "accounting_basis": "durable_provider_batch_receipt" if for_storage else "missing_frozen_batch_price",
+        **_fx_fields(fx),
+    }
 
 
 BATCH_RATE_MULTIPLIER = Decimal("0.5")

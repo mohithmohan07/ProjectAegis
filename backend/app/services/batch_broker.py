@@ -29,11 +29,10 @@ Three properties matter more than the discount:
   exists, and every returned line is stored content-addressed by its
   request hash. A process that dies mid-wave re-attaches on the next boot
   and harvests what was already bought.
-* **A slow wave never strands a run.** Every waiter carries a deadline. On
-  expiry the broker answers ``BatchUnavailable`` and the caller makes the
-  ordinary synchronous call it would have made anyway. The batch is
-  cancelled; anything it had already produced still lands in the store and
-  is served free to whoever asks for it next.
+* **Waiting never changes the selected price.** A caller deadline produces
+  ``BatchPending``; the submitted wave stays open and continues to be polled.
+  A resumed caller attaches to that wave. Neither a timeout nor shutdown
+  cancels purchased work or authorizes a synchronous request.
 * **The cache is the crash plan, not an optimisation.** Responses are keyed
   by the sha256 of the canonical request body, so replay is exact: the same
   body gets the same answer without a second charge, across processes and
@@ -54,6 +53,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .. import config
+from . import run_control
 
 log = logging.getLogger(__name__)
 
@@ -64,8 +64,8 @@ QUIET_SECONDS = "AEGIS_BATCH_QUIET_SECONDS"
 # ...unless it has been open this long already. A cohort whose chapters are
 # genuinely out of step must still make progress.
 MAX_WAIT_SECONDS = "AEGIS_BATCH_MAX_WAIT_SECONDS"
-# The provider guarantees only "within 24 hours". A run that waits that long
-# is not a run, so a waiter gives up here and pays the synchronous price.
+# A caller can yield back to the durable queue while provider work continues.
+# This deadline never cancels the batch or authorizes a synchronous charge.
 DEADLINE_SECONDS = "AEGIS_BATCH_DEADLINE_SECONDS"
 POLL_SECONDS = "AEGIS_BATCH_POLL_SECONDS"
 MAX_LINES = "AEGIS_BATCH_MAX_LINES"
@@ -89,11 +89,35 @@ def _setting(name: str) -> float:
 
 
 class BatchUnavailable(RuntimeError):
-    """The wave could not answer this request; make the ordinary call.
+    """A terminal batch failure; never permission to change the price lane."""
 
-    Never a failure of the decision — only of the transport. The caller has
-    a complete, valid request in hand and every synchronous path still open.
-    """
+    retryable = False
+
+
+class BatchPending(BatchUnavailable):
+    """Durable batch work is waiting; resume it instead of buying it again."""
+
+    retryable = True
+
+    def __init__(self, message: str, *, wave_id: str = "", batch_id: str = "",
+                 request_sha256: str = ""):
+        super().__init__(message)
+        self.wave_id = wave_id
+        self.batch_id = batch_id
+        self.request_sha256 = request_sha256
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    body: dict[str, Any]
+    batch_id: str
+    request_sha256: str
+    reused: bool
+    owner_job_id: int | None = None
+
+    @property
+    def receipt_id(self) -> str:
+        return f"{self.batch_id}:{self.request_sha256}"
 
 
 def request_sha256(body: Mapping[str, Any]) -> str:
@@ -143,7 +167,10 @@ class OpenAIBatchApi:
             file=(f"aegis-{wave_id}.jsonl", jsonl),
             purpose=_FILES_UPLOAD_PURPOSE,
         )
-        created = client.batches.create(
+        # Retrying a non-idempotent create inside the SDK can purchase another
+        # batch before the broker ever sees the uncertain result. Reconcile the
+        # recorded wave after a transport error instead; GETs may still retry.
+        created = client.with_options(max_retries=0).batches.create(
             input_file_id=uploaded.id,
             endpoint=self._endpoint,
             completion_window="24h",
@@ -171,7 +198,7 @@ class OpenAIBatchApi:
                     lines.append(json.loads(row))
                 except json.JSONDecodeError:
                     # A malformed line is one request's loss, never the wave's:
-                    # its waiter times out and makes the synchronous call.
+                    # it remains unresolved and the durable harvest retries.
                     log.warning("batch %s: unparseable output line", batch_id)
         return lines
 
@@ -182,15 +209,16 @@ class OpenAIBatchApi:
             log.warning("batch %s: cancel failed", batch_id, exc_info=True)
 
     def find(self, wave_id: str) -> str | None:
-        try:
-            page = self._client_factory().batches.list(limit=100)
-        except Exception:  # pragma: no cover - listing is best effort
-            log.warning("batch: listing failed while recovering %s", wave_id, exc_info=True)
-            return None
-        for item in getattr(page, "data", []) or []:
-            metadata = getattr(item, "metadata", None) or {}
-            if str(metadata.get("aegis_wave") or "") == wave_id:
-                return str(item.id)
+        # A failed listing is not evidence that a submission never happened.
+        page = self._client_factory().batches.list(limit=100)
+        while True:
+            for item in getattr(page, "data", []) or []:
+                metadata = getattr(item, "metadata", None) or {}
+                if str(metadata.get("aegis_wave") or "") == wave_id:
+                    return str(item.id)
+            if not callable(getattr(page, "has_next_page", None)) or not page.has_next_page():
+                break
+            page = page.get_next_page()
         return None
 
 
@@ -206,7 +234,8 @@ class BatchStore:
         self.root = Path(root or (config.DATA_DIR / "batch"))
         self.responses = self.root / "responses"
         self.waves = self.root / "waves"
-        for path in (self.responses, self.waves):
+        self.receipts = self.root / "receipts"
+        for path in (self.responses, self.waves, self.receipts):
             path.mkdir(parents=True, exist_ok=True)
 
     # -- responses ---------------------------------------------------------
@@ -217,9 +246,45 @@ class BatchStore:
         except (OSError, json.JSONDecodeError):
             return None
 
-    def put_response(self, sha: str, body: Mapping[str, Any], *, batch_id: str) -> None:
-        record = {"request_sha256": sha, "batch_id": batch_id, "body": dict(body)}
+    def put_response(self, sha: str, body: Mapping[str, Any], *, batch_id: str,
+                     created_at_ns: int = 0, owner_job_id: int | None = None) -> None:
+        record = {"request_sha256": sha, "batch_id": batch_id, "body": dict(body),
+                  "created_at_ns": created_at_ns, "owner_job_id": owner_job_id}
         self._atomic(self.responses / f"{sha}.json", record)
+
+    def record_paid_receipt(self, sha: str, body: Mapping[str, Any], *, batch_id: str,
+                            owner_job_id: int | None = None) -> None:
+        """Retain every paid completion, including rejected author retries.
+
+        This ledger is independent of callers' usage journals: a shutdown after
+        harvest cannot erase the bill, and overwriting a cached bad answer cannot
+        erase its earlier paid attempt. Dashboard totals deduplicate by receipt_id.
+        """
+        receipt_id = f"{batch_id}:{sha}"
+        key = hashlib.sha256(receipt_id.encode()).hexdigest()
+        path = self.receipts / f"{key}.json"
+        if path.exists():
+            return
+        record = {
+            "receipt_id": receipt_id, "batch_id": batch_id, "request_sha256": sha,
+            "owner_job_id": owner_job_id, "provider": "openai", "batched": True,
+            "model": str(body.get("model") or ""), "usage": body.get("usage"),
+            "service_tier": body.get("service_tier"), "response_id": body.get("id"),
+            "recorded_at": time.time(),
+        }
+        from . import openai_usage
+
+        record["cost_estimate"] = openai_usage.estimate_batch_receipt(record, for_storage=True)
+        self._atomic(path, record)
+
+    def paid_receipts(self) -> list[dict[str, Any]]:
+        records = []
+        for path in sorted(self.receipts.glob("*.json")):
+            try:
+                records.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return records
 
     # -- waves -------------------------------------------------------------
     def put_wave(self, record: Mapping[str, Any]) -> None:
@@ -239,15 +304,22 @@ class BatchStore:
                 record = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if str(record.get("state") or "") not in {"harvested", "abandoned"}:
+            if str(record.get("state") or "") not in {"harvested", "abandoned", "failed"}:
                 out.append(record)
         return out
 
     def _atomic(self, path: Path, record: Mapping[str, Any]) -> None:
         tmp = path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True),
-                       encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(record, handle, ensure_ascii=False, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
 
 @dataclass
@@ -257,15 +329,19 @@ class _Waiter:
     event: threading.Event = field(default_factory=threading.Event)
     response: dict[str, Any] | None = None
     failed: str = ""
-    #: A caller rejected the stored answer and asked the provider again, so
-    #: this line's result REPLACES the record rather than being dropped by the
-    #: harvest's write-once guard. Without it the store would keep serving the
-    #: rejected completion to every future run that builds the same body.
     fresh: bool = False
+    wave_id: str = ""
+    batch_id: str = ""
+    owner_job_id: int | None = None
 
 
 class BatchBroker:
-    """Collect concurrent requests into waves and answer them from batches."""
+    """Collect waves while continuously reconciling already purchased work.
+
+    The request index includes pending AND submitted work. It is rebuilt from
+    durable wave records before callers can enqueue, not from completed answers
+    alone. A slow wave never blocks submission/polling of an independent wave.
+    """
 
     def __init__(
         self,
@@ -278,87 +354,140 @@ class BatchBroker:
     ):
         self._api = api
         self._store = store or BatchStore()
-        self._on_event = on_event or (lambda message: None)
+        self._on_event = on_event or (lambda message: log.info("%s", message))
         self._clock = clock
-        self._sleep = sleep
-        self._lock = threading.Lock()
+        self._sleep = sleep  # retained for callers constructing the test seam
+        self._lock = threading.RLock()
+        self._maintenance_lock = threading.Lock()
         self._pending: dict[str, _Waiter] = {}
+        self._requests: dict[str, _Waiter] = {}
+        self._records: dict[str, dict[str, Any]] = {}
+        self._wave_waiters: dict[str, list[_Waiter]] = {}
+        self._receipt_consumers: set[str] = set()
         self._arrived_at = 0.0
         self._opened_at = 0.0
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._dispatcher: threading.Thread | None = None
-        self._in_flight: dict[str, list[_Waiter]] = {}
+        self._restore_open_waves()
 
-    # -- lifecycle ---------------------------------------------------------
+    def _restore_open_waves(self) -> None:
+        with self._lock:
+            for record in self._store.open_waves():
+                wave_id = str(record.get("wave_id") or "")
+                if not wave_id or wave_id in self._records:
+                    continue
+                self._records[wave_id] = dict(record)
+                waiters = []
+                for entry in record.get("entries") or []:
+                    sha = str(entry.get("request_sha256") or entry.get("custom_id") or "")
+                    if not sha:
+                        continue
+                    waiter = _Waiter(
+                        sha=sha, body=dict(entry.get("body") or {}),
+                        fresh=bool(entry.get("fresh")), wave_id=wave_id,
+                        batch_id=str(record.get("batch_id") or ""),
+                        owner_job_id=entry.get("owner_job_id"),
+                    )
+                    waiters.append(waiter)
+                    # Historical duplicate waves are still harvested, but never
+                    # spawn another duplicate. The first open owner answers.
+                    self._requests.setdefault(sha, waiter)
+                self._wave_waiters[wave_id] = waiters
+
     def start(self) -> None:
-        if self._dispatcher is not None:
-            return
-        self._dispatcher = threading.Thread(
-            target=self._supervise, name="aegis-batch-dispatcher", daemon=True,
-        )
-        self._dispatcher.start()
+        with self._lock:
+            if self._dispatcher is not None:
+                return
+            if self._stop.is_set():
+                raise BatchPending("the batch worker is draining; resume after restart")
+            self._dispatcher = threading.Thread(
+                target=self._supervise, name="aegis-batch-dispatcher", daemon=True,
+            )
+            self._dispatcher.start()
 
     def stop(self) -> None:
+        # Do not cancel provider batches. Persist requests still waiting to form
+        # a wave before releasing callers, so a restart can submit them once.
         self._stop.set()
         self._wake.set()
-        thread = self._dispatcher
-        if thread is not None:
-            thread.join(timeout=5.0)
-        self._dispatcher = None
-
-    # -- the call ----------------------------------------------------------
-    def call(self, body: Mapping[str, Any], *, fresh: bool = False) -> dict[str, Any]:
-        """Answer one request body, or raise ``BatchUnavailable``.
-
-        ``fresh`` skips the stored answer and asks the provider again. The
-        caller's retry loop replays a BYTE-IDENTICAL body — ``messages``,
-        ``response_format`` and the token limit are all built once, above the
-        loop — so a truncated or schema-failing completion hashes to the same
-        request, and without this the store would hand every remaining attempt
-        the same bad bytes. Synchronously that replay is a fresh sample and can
-        succeed; the store must not be what takes that away. Worse, the record
-        is durable on the volume, so one bad completion would answer every
-        FUTURE run that builds the same body.
-
-        A successful retry overwrites the record under the same hash, so the
-        store heals rather than staying poisoned.
-        """
-        sha = request_sha256(body)
-        if not fresh:
-            cached = self._store.response(sha)
-            if cached is not None:
-                return dict(cached.get("body") or {})
-
-        waiter = _Waiter(sha=sha, body=dict(body), fresh=fresh)
         with self._lock:
-            existing = self._pending.get(sha)
-            if existing is not None:
-                # Two threads asking the identical question is one line.
-                waiter = existing
-                # ...and if either of them rejected the stored answer, the
-                # line's result replaces it.
-                waiter.fresh = waiter.fresh or fresh
-            else:
+            pending = list(self._pending.values())
+            self._pending.clear()
+            if pending:
+                self._prepare_wave(pending)
+            thread = self._dispatcher
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+        # Keep a still-running dispatcher referenced; start() must not create a
+        # second one while an HTTP operation from this instance is returning.
+        if thread is None or not thread.is_alive():
+            self._dispatcher = None
+
+    def call(self, body: Mapping[str, Any], *, fresh: bool = False) -> dict[str, Any]:
+        return self.call_result(body, fresh=fresh).body
+
+    def call_result(self, body: Mapping[str, Any], *, fresh: bool = False,
+                    owner_job_id: int | None = None) -> BatchResult:
+        sha = request_sha256(body)
+        with self._lock:
+            if self._stop.is_set() or run_control.pausing():
+                raise BatchPending("the batch worker is draining; resume after restart",
+                                   request_sha256=sha)
+            # An explicit author retry also attaches to its surviving retry wave.
+            # It must not evade recovery merely because its body is unchanged.
+            waiter = self._requests.get(sha)
+            if waiter is None and not fresh:
+                cached = self._store.response(sha)
+                if cached is not None:
+                    return BatchResult(dict(cached.get("body") or {}),
+                                       str(cached.get("batch_id") or ""), sha, True,
+                                       cached.get("owner_job_id"))
+            if waiter is None:
+                waiter = _Waiter(sha=sha, body=dict(body), fresh=fresh,
+                                 owner_job_id=owner_job_id)
+                self._requests[sha] = waiter
                 self._pending[sha] = waiter
                 now = self._clock()
                 self._arrived_at = now
                 if len(self._pending) == 1:
                     self._opened_at = now
+            elif not waiter.wave_id:
+                waiter.fresh = waiter.fresh or fresh
         self.start()
         self._wake.set()
-
-        if not waiter.event.wait(timeout=_setting(DEADLINE_SECONDS)):
-            with self._lock:
-                self._pending.pop(sha, None)
-            raise BatchUnavailable("the batch wave did not return in time")
+        deadline = self._clock() + _setting(DEADLINE_SECONDS)
+        while not waiter.event.wait(timeout=min(0.1, max(0.001, deadline - self._clock()))):
+            if self._stop.is_set() or run_control.pausing() or self._clock() >= deadline:
+                raise BatchPending(
+                    "batch work remains saved and pending; resume without changing the price lane",
+                    wave_id=waiter.wave_id, batch_id=waiter.batch_id, request_sha256=sha,
+                )
         if waiter.failed:
             raise BatchUnavailable(waiter.failed)
-        if waiter.response is None:  # pragma: no cover - defensive
-            raise BatchUnavailable("the batch wave returned nothing")
-        return dict(waiter.response)
+        if waiter.response is None:
+            raise BatchPending("the batch result is awaiting reconciliation",
+                               wave_id=waiter.wave_id, batch_id=waiter.batch_id,
+                               request_sha256=sha)
+        receipt_id = f"{waiter.batch_id}:{sha}"
+        with self._lock:
+            reused = receipt_id in self._receipt_consumers
+            self._receipt_consumers.add(receipt_id)
+        return BatchResult(dict(waiter.response), waiter.batch_id, sha, reused,
+                           waiter.owner_job_id)
 
-    # -- the dispatcher ----------------------------------------------------
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "open_waves": len(self._records),
+                "pending_requests": len(self._pending),
+                "submitted_requests": sum(len(rows) for rows in self._wave_waiters.values()),
+                "uncertain_waves": sum(not bool(row.get("batch_id")) and
+                                       row.get("state") != "prepared"
+                                       for row in self._records.values()),
+                "draining": self._stop.is_set(),
+            }
+
     def _supervise(self) -> None:
         while not self._stop.is_set():
             self._wake.wait(timeout=self._next_check())
@@ -366,186 +495,233 @@ class BatchBroker:
             if self._stop.is_set():
                 return
             try:
-                self._maybe_close_wave()
-            except Exception:  # pragma: no cover - the loop must survive
-                log.exception("batch dispatcher pass failed")
+                with self._maintenance_lock:
+                    self._maybe_close_wave()
+                    self._poll_open_waves()
+            except Exception:
+                log.exception("batch dispatcher pass failed; durable waves remain open")
 
     def _next_check(self) -> float:
-        """Sleep exactly as long as the open wave can still afford.
-
-        A fixed poll would hold a ready wave for up to a full tick after its
-        quiet period expired — dead time added to every one of the seventy to
-        a hundred seams a chapter has, which is the whole cost of the lane.
-        """
         with self._lock:
+            poll = _setting(POLL_SECONDS)
             if not self._pending:
-                return 1.0
+                return poll
             now = self._clock()
             return max(0.005, min(
+                poll,
                 _setting(QUIET_SECONDS) - (now - self._arrived_at),
                 _setting(MAX_WAIT_SECONDS) - (now - self._opened_at),
             ))
 
     def _maybe_close_wave(self) -> None:
         with self._lock:
-            if not self._pending:
+            if not self._pending or self._stop.is_set():
                 return
             now = self._clock()
-            quiet = now - self._arrived_at
-            open_for = now - self._opened_at
-            full = len(self._pending) >= int(_setting(MAX_LINES))
-            if not (full or quiet >= _setting(QUIET_SECONDS)
-                    or open_for >= _setting(MAX_WAIT_SECONDS)):
+            line_limit = max(1, int(_setting(MAX_LINES)))
+            full = len(self._pending) >= line_limit
+            if not (full or now - self._arrived_at >= _setting(QUIET_SECONDS)
+                    or now - self._opened_at >= _setting(MAX_WAIT_SECONDS)):
                 return
-            waiters = list(self._pending.values())
-            self._pending.clear()
-        self._run_wave(waiters)
+            # Respect the configured line ceiling even when one fan-out arrives
+            # between scheduler passes.
+            keys = list(self._pending)[:line_limit]
+            waiters = [self._pending.pop(sha) for sha in keys]
+            if self._pending:
+                self._opened_at = now
+            record = self._prepare_wave(waiters)
+        self._submit(record)
 
-    def _run_wave(self, waiters: Sequence[_Waiter]) -> None:
+    def _prepare_wave(self, waiters: Sequence[_Waiter]) -> dict[str, Any]:
         wave_id = uuid.uuid4().hex[:16]
-        entries = [{"custom_id": w.sha, "request_sha256": w.sha} for w in waiters]
         record = {
-            "wave_id": wave_id, "state": "preparing", "batch_id": "",
-            "entries": entries, "line_count": len(entries),
+            "wave_id": wave_id, "state": "prepared", "batch_id": "",
+            "created_at_ns": time.time_ns(),
+            "entries": [{"custom_id": w.sha, "request_sha256": w.sha,
+                         "body": w.body, "fresh": w.fresh,
+                         "owner_job_id": w.owner_job_id} for w in waiters],
+            "line_count": len(waiters),
         }
-        # Written BEFORE the request leaves: a crash between here and the
-        # provider's answer leaves a record the next boot can reconcile by
-        # asking the provider for the batch carrying this wave id.
         self._store.put_wave(record)
-        lines = [
-            json.dumps({
-                "custom_id": w.sha,
-                "method": "POST",
-                "url": "/v1/chat/completions",
-                "body": w.body,
-            }, ensure_ascii=False, default=str)
-            for w in waiters
-        ]
-        payload = ("\n".join(lines) + "\n").encode("utf-8")
+        self._records[wave_id] = record
+        self._wave_waiters[wave_id] = list(waiters)
+        for waiter in waiters:
+            waiter.wave_id = wave_id
+        return record
+
+    def _submit(self, record: dict[str, Any]) -> None:
+        if self._stop.is_set() or run_control.pausing():
+            return
+        wave_id = str(record["wave_id"])
+        lines = [json.dumps({
+            "custom_id": entry["request_sha256"], "method": "POST",
+            "url": "/v1/chat/completions", "body": entry["body"],
+        }, ensure_ascii=False, default=str) for entry in record["entries"]]
+        payload = ("\n".join(lines) + "\n").encode()
+        del lines
+        # Durable prepared means no submission was attempted. Every other state
+        # without an ID is uncertain and must be reconciled, never resubmitted.
+        record["state"] = "submitting"
+        # Only never-submitted work needs its body for restart. Once a create
+        # may leave, recovery uses the provider wave ID, not another upload.
+        # In particular, do not retain base64 PDF pages in every open record
+        # and waiter for the many hours a batch can remain queued.
+        for entry in record["entries"]:
+            entry.pop("body", None)
+        with self._lock:
+            for waiter in self._wave_waiters.get(wave_id, []):
+                waiter.body = {}
+        self._store.put_wave(record)
         try:
             batch_id = self._api.submit(payload, wave_id=wave_id)
         except Exception as exc:
-            record["state"] = "abandoned"
             record["error"] = str(exc)
-            self._store.put_wave(record)
-            self._release(waiters, failure=f"batch submission failed: {exc}")
+            # An explicit client rejection establishes no batch was accepted.
+            # Transport failures, timeouts, conflicts and rate limits do not.
+            status_code = getattr(exc, "status_code", None)
+            if isinstance(status_code, int) and 400 <= status_code < 500 and status_code not in {408, 409, 429}:
+                self._finish(record, failure=f"batch submission rejected: {exc}")
+            else:
+                record["state"] = "submission_unknown"
+                self._store.put_wave(record)
+                self._on_event(f"Batch wave {wave_id} submission awaiting reconciliation; no synchronous fallback.")
             return
-        record["batch_id"] = batch_id
+        record["batch_id"] = str(batch_id)
         record["state"] = "submitted"
         self._store.put_wave(record)
-        self._on_event(
-            f"Batch wave {wave_id} submitted: {len(lines)} request(s) at the batch price."
-        )
         with self._lock:
-            self._in_flight[batch_id] = list(waiters)
-        self._await_batch(record, waiters)
+            for waiter in self._wave_waiters.get(wave_id, []):
+                waiter.batch_id = str(batch_id)
+        self._on_event(f"Batch wave {wave_id} submitted: {record['line_count']} request(s) at the batch price.")
 
-    def _await_batch(self, record: dict[str, Any], waiters: Sequence[_Waiter]) -> None:
-        batch_id = str(record.get("batch_id") or "")
-        deadline = self._clock() + _setting(DEADLINE_SECONDS)
-        status = ""
-        while self._clock() < deadline and not self._stop.is_set():
-            try:
-                status = self._api.status(batch_id)
-            except Exception as exc:  # pragma: no cover - transport only
-                log.warning("batch %s: status failed (%s)", batch_id, exc)
-                status = ""
-            if status in {"completed", "failed", "expired", "cancelled"}:
-                break
-            self._sleep(_setting(POLL_SECONDS))
-        harvested = self.harvest(record)
+    def _poll_open_waves(self) -> int:
+        harvested = 0
         with self._lock:
-            self._in_flight.pop(batch_id, None)
+            records = list(self._records.values())
+        for record in records:
+            try:
+                harvested += self._poll_wave(record)
+            except Exception as exc:
+                # In particular, an output download/listing error leaves the
+                # wave open for the next pass instead of discarding paid work.
+                log.warning("batch wave %s reconciliation pending: %s", record.get("wave_id"), exc)
+        return harvested
+
+    def _poll_wave(self, record: dict[str, Any]) -> int:
+        wave_id = str(record["wave_id"])
+        if record.get("state") == "prepared":
+            self._submit(record)
+            if record.get("state") in {"prepared", "failed"}:
+                return 0
+        batch_id = str(record.get("batch_id") or "")
+        if not batch_id:
+            found = self._api.find(wave_id)
+            if not found:
+                # Absence in a listing is not a proof of non-submission after a
+                # lost network response; retain the uncertainty visibly.
+                return 0
+            batch_id = str(found)
+            record["batch_id"] = batch_id
+            record["state"] = "submitted"
+            self._store.put_wave(record)
+            with self._lock:
+                for waiter in self._wave_waiters.get(wave_id, []):
+                    waiter.batch_id = batch_id
+        status = self._api.status(batch_id)
         if status not in {"completed", "failed", "expired", "cancelled"}:
-            self._api.cancel(batch_id)
-        outstanding = [w for w in waiters if not w.event.is_set()]
-        if outstanding:
-            self._release(outstanding, failure=f"batch {batch_id} status {status or 'unknown'}")
-        record["state"] = "harvested"
-        record["harvested"] = harvested
+            return 0
         record["status"] = status
-        self._store.put_wave(record)
+        return self.harvest(record)
 
     def harvest(self, record: Mapping[str, Any]) -> int:
-        """Store every line the provider produced and wake its waiter.
-
-        Safe to call on a wave this process never submitted: that is exactly
-        what recovery does. Results already in the store are not re-written.
-        """
         batch_id = str(record.get("batch_id") or "")
         if not batch_id:
             return 0
-        try:
-            lines = self._api.results(batch_id)
-        except Exception as exc:  # pragma: no cover - transport only
-            log.warning("batch %s: result fetch failed (%s)", batch_id, exc)
-            return 0
+        # A failed download propagates to the supervisor. It must never be
+        # mistaken for an empty successful harvest.
+        lines = self._api.results(batch_id)
+        wave_id = str(record.get("wave_id") or "")
         with self._lock:
-            waiting = {w.sha: w for w in self._in_flight.get(batch_id, [])}
+            waiting = {w.sha: w for w in self._wave_waiters.get(wave_id, [])}
+        expected = {str(e.get("request_sha256") or e.get("custom_id") or "")
+                    for e in record.get("entries") or []}
+        seen: set[str] = set()
         stored = 0
         for line in lines:
             sha = str(line.get("custom_id") or "")
-            if not sha:
+            if sha not in expected:
                 continue
             response = line.get("response") or {}
-            body = response.get("body") if isinstance(response, Mapping) else None
-            status_code = int((response or {}).get("status_code") or 0)
-            waiter = waiting.get(sha)
-            if not isinstance(body, Mapping) or status_code != 200:
-                if waiter is not None:
-                    self._release([waiter], failure=f"batch line failed ({status_code or 'error'})")
+            if not isinstance(response, Mapping):
                 continue
-            # Write-once, so recovering an OLD wave late cannot overwrite a
-            # newer answer with the stale one it was carrying. A waiter that
-            # asked for a fresh sample is the exception: it rejected what is
-            # stored, so its answer is the one that should survive.
-            if self._store.response(sha) is None or (
-                waiter is not None and waiter.fresh
-            ):
-                self._store.put_response(sha, body, batch_id=batch_id)
-                stored += 1
-            if waiter is not None and not waiter.event.is_set():
-                waiter.response = dict(body)
-                waiter.event.set()
+            body = response.get("body")
+            status_code = response.get("status_code")
+            waiter = waiting.get(sha)
+            if status_code != 200 or not isinstance(body, Mapping):
+                if status_code or line.get("error"):
+                    seen.add(sha)
+                    if waiter is not None:
+                        self._release([waiter], failure=f"batch line failed ({status_code or 'error'})")
+                continue
+            seen.add(sha)
+            with self._lock:
+                owner_job_id = next((entry.get("owner_job_id")
+                                     for entry in record.get("entries") or []
+                                     if entry.get("request_sha256") == sha), None)
+                self._store.record_paid_receipt(sha, body, batch_id=batch_id,
+                                                owner_job_id=owner_job_id)
+                existing = self._store.response(sha)
+                created = int(record.get("created_at_ns") or 0)
+                if existing is None or created > int(existing.get("created_at_ns") or 0):
+                    self._store.put_response(sha, body, batch_id=batch_id,
+                                             created_at_ns=created, owner_job_id=owner_job_id)
+                    stored += 1
+                if waiter is not None and not waiter.event.is_set():
+                    waiter.batch_id = batch_id
+                    waiter.response = dict(body)
+                    waiter.event.set()
+                    if self._requests.get(sha) is waiter:
+                        self._requests.pop(sha, None)
+        status = str(record.get("status") or "")
+        if expected <= seen or status in {"failed", "expired", "cancelled"}:
+            mutable = self._records.get(wave_id, dict(record))
+            mutable["harvested"] = int(mutable.get("harvested") or 0) + stored
+            self._finish(mutable, failure=(f"batch {batch_id} ended {status} without this result"
+                                          if expected - seen else ""))
+        # Completed without every expected line remains open: a partial/malformed
+        # download must not permanently erase the missing purchased result.
         return stored
 
+    def _finish(self, record: dict[str, Any], *, failure: str = "") -> None:
+        wave_id = str(record["wave_id"])
+        record["state"] = "failed" if failure else "harvested"
+        if failure:
+            record["error"] = failure
+        self._store.put_wave(record)
+        with self._lock:
+            waiters = self._wave_waiters.pop(wave_id, [])
+            self._records.pop(wave_id, None)
+            for waiter in waiters:
+                if not waiter.event.is_set():
+                    self._release([waiter], failure=failure or "batch returned no usable result")
+                if self._requests.get(waiter.sha) is waiter:
+                    self._requests.pop(waiter.sha, None)
+
     def recover(self) -> int:
-        """Re-attach to waves this machine left open, and bank what they bought."""
-        recovered = 0
-        for record in self._store.open_waves():
-            wave_id = str(record.get("wave_id") or "")
-            batch_id = str(record.get("batch_id") or "")
-            if not batch_id:
-                found = self._api.find(wave_id)
-                if not found:
-                    record["state"] = "abandoned"
-                    record["error"] = "no batch was created for this wave"
-                    self._store.put_wave(record)
-                    continue
-                batch_id = found
-                record["batch_id"] = batch_id
-            try:
-                status = self._api.status(batch_id)
-            except Exception:  # pragma: no cover - transport only
-                continue
-            if status not in {"completed", "failed", "expired", "cancelled"}:
-                # Still running somewhere. Leave it open; a later boot, or the
-                # run that is waiting on it, will harvest it.
-                record["state"] = "submitted"
-                self._store.put_wave(record)
-                continue
-            recovered += self.harvest(record)
-            record["state"] = "harvested"
-            record["status"] = status
-            self._store.put_wave(record)
-        return recovered
+        """Reattach both running and completed waves, retaining transport doubt."""
+        with self._maintenance_lock:
+            self._restore_open_waves()
+            return self._poll_open_waves()
 
     def _release(self, waiters: Sequence[_Waiter], *, failure: str) -> None:
-        for waiter in waiters:
-            if waiter.event.is_set():
-                continue
-            waiter.failed = failure
-            waiter.event.set()
+        with self._lock:
+            for waiter in waiters:
+                if waiter.event.is_set():
+                    continue
+                waiter.failed = failure
+                waiter.event.set()
+                if self._requests.get(waiter.sha) is waiter:
+                    self._requests.pop(waiter.sha, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -583,6 +759,22 @@ def process_broker(factory: Callable[[], BatchBroker]) -> BatchBroker:
             _process_broker = factory()
             _process_broker.start()
         return _process_broker
+
+
+def process_status() -> dict[str, Any]:
+    """Read-only dashboard snapshot; inspecting it never creates a provider."""
+    with _process_lock:
+        broker = _process_broker
+    if broker is not None:
+        return broker.status()
+    records = BatchStore().open_waves()
+    return {
+        "open_waves": len(records), "pending_requests": 0,
+        "submitted_requests": sum(len(record.get("entries") or []) for record in records),
+        "uncertain_waves": sum(not bool(record.get("batch_id")) and
+                               record.get("state") != "prepared" for record in records),
+        "draining": False,
+    }
 
 
 def reset_process_broker() -> None:

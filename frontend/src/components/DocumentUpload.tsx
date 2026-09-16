@@ -208,19 +208,8 @@ function safeStorageRemoveItem(key: string): void {
   }
 }
 
-/**
- * Document intake. Uploading a file starts its parse in one go (owner
- * request, 2026-08-28):
- *   1. Choose a file (staged locally — change it freely)
- *   2. Upload → the file is stored AND parsed immediately
- *      (status "converted"); the Console streams the parse live
- *   3. Pick the deposit target, then start generation — or, when the
- *      parent chose every parameter up front, the converted job flows
- *      straight into generation via ``onConverted`` (owner request,
- *      2026-08-29: one action runs the whole chain).
- * Replacing the file stays manual: a replacement is stored without
- * parsing until Convert is pressed, so a wrong pick costs nothing.
- */
+/** Document intake stages files only. Paid parsing is an explicit advanced
+ * action; the primary generation route is the chapter Batch API worklist. */
 export default function DocumentUpload({
   module,
   conceptKind,
@@ -232,15 +221,17 @@ export default function DocumentUpload({
   uploadLabel,
   uploadHint,
   onConverted,
+  chapterId,
 }: {
   module: Module;
+  chapterId?: number;
   conceptKind?: "post" | "pre";
   uploadType?: string;
   bookSources?: string[];
   externalJob?: UploadJob | null;
   disabled?: boolean;
   onJob: (job: UploadJob | null) => void;
-  /** Overrides the Upload button text (one-shot flows name the whole run). */
+  /** Overrides the staging button text. Upload never starts a paid operation. */
   uploadLabel?: string;
   /** Overrides the pre-upload hint copy beneath the file row. */
   uploadHint?: string;
@@ -497,23 +488,22 @@ export default function DocumentUpload({
     setBusy(true);
     setError(null);
     try {
-      const created: UploadJob = module === "assessments"
-        ? await api.createAssessmentUpload(uploadType || "document", file, source)
-        : await api.postLearningUpload(
-          file,
-          source,
-          Number.parseInt(chapterDurationMinutes, 10) || 0,
-        );
+      let created: UploadJob;
+      if (module === "concepts" && chapterId) {
+        const staged = await api.chapterBatchStageSource(chapterId, file, source, Number.parseInt(chapterDurationMinutes, 10) || 0);
+        const detail = await api.chapterBatchDetail(staged.chapter_id);
+        if (!detail.job) throw new Error("The source was staged. Open Chapters to view it.");
+        created = detail.job;
+      } else {
+        created = module === "assessments"
+          ? await api.createAssessmentUpload(uploadType || "document", file, source)
+          : await api.postLearningUpload(file, source, Number.parseInt(chapterDurationMinutes, 10) || 0);
+      }
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
       emit(created);
-      // Parsing starts in one go with the upload (owner request,
-      // 2026-08-28), and when the parent chose its parameters up front
-      // the converted job continues straight into generation through
-      // ``onConverted`` (owner request, 2026-08-29). Replacing the file
-      // stays manual, so a wrong pick is still free to swap before its
-      // replacement is parsed.
-      await convertJob(created, { continueRun: true });
+      // Upload is a durable staging action only. Paid parsing/generation must
+      // be explicitly requested after the owner selects the chapters to batch.
     } catch (e) {
       setError(String(e));
     } finally {
@@ -718,9 +708,8 @@ export default function DocumentUpload({
           </div>
           <div className="hint mt-4">
             {uploadHint
-              || "Uploading stores the file and starts its conversion right "
-              + "away — watch the Console for parse progress. You pick where "
-              + "to deposit before anything is generated."}
+              || "Uploading saves the file without starting a paid run. "
+              + "Select your chapters before starting generation."}
           </div>
         </div>
         {restoringSavedJob && (
@@ -851,14 +840,18 @@ export default function DocumentUpload({
       </div>
 
       {!converted && (
-        <div className="row mt-12">
-          <button disabled={controlsDisabled} onClick={convert}>
-            Parse source document
-          </button>
-          <span className="hint">
-            Reads the source with the GPT reader and normalizes it — watch
-            the Console for progress.
-          </span>
+        <div className="mt-12">
+          {module === "concepts" && <div className="row">
+            <a className="button-link" href="/chapters">Select chapters &amp; start Batch API</a>
+            <span className="hint">Your source is saved. Batch generation starts only after you select chapters and press Start Batch.</span>
+          </div>}
+          <details className="mt-12">
+            <summary>Advanced: immediate parsing at standard API rates</summary>
+            <div className="row mt-8">
+              <button disabled={controlsDisabled} onClick={convert}>Parse source document · standard rates</button>
+              <span className="hint">This separate action uses synchronous API pricing. It does not start a batch.</span>
+            </div>
+          </details>
         </div>
       )}
 

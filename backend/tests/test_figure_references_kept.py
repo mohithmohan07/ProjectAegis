@@ -52,7 +52,9 @@ def test_a_v2_row_keeps_its_figures_and_an_older_row_does_not():
 
 
 def test_the_policy_keeps_every_recorded_version_and_mints_only_the_latest():
-    assert quality.VERSION == quality.V4 and quality.SUPPORTED == (quality.V1, quality.V2, quality.V3, quality.V4)
+    # Corrections 2.0 adds v5 table/ownership fixes; every old stamp remains
+    # supported, and the tests below still pin its recorded figure behavior.
+    assert quality.VERSION == quality.V5 and quality.SUPPORTED == (quality.V1, quality.V2, quality.V3, quality.V4, quality.V5)
     # v4 is monotone too: it keeps v2 and v3 and adds the declared Pre options.
     assert quality.figure_references_kept({quality.KEY: quality.V4}) is True
     assert quality.host_creations_resolved({quality.KEY: quality.V4}) is True
@@ -304,4 +306,3 @@ def test_a_pre_v2_run_replays_the_culmination_mastery_skip():
     from app.services import build_concepts
     source = inspect.getsource(build_concepts._deposit_concepts)
     assert "format_culminations=format_culminations" in source
-

@@ -569,6 +569,32 @@ TYPE_OWNER_SYSTEM = _SHARED + (
     "concepts, and never let coverage balance influence the owner."
 )
 
+
+SEMANTIC_ACTIVITY_RULE = (
+    "Place every Activity, experiment or discussion by the capability it actually "
+    "exercises. A task about one concept belongs to that normal concept; an opening "
+    "or integrative activity genuinely spanning several concepts belongs to the "
+    "appropriate Culmination under the same multi-concept rules as any other "
+    "question. Being labelled Activity is never a reason to override its meaning."
+)
+
+
+def host_system(payload):
+    """Preserve old recorded instructions; v5 resolves the Activity contradiction."""
+    from .. import generation_quality_policy as quality
+    if not quality.semantic_case_ownership(payload):
+        return HOST_SYSTEM
+    return HOST_SYSTEM.replace(
+        "A textbook Activity, experiment or discussion unit goes to the related "
+        "NORMAL concept, never to a Culmination;",
+        SEMANTIC_ACTIVITY_RULE + " ",
+    ) + (
+        " A mined Type is an answering-form family, not an authority to move a "
+        "question away from the concept it assesses. Per-question destinations "
+        "remain authoritative; rendering assigns distinct Type identities for "
+        "the family on different concepts without changing any question."
+    )
+
 PLACE_SYSTEM = _SHARED + (
     " Task: Phase 2.2 — place the chapter's pooled Container-02 material. "
     "The request pools every activity, experiment task, info hub "

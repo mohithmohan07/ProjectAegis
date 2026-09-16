@@ -5093,3 +5093,34 @@ over days. The recorded estimate is $4.9718 → about $2.17.
 Offline only: `tests/test_batch_broker.py` (14), `tests/test_batch_pricing.py`
 (4), `tests/test_batch_cohort_queue.py` (9), and the frontend slot tests. No
 paid generation.
+
+
+## Q75 — decided — durable selected-chapter batches and Corrections 2.0
+
+**Owner, 16 September 2026:** fix the audited gaps; ongoing chapters must continue
+through deployment; notify the starter on completion/failure; show total chapters,
+stages and costs; uploading must not begin individual paid processing; run selected
+chapters together through Batch API and remove the two-run bottleneck.
+
+This supersedes Q73's 90-minute full-price fallback. Batch waiting is a durable
+non-failure state; the same provider request and batch ID are reconciled after a
+restart. No deployment resets source conversion, accepted review files, sealed
+output or model decision identities. New output fixes are generation-quality v5;
+old stamped policies remain replayable. See
+[implementation and operations](durable-batch-rollout-2026-09-16.md).
+
+## Q76 — decided — generation failure evidence and daily safe repairs
+
+**Owner, 16 September 2026:** fix repeatable stuck-generation failures; preserve
+accurate failure logs for daily investigation, repository fixes and deployment;
+do not disrupt running Batch API work. The owner chose 02:00 India time.
+
+Keep exact source/coverage gates. Correct mechanical rendering and identity
+defects, preserve settled work, and expose an actionable cause instead of a
+generic instruction to retry the same unusable checkpoint. Failure evidence is
+durable on the server. Because the repository is public, only strictly
+allowlisted machine diagnostics are exported to its separate diagnostics branch.
+The nightly task may prepare, test, merge and deploy scoped corrective PRs after
+the required checks; it cannot change semantic policy, reset sources/checkpoints,
+cancel/recreate batches or silently switch pricing. Full operational details:
+[nightly maintenance](nightly-maintenance.md).

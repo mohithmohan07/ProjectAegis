@@ -158,6 +158,49 @@ def render_types_section(
     return "\n".join(pieces)
 
 
+def scope_type_identities(rows, sections, routes, types, cases, ordering):
+    """Project model-decided ownership into one Type identity per concept.
+
+    No placement or taxonomy wording is inferred here. A source answering-form
+    family may serve several concepts; its local copies need distinct IDs, just
+    as the existing per-destination Case split does. Source IDs stay in routes.
+    """
+    scoped_types, scoped_cases = {}, {}
+    type_order, case_order = [], []
+    source_rank = {value: i for i, value in enumerate(ordering.get("type_order") or types)}
+    source_case_rank = {value: i for i, value in enumerate(ordering.get("case_order") or [])}
+    ordinal = 0
+    for row in rows:
+        key = _host_key(row)
+        hosted = sections.get(key, {})
+        replacement, replacement_routes = {}, set()
+        for original_id in sorted(hosted, key=lambda value: source_rank.get(value, len(source_rank))):
+            ordinal += 1
+            scoped_id = f"TYPE-{ordinal:04d}"
+            scoped_types[scoped_id] = dict(types[original_id])
+            type_order.append(scoped_id)
+            replacement[scoped_id] = hosted[original_id]
+            for case_id in sorted(hosted[original_id], key=lambda value: source_case_rank.get(original_id + "::" + value, len(source_case_rank))):
+                if (original_id, case_id) in cases:
+                    scoped_cases[(scoped_id, case_id)] = dict(cases[(original_id, case_id)])
+                if case_id:
+                    case_order.append(scoped_id + "::" + case_id)
+            for route in routes.get(key, set()):
+                parts = str(route).split("::")
+                if parts[0] == original_id:
+                    replacement_routes.add("::".join([scoped_id, *parts[1:], "source-type:" + original_id]))
+        if hosted:
+            sections[key] = replacement
+            routes[key] = replacement_routes
+            # The existing renumberer accepts declared identities and seals
+            # them. Without this handoff it reunites equal form titles across
+            # concepts by text, undoing the newly scoped identity projection.
+            row["_origin_type_id"] = list(replacement)
+    ordering["type_order"] = type_order
+    ordering["case_order"] = case_order
+    return scoped_types, scoped_cases
+
+
 def _join_analysis_texts(texts: list[str]) -> str:
     """Merge several allotted item texts into one section component.
 
@@ -638,6 +681,19 @@ def assemble(
     placements: Mapping[str, Any] | None = None,
     analysis: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Bind the recorded policy through render, coverage and certificate checks."""
+    from .. import generation_quality_policy as quality
+    with quality.bind_run(quality.version_of(env)):
+        return _assemble(env, settled_rows, host_result, placements, analysis)
+
+
+def _assemble(
+    env: Mapping[str, Any],
+    settled_rows: list[Mapping[str, Any]],
+    host_result: Mapping[str, Any],
+    placements: Mapping[str, Any] | None = None,
+    analysis: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Project settled rows + host maps + placements into release rows.
 
     ``placements`` is the Phase 2.2 placement pass's output (place.py).
@@ -671,6 +727,9 @@ def assemble(
         copy.deepcopy(dict(new_row))
         for new_row in host_result.get("new_concepts") or []
     ]
+    if generation_quality_policy.source_output_corrections(env):
+        for row in [*rows, *new_rows]:
+            row.update(generation_quality_policy.fields(env))
     # Resolve the place pass's positional concept ids back to row objects
     # over the SAME ordered list the pass saw ([*settled, *new_concepts]);
     # holding object references makes the resolution independent of the
@@ -739,6 +798,8 @@ def assemble(
                 "url": str(url),
                 "caption": caption,
             }
+            if meta.get("caption_policy"):
+                entry["caption_policy"] = meta["caption_policy"]
             if entry not in marks:
                 marks.append(entry)
         marks.sort(key=lambda entry: (
@@ -969,6 +1030,11 @@ def assemble(
             )
         case_splits.append(split_record)
 
+    if generation_quality_policy.semantic_case_ownership(env):
+        types, cases = scope_type_identities(
+            rows, sections_by_key, routes_by_key, types, cases, ordering,
+        )
+
     from .. import katex_rules as kr
 
     for key, hosted in sections_by_key.items():
@@ -1065,7 +1131,10 @@ def assemble(
         # its figure references (Q67); a candidate row carries no stamp yet.
         keep_figures = generation_quality_policy.figure_references_kept(env)
         out_rows = [
-            concept_cleanup.clean_concept_record(dict(row), keep_figures=keep_figures)
+            concept_cleanup.clean_concept_record(
+                dict(row), keep_figures=keep_figures,
+                keep_tables=generation_quality_policy.table_references_kept(env),
+            )
             for row in candidate_rows
         ]
         out_rows = concept_cleanup.filter_review_violations(
@@ -1078,7 +1147,9 @@ def assemble(
             generation_quality_policy.culmination_mastery_formatted(env)
         )
         out_rows = concept_refiner.refine_chapter(
-            out_rows, format_culminations=format_culminations
+            out_rows, format_culminations=format_culminations,
+            source_examples=generation._inventory_source_examples(dict(env["inventory"])),
+            source_key=generation._inventory_coverage_key,
         )
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         out_rows = generation._ensure_mastery_lines_via_api(
@@ -1096,7 +1167,10 @@ def assemble(
             out_rows, dict(env["inventory"]), dict(env["mined_types"])
         )
         out_rows = generation._canonicalize_concept_rich_text(out_rows)
-        out_rows = concept_refiner.renumber_types_continuously(out_rows)
+        out_rows = concept_refiner.renumber_types_continuously(
+            out_rows, source_examples=generation._inventory_source_examples(dict(env["inventory"])),
+            source_key=generation._inventory_coverage_key,
+        )
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         return out_rows
 

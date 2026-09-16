@@ -55,8 +55,21 @@ export default function BuildConcepts() {
   const bookSources = vocab.data?.book_sources ?? [];
   const ownerKey = auth?.user?.sub || "local";
 
+  // Dashboard history links load the requested job without starting a run.
+  const requestedJobId = Number(new URLSearchParams(window.location.search).get("job") || 0);
   useEffect(() => {
-    if (auth?.loading || discoveredForUserRef.current === ownerKey) return;
+    if (!Number.isSafeInteger(requestedJobId) || requestedJobId <= 0 || auth?.loading) return;
+    let active = true;
+    setResumeDiscoveryLoading(true);
+    api.getUploadJob("concepts", requestedJobId)
+      .then((loaded) => { if (active) { setResumeJob(loaded); setPendingResume(null); } })
+      .catch((e) => { if (active) setResumeError(`Could not open this run: ${String(e)}`); })
+      .finally(() => { if (active) setResumeDiscoveryLoading(false); });
+    return () => { active = false; };
+  }, [requestedJobId, ownerKey, auth?.loading]);
+
+  useEffect(() => {
+    if (requestedJobId > 0 || auth?.loading || discoveredForUserRef.current === ownerKey) return;
     let active = true;
     setResumeDiscoveryLoading(true);
     setResumeError(null);
@@ -486,7 +499,6 @@ function PostLearningFlow({
     || (job.status !== "generated"
       && job.status !== "released"
       && !hasReviewWorkflowMarker(job));
-  const oneShotReady = !job && Boolean(scope);
   const resultIncomplete = result
     ? incompleteGenerationRecovery(result)
     : null;
@@ -548,17 +560,24 @@ function PostLearningFlow({
                 && job.status === "converted"
                 && job.generation_recovery?.resume_allowed !== false
                 && (
+                <div>
+                  <a className="button-link" href="/chapters">Select chapters &amp; start Batch API</a>
+                  <details className="mt-8">
+                    <summary>Advanced: run this source immediately at standard API rates</summary>
+                    <p className="hint">This separate synchronous run uses standard pricing. Choose Chapters for discounted batch generation.</p>
                 <button
                   className="primary"
                   disabled={!scope || busy}
                   onClick={() => void generate()}
                 >
                   {job.checkpoint_available
-                    ? `Resume from ${Math.round(
+                    ? `Resume at standard rates from ${Math.round(
                       (job.checkpoint_progress ?? 0) * 100,
                     )}% checkpoint`
-                    : "Parse & generate concepts"}
+                    : "Generate concepts · standard rates"}
                 </button>
+                  </details>
+                </div>
               )}
             </div>
           </div>
@@ -594,18 +613,10 @@ function PostLearningFlow({
         externalJob={job}
         disabled={busy}
         onJob={handleJob}
-        uploadLabel={oneShotReady ? "Upload, parse & generate" : undefined}
-        uploadHint={oneShotReady
-          ? "One action runs the whole chain: the file is stored, parsed, "
-            + "and generation starts against the chapter you picked "
-            + "above. Watch the Console for live progress."
-          : "Uploading stores the file and starts its conversion right away "
-            + "— watch the Console for parse progress. Pick a chapter above "
-            + "first to run upload, parse, and generation in one go."}
-        onConverted={(convertedJob) => {
-          // Continue the chain only when a chapter was chosen up front.
-          if (scopeRef.current) void generate(convertedJob);
-        }}
+        chapterId={scope?.type === "chapter" ? scope.ids[0] : undefined}
+        uploadLabel="Stage source · no run started"
+        uploadHint="Uploading saves the source only. Select all staged chapters on the Chapters page, then start a discounted Batch API run together."
+
       />
       {!result && (
         <ApiUsageSummary

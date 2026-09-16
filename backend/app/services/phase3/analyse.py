@@ -5,7 +5,9 @@ by Q1): the chapter-level inventory of **distinct** Misconceptions and
 Error Analyses is the ONLY analysis mechanism for the Post lane. The
 every-concept learner-analysis contract is retired — a concept's
 ``Misconception/ Error Analysis`` section exists only where an inventory
-item was allotted to it, and *not every concept receives one*. Achieving
+item was allotted to it. Legacy/v1 inventories may leave concepts uncovered;
+v2 adds API-authored misconception/correction pairs for every uncovered
+ordinary concept after the existing build/allot decisions. Achieving
 Mastery is untouched: every concept still carries its Mastery line.
 
 * **2.4 Build** — one kernel decision over chapter-wide evidence: the
@@ -283,6 +285,8 @@ def _allot_checker(
 
 
 def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("stage") or "").endswith(".coverage"):
+        return _live_coverage(payload)
     from . import prompts
     from .. import generation
 
@@ -322,7 +326,167 @@ def _live_allot(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("stage") or "").endswith(".coverage"):
+        return _live_coverage_call(payload, critic=True)
     return _cached_call(payload, critic=True)
+
+
+def _live_coverage_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
+    from . import prompts
+    from .. import generation, prelearning_capture_policy
+
+    return generation._openai_json(
+        (
+            analysis_correction_policy.COVERAGE_CRITIC_INSTRUCTION
+            if critic else analysis_correction_policy.COVERAGE_AUTHOR_INSTRUCTION
+        ) + prelearning_capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
+        purpose="advisory_critic" if critic else "concept_mapping",
+        image_urls=image_inputs(payload),
+    )
+
+
+def _live_coverage(payload: dict[str, Any]) -> dict[str, Any]:
+    return _live_coverage_call(payload, critic=False)
+
+
+def _coverage_checker(response: Mapping[str, Any]) -> list[str]:
+    """Required fields and a declared misconception, never a meaning test."""
+    items = response.get("items")
+    if not isinstance(items, list):
+        return ["response has no items array"]
+    # Coverage authors do not assign chapter inventory identities. Reuse
+    # the paired-field checker with temporary positional IDs; final IDs are
+    # minted after all independent concept decisions return in row order.
+    projected = [
+        {**item, "item_id": item_id} if isinstance(item, Mapping) else item
+        for item_id, item in zip(mint_item_ids(len(items)), items)
+    ]
+    defects = _inventory_checker(require_correction=True)({"items": projected})
+    if not any(
+        isinstance(item, Mapping) and item.get("kind") == "misconception"
+        for item in items
+    ):
+        defects.append("named concept has no misconception with a paired correction")
+    for position, item in enumerate(items):
+        if isinstance(item, Mapping):
+            for field in ("evidence", "rationale"):
+                if not _normal(item.get(field)):
+                    defects.append(f"coverage item {position + 1} has empty {field}")
+    return defects
+
+
+def complete_concept_coverage(
+    env: Mapping[str, Any],
+    analysis: dict[str, Any],
+    concepts: list[dict[str, Any]],
+    evidence: Mapping[str, Any],
+    *,
+    provider: kernel.Provider,
+    critic: kernel.Critic | None,
+    store: kernel.DecisionStore,
+    fixer: kernel.Provider | None,
+    pre: bool = False,
+    qids: list[str] | None = None,
+    rules_suffix: str = "",
+) -> dict[str, Any]:
+    """Fill mechanically uncovered concept IDs with recorded API decisions.
+
+    V1 and unstamped runs return untouched. The chapter inventory and its
+    allotment stage are retained; this additive seam only authors for normal
+    concepts without an allotted misconception. No item is copied, recast or
+    moved to satisfy coverage. Pre receives its own complete capture/map
+    evidence and retains its no-extraction boundary.
+    """
+    if not analysis_correction_policy.covers_every_concept(env):
+        return analysis
+    from . import premap as premap_mod
+    from .. import prelearning_capture_policy
+
+    id_field = "pre_concept_id" if pre else "concept_id"
+    kind = "prelearn.analyse.coverage" if pre else "analyse.coverage"
+    covered = {
+        analysis["allotments"].get(str(item.get("item_id") or ""))
+        for item in analysis["inventory"]
+        if item.get("kind") == "misconception"
+    }
+    targets = [concept for concept in concepts if concept[id_field] not in covered]
+    if not targets:
+        return analysis
+
+    def decide_target(concept: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        payload = {
+            "stage": kind,
+            **analysis_correction_policy.fields(env),
+            **(prelearning_capture_policy.boundary_fields(env) if pre else {}),
+            "rules": analysis_correction_policy.COVERAGE_AUTHOR_INSTRUCTION + rules_suffix,
+            "chapter": premap_mod.chapter_calibration(env),
+            "target_concept": concept,
+            "settled_concepts": concepts,
+            "evidence": dict(evidence),
+            "existing_analysis": {
+                field: analysis[field]
+                for field in ("inventory", "allotments", "rationales")
+            },
+        }
+        if pre:
+            premap_mod._refuse_source_qids(
+                payload, list(qids or []), where="the Pre analysis coverage payload"
+            )
+        decide = kernel.decide if pre else decide_with_visual_evidence
+        prompt_digest = hashlib.sha256((
+            analysis_correction_policy.COVERAGE_AUTHOR_INSTRUCTION + "\n"
+            + analysis_correction_policy.COVERAGE_CRITIC_INSTRUCTION
+            + prelearning_capture_policy.boundary_instruction(payload)
+        ).encode("utf-8")).hexdigest()
+        decision = decide(
+            kind=kind,
+            unit_id=concept[id_field],
+            envelope_sha256=str(env.get("envelope_sha256") or ""),
+            payload=payload,
+            provider=provider,
+            checker=_coverage_checker,
+            critic=critic,
+            store=store,
+            policy_version=(
+                "analysis-coverage;prompts:" + prompt_digest
+                + analysis_correction_policy.suffix(env)
+            ),
+            fixer=fixer,
+        )
+        return concept[id_field], decision
+
+    # Wait for every sibling before mutating the snapshot carried in each
+    # request, so thread scheduling cannot change a decision's source/key.
+    decisions = list(kernel.parallel_map_in_order(
+        targets, decide_target, max_workers=config.phase3_decision_workers(),
+    ))
+    mint = mint_item_ids
+    if pre:
+        from . import preanalyse
+
+        mint = preanalyse.mint_item_ids
+    for concept_id, decision in decisions:
+        for authored in decision["response"]["items"]:
+            item_id = mint(len(analysis["inventory"]) + 1)[-1]
+            item = {
+                "item_id": item_id,
+                **{field: _normal(authored.get(field)) for field in (
+                    "kind", "text", "correction", "evidence", "rationale",
+                )},
+            }
+            analysis["inventory"].append(item)
+            analysis["allotments"][item_id] = concept_id
+            analysis["rationales"][item_id] = item["rationale"]
+            flags = list(decision.get("review_flags") or [])
+            if flags:
+                analysis["review_flags"][item_id] = flags
+    progress.log(
+        f"{'Pre-Learning a' if pre else 'A'}nalysis: model-authored misconception "
+        f"and correction coverage completed for {len(targets)} concept(s).",
+        level="success",
+    )
+    return analysis
 
 
 def analyse(
@@ -331,6 +495,7 @@ def analyse(
     *,
     provider: kernel.Provider | None = None,
     allot_provider: kernel.Provider | None = None,
+    coverage_provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
@@ -341,8 +506,9 @@ def analyse(
     will resolve against (the positional concept-id mint is shared with
     place.py). Returns ``{"inventory": [items], "allotments":
     {item_id: concept_id}, "rationales": {item_id: rationale},
-    "review_flags": {item_id: [flags]}}``. An empty inventory (a thin
-    chapter) returns empty allotments — that is legal, never padded.
+    "review_flags": {item_id: [flags]}}``. Legacy/v1 empty inventories return
+    empty allotments. V2 completes ordinary-concept coverage through recorded
+    model authorship and advisory review, without canned text or moving items.
     """
     from . import fixer as fixer_mod
     from . import place as place_mod
@@ -353,9 +519,11 @@ def analyse(
         envelope_mod.require_live_api()
         provider = _live_build
         allot_provider = allot_provider or _live_allot
+        coverage_provider = coverage_provider or _live_coverage
         critic = critic if critic is not None else _live_critic
         fixer = fixer or fixer_mod.live_fixer
     allot_provider = allot_provider or provider
+    coverage_provider = coverage_provider or provider
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     from . import prompts as prompts_mod
@@ -365,6 +533,18 @@ def analyse(
     # ---- 2.4 Build: one decision over chapter-wide evidence ----------
     evidence = build_evidence(env)
     correction = analysis_correction_policy.fields(env)
+    concept_ids = place_mod.mint_concept_ids(list(rows))
+    concepts_payload = [
+        {
+            "concept_id": concept_id,
+            "topic_id": str(row.get("_semantic_topic_id") or ""),
+            "concept_title": _normal(row.get("concept_title")),
+            "parent_concept": _normal(row.get("parent_concept")),
+            "description": _description_of(row.get("concept_details")),
+        }
+        for concept_id, row in zip(concept_ids, rows)
+        if not cr.is_culmination(_normal(row.get("concept_title")))
+    ]
     build_payload = {
         "stage": "analyse.inventory",
         **correction,
@@ -448,7 +628,7 @@ def analyse(
         "chapter is never padded)."
     )
     if not inventory:
-        return {
+        return complete_concept_coverage(env, {
             "inventory": [],
             "allotments": {},
             "rationales": {},
@@ -457,24 +637,13 @@ def analyse(
             # is no item ID to attach it to. Preserve that chapter-scope
             # evidence; an empty author's list never erases its review.
             **({"inventory_review_flags": build_flags} if build_flags else {}),
-        }
+        }, concepts_payload, evidence, provider=coverage_provider,
+            critic=critic, store=store, fixer=fixer, rules_suffix=rules_suffix)
 
     # ---- 4.3 Allot: every item to exactly one settled concept --------
     # Evidence is each concept's Description ONLY (place.py doctrine);
     # culmination recaps never receive an item (§5: the section exists
     # only on concepts allotted from the inventory).
-    concept_ids = place_mod.mint_concept_ids(list(rows))
-    concepts_payload = [
-        {
-            "concept_id": concept_id,
-            "topic_id": str(row.get("_semantic_topic_id") or ""),
-            "concept_title": _normal(row.get("concept_title")),
-            "parent_concept": _normal(row.get("parent_concept")),
-            "description": _description_of(row.get("concept_details")),
-        }
-        for concept_id, row in zip(concept_ids, rows)
-        if not cr.is_culmination(_normal(row.get("concept_title")))
-    ]
     known_concept_ids = {row["concept_id"] for row in concepts_payload}
 
     allotments: dict[str, str] = {}
@@ -560,9 +729,10 @@ def analyse(
         "one concept (R4).",
         level="success",
     )
-    return {
+    return complete_concept_coverage(env, {
         "inventory": inventory,
         "allotments": allotments,
         "rationales": rationales,
         "review_flags": review_flags,
-    }
+    }, concepts_payload, evidence, provider=coverage_provider,
+        critic=critic, store=store, fixer=fixer, rules_suffix=rules_suffix)
