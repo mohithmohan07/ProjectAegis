@@ -40,7 +40,7 @@ function artifact(
   );
 }
 
-function lineText(event: StreamEvent): string {
+export function lineText(event: StreamEvent): string {
   switch (event.type) {
     case "log":
       return event.message;
@@ -52,8 +52,30 @@ function lineText(event: StreamEvent): string {
         : `${Math.round(event.value * 100)}%`;
     case "error":
       return `Error: ${event.message}`;
-    case "result":
-      return "Run finished.";
+    case "result": {
+      const result = event.data && typeof event.data === "object" && !Array.isArray(event.data)
+        ? event.data as Record<string, unknown> : {};
+      if (result.waiting === true) return "Waiting — saved work will resume automatically.";
+      const incomplete = result.run_incomplete as Record<string, unknown> | undefined;
+      if (incomplete) {
+        if (incomplete.recovery_action === "restore_source_evidence") {
+          return "Run stopped incomplete — restore and verify source evidence before retrying.";
+        }
+        if (incomplete.recovery_action === "repair_source_markup") {
+          return "Run stopped incomplete — source markup repair is required before retrying.";
+        }
+        return incomplete.resume_allowed === false
+          ? "Run stopped incomplete — this checkpoint cannot resume. Follow the recorded recovery action."
+          : "Run stopped incomplete — saved work is retained. Follow the recorded recovery action.";
+      }
+      const review = (result.concept_review ?? result.review_workflow) as Record<string, unknown> | undefined;
+      if (review?.status === "master_failed") return "Master generation stopped incomplete.";
+      if (review?.status === "pending_review") return "Concept files are ready for review.";
+      if (result.status === "awaiting_decision") return "Run paused — a source decision is required.";
+      if (result.all_four_outputs_ready === true) return "Run completed — all four outputs are ready.";
+      if (result.all_four_outputs_ready === false) return "Run stopped incomplete — some outputs are unavailable.";
+      return "Step ended. See the chapter status for its outcome.";
+    }
     default:
       return "";
   }

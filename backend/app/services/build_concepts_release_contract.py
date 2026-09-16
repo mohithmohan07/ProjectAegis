@@ -437,6 +437,11 @@ def _record_master_failure(
             release.record_assessment_lane_unavailable(
                 db, job, lane=lane, error=error,
             )
+            from . import failure_reports
+            failure_reports.record_failure(
+                db, job_id, error, origin="master_lane", lane=lane,
+                failure_code="master_lane_unavailable",
+            )
     except Exception:
         # The underlying recorder is deliberately non-raising. This second
         # ring preserves the original failure even when the full volume also
@@ -1035,10 +1040,7 @@ def _run_generation_release(
         ],
     }
     if isinstance(incomplete, Mapping):
-        if incomplete.get("resume_allowed") is False:
-            done_label = "Incomplete — new upload and conversion required"
-        else:
-            done_label = "Incomplete — resume from the saved checkpoint"
+        done_label = _incomplete_done_label(incomplete)
     elif all_four_ready:
         done_label = "Done — all four outputs ready"
     else:
@@ -1634,6 +1636,17 @@ def build_review_masters(
     }
 
 
+def _incomplete_done_label(incomplete: Mapping[str, Any]) -> str:
+    action = str(incomplete.get("recovery_action") or "")
+    if action == "restore_source_evidence":
+        return "Incomplete — restore and verify source evidence before retrying"
+    if action == "repair_source_markup":
+        return "Incomplete — source markup repair required before retrying"
+    if incomplete.get("resume_allowed") is False:
+        return "Incomplete — new upload and conversion required"
+    return "Incomplete — resume from the saved checkpoint"
+
+
 def _mark_run_incomplete(
     staged: dict[str, Any], exc: Exception,
 ) -> dict[str, Any]:
@@ -1653,6 +1666,7 @@ def _mark_run_incomplete(
         getattr(exc, "recovery_action", "resume_checkpoint") or ""
     )
     recovery_message = str(getattr(exc, "recovery_message", "") or "")
+    automatic_retry_allowed = getattr(exc, "automatic_retry_allowed", resume_allowed) is not False
     prefix = (
         "Generation did NOT complete: "
         f"{type(exc).__name__}: {exc}. The rows already produced were "
@@ -1660,12 +1674,11 @@ def _mark_run_incomplete(
         "are incomplete. "
     )
     if resume_allowed:
-        message = (
-            prefix
-            + "Resume from the saved checkpoint to finish the remaining "
+        message = prefix + (recovery_message or (
+            "Resume from the saved checkpoint to finish the remaining "
             "outputs (the Pre-Learning lane included)."
-        )
-        resume_message = (
+        ))
+        resume_message = recovery_message or (
             "Re-run generation: it resumes from the saved checkpoint, "
             "replays finished work from the decision store, and completes "
             "the remaining outputs."
@@ -1682,6 +1695,8 @@ def _mark_run_incomplete(
         "error": f"{type(exc).__name__}: {exc}",
         "message": message,
         "resume_allowed": resume_allowed,
+        "automatic_retry_allowed": automatic_retry_allowed,
+        "failure_code": str(getattr(exc, "failure_code", "run_incomplete") or "run_incomplete"),
         "recovery_action": recovery_action,
         "recovery": recovery_message,
     }

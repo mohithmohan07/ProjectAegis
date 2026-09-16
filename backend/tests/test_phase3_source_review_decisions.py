@@ -1281,6 +1281,91 @@ def test_ready_source_checkpoint_reuses_graph_and_rejects_pdf_drift(
         )
 
 
+def _persist_historical_review(tmp_path, monkeypatch):
+    source, canonical, graph, pages = _verified_graph_and_pages()
+    source_path = tmp_path / "review.pdf"
+    source_path.write_bytes(b"%PDF-same-original")
+    pdf_sha = phase3.page_acsd._pdf_sha256(source_path)
+    pages["pdf_sha256"] = graph["vision_evidence"]["pdf_sha256"] = pdf_sha
+    pages["compiler_version"] = "historical-reader"
+    pages["ingestion_contract_version"] = "historical-ingestion"
+    metadata = copy.deepcopy(graph["metadata"])
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(phase3, "_diagnose_source_review_via_openai", _diagnostic)
+    with pytest.raises(semantic_recovery.HumanDecisionRequired) as paused:
+        phase3._source_review_graph_or_raise(
+            graph, canonical=canonical, page_bundle=pages, source_path=None)
+    pending = paused.value.pending_decision
+    target_id = next(row["target_id"] for row in pending["options"]
+                     if row["choice"] == "accept_recommended")
+    with phase3.human_source_resolution_context([{
+        **copy.deepcopy(pending), "choice": "accept_recommended", "target_id": target_id,
+    }]):
+        ready = phase3._source_review_graph_or_raise(
+            graph, canonical=canonical, page_bundle=pages, source_path=None)
+    phase3.write_artifacts(
+        tmp_path, graph=ready, report=phase3._updated_graph_report(ready),
+        semantic_source=phase3.render_semantic_source(ready, canonical), page_bundle=pages)
+    monkeypatch.setattr(phase3.page_acsd, "extract_pdf_to_page_acsd",
+                        lambda *_a, **_kw: pytest.fail("saved paid evidence must not be re-extracted"))
+    monkeypatch.setattr(phase3, "_classify_hierarchy_via_openai",
+                        lambda *_a, **_kw: pytest.fail("paid hierarchy must remain reusable"))
+    return source, canonical, ready, pages, metadata, source_path
+
+
+@pytest.mark.parametrize("checkpoint_copy", [True, False])
+def test_historical_reader_evidence_is_reused_without_changing_paid_identity(
+    tmp_path, monkeypatch, checkpoint_copy,
+):
+    source, canonical, ready, pages, metadata, source_path = _persist_historical_review(tmp_path, monkeypatch)
+    original_files = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    # A generation deployment may disable fresh extraction; that does not
+    # invalidate evidence already bought and reviewed under this same PDF.
+    monkeypatch.setattr(phase3, "vision_enabled", lambda: False)
+    restored = phase3.prepare_generation_graph(
+        canonical=canonical, source_text=source, metadata=metadata,
+        source_path=source_path, artifact_dir=tmp_path,
+        resume_review_graph=copy.deepcopy(ready) if checkpoint_copy else None)
+    assert restored == ready
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == original_files
+
+
+@pytest.mark.parametrize("drift,reason", [
+    ("pdf", "original_pdf_changed"),
+    ("missing_pdf", "original_pdf_missing"),
+    ("missing_pages", "saved_page_evidence_missing"),
+    ("context", "semantic_context_changed"),
+    ("source", "source_contract_changed"),
+    ("page_text", "saved_review_seal_invalid"),
+])
+def test_saved_review_refuses_exact_drift_before_reextracting_or_overwriting(
+    tmp_path, monkeypatch, drift, reason,
+):
+    source, canonical, ready, pages, metadata, source_path = _persist_historical_review(tmp_path, monkeypatch)
+    if drift == "pdf":
+        source_path.write_bytes(b"%PDF-actually-different")
+    elif drift == "missing_pdf":
+        source_path.unlink()
+    elif drift == "missing_pages":
+        (tmp_path / phase3.VISION_ACSD_FILENAME).unlink()
+    elif drift == "context":
+        metadata["chapter_title"] = "Another chapter"
+    elif drift == "source":
+        canonical["document"]["source_sha256"] = "f" * 64
+    elif drift == "page_text":
+        pages["pages"][0]["blocks"][0]["text"] = "Different evidence"
+        (tmp_path / phase3.VISION_ACSD_FILENAME).write_text(json.dumps(pages))
+    original_files = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    with pytest.raises(phase3.SourceEvidenceMismatch) as refused:
+        phase3.prepare_generation_graph(
+            canonical=canonical, source_text=source, metadata=metadata,
+            source_path=source_path, artifact_dir=tmp_path,
+            resume_review_graph=copy.deepcopy(ready))
+    assert refused.value.reason_code == reason
+    assert refused.value.evidence_identity["reason"] == reason
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == original_files
+
+
 def test_ready_cached_graph_without_override_rejects_pdf_drift_before_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

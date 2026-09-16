@@ -597,6 +597,9 @@ def persist_current_generation_log(
     job.generation_log = events[-1200:]
     db.commit()
     db.refresh(job)
+    if error is not None:
+        from . import failure_reports
+        failure_reports.record_failure(db, job_id, error, origin="upload")
     return list(job.generation_log or [])
 
 
@@ -698,6 +701,9 @@ def run_with_openai_usage(
                     db, job_id, error=exc, owner_sub=owner_sub)
             except Exception:  # pragma: no cover - preserve the generation error
                 db.rollback()
+            if not getattr(exc, "_aegis_failure_report_id", None):
+                from . import failure_reports
+                failure_reports.record_failure(db, job_id, exc, origin="upload")
             try:
                 from . import run_notifications
                 job = get_job(db, job_id, owner_sub=owner_sub)

@@ -21,6 +21,17 @@ _ACTIVE_STATUSES = {"processing", "master", "waiting"}
 _LIVE_TASK_STATES = {"queued", "leased", "blocked"}
 
 
+class DeploymentIdentityError(RuntimeError):
+    """Fail verification while retaining the complete observational report."""
+
+    def __init__(self, report: dict) -> None:
+        self.report = report
+        super().__init__(
+            "Previously active jobs changed run identity: "
+            + str(report["changed_run_identity_job_ids"])
+        )
+
+
 def _mapping(raw) -> dict:
     value = json.loads(raw or "{}")
     return value if isinstance(value, dict) else {}
@@ -146,11 +157,17 @@ def snapshot(root: Path, revision: str, *, after: bool = False) -> dict:
             changed = [job_id for job_id in prior["active_job_ids"]
                        if prior.get("active_jobs", {}).get(str(job_id), {}).get("run_id")
                        and prior["active_jobs"][str(job_id)]["run_id"] != jobs[job_id]["run_id"]]
-            return {"phase": "after", "revision": revision, "release_verified": True,
-                    "preserved_active_job_count": len(prior["active_job_ids"]),
-                    "changed_run_identity_job_ids": changed, "current_jobs": current,
-                    "queue_states": counts,
-                    "email_sender_configured": bool(os.environ.get("AEGIS_SMTP_HOST") and os.environ.get("AEGIS_NOTIFICATION_FROM"))}
+            report = {"phase": "after", "revision": revision, "release_verified": True,
+                      "preserved_active_job_count": len(prior["active_job_ids"]) - len(changed),
+                      "changed_run_identity_job_ids": changed, "current_jobs": current,
+                      "queue_states": counts,
+                      "email_sender_configured": bool(os.environ.get("AEGIS_SMTP_HOST") and os.environ.get("AEGIS_NOTIFICATION_FROM"))}
+            if changed:
+                # Reaching the new image is not proof that its migration and
+                # recovery preserved an existing run. Never roll back live work
+                # here; fail the workflow and retain the diagnostic for review.
+                raise DeploymentIdentityError(report)
+            return report
         # page_count includes committed WAL pages not reflected in the main
         # file's stat size, so a busy WAL database cannot understate the budget.
         size = db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0]
@@ -192,11 +209,22 @@ def snapshot(root: Path, revision: str, *, after: bool = False) -> dict:
                 "unbound_live_task_count": len(tasks.get(None, [])), "backup_verified": True}
 
 
-if __name__ == "__main__":
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("revision")
     parser.add_argument("--after", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.after:
         wait_for_release(args.revision)
-    print(json.dumps(snapshot(Path(os.environ.get("AEGIS_DATA_DIR", "/data")), args.revision, after=args.after), sort_keys=True))
+    try:
+        report = snapshot(Path(os.environ.get("AEGIS_DATA_DIR", "/data")), args.revision, after=args.after)
+    except DeploymentIdentityError as exc:
+        # Actions needs both a failed gate and the recovery observations that
+        # explain it. Printing the report does not convert the refusal to success.
+        print(json.dumps(exc.report, sort_keys=True), flush=True)
+        raise SystemExit(1) from None
+    print(json.dumps(report, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

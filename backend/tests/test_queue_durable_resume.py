@@ -163,6 +163,60 @@ def test_terminal_batch_failure_does_not_automatically_purchase_another_attempt(
     assert waiting["refund_attempt"]
 
 
+@pytest.mark.parametrize("kind,action,code", [
+    ("evidence", "restore_source_evidence", "source_evidence_mismatch"),
+    ("markup", "repair_source_markup", "source_canonical_gate"),
+])
+def test_source_integrity_stops_auto_retry_but_same_run_can_resume_after_repair(
+    db, queued, monkeypatch, kind, action, code,
+):
+    from app.services import build_concepts_release_contract as contract
+    from app.services import generation_recovery
+    from app.services.canonical_source_phase3 import SourceEvidenceMismatch
+    from app.services.canonical_source_phase221_fallback import CanonicalSourceGateError
+
+    chapter, job, row, task = queued
+    failure = (
+        SourceEvidenceMismatch("original_pdf_changed", graph={}, canonical={}, metadata={})
+        if kind == "evidence"
+        else CanonicalSourceGateError("invalid markup", [{"code": "rich_text"}])
+    )
+    original_binding = (task.id, task.job_id, task.cohort_id)
+    staged = contract._mark_run_incomplete({"outputs": []}, failure)
+    marker = staged["run_incomplete"]
+    assert marker["resume_allowed"] is True
+    assert marker["automatic_retry_allowed"] is False
+    assert marker["recovery_action"] == action
+    assert marker["failure_code"] == code
+    assert marker["recovery"] == marker["resume"] == failure.recovery_message
+    assert failure.recovery_message in marker["message"]
+    assert "Re-run generation" not in marker["message"]
+    assert "before retrying" in contract._incomplete_done_label(marker)
+    assert generation_recovery.blocked_recovery(job) is None
+
+    direct = chapter_queue_worker.classify_exception(failure)
+    wrapped = chapter_queue_worker._after_generation(db, job.id, staged)
+    assert direct == wrapped == {
+        "state": "blocked", "blocked_kind": "source_integrity",
+        "failure_code": code, "error": failure.recovery_message,
+    }
+    monkeypatch.setattr(chapter_queue_worker, "_record_failure_outcome", lambda *_a, **_kw: None)
+    chapter_queue.claim(db, task.id)
+    worker = chapter_queue_worker.ChapterQueueWorker(SessionLocal)
+    worker._settle(db, task.id, wrapped)
+    db.refresh(task)
+    assert task.state == "blocked"
+    assert task.blocked_kind == "source_integrity"
+    assert task.attempt == 1
+    assert chapter_queue.claim(db, task.id) is None
+    # After repairing the matching source, an explicit retry keeps the exact
+    # task/run/cohort. It is not a permanently non-resumable generation verdict.
+    assert chapter_queue.retry_one(db, chapter.id)["verdict"] == "queued"
+    db.refresh(task)
+    assert (task.id, task.job_id, task.cohort_id) == original_binding
+    assert task.state == "queued"
+
+
 def test_requeued_progress_is_saved_history_not_a_running_bar(db, queued):
     from app.services import chapter_batches
     chapter, job, row, task = queued

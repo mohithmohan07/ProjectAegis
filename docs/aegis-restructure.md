@@ -5108,3 +5108,19 @@ restart. No deployment resets source conversion, accepted review files, sealed
 output or model decision identities. New output fixes are generation-quality v5;
 old stamped policies remain replayable. See
 [implementation and operations](durable-batch-rollout-2026-09-16.md).
+
+## Q76 — decided — generation failure evidence and daily safe repairs
+
+**Owner, 16 September 2026:** fix repeatable stuck-generation failures; preserve
+accurate failure logs for daily investigation, repository fixes and deployment;
+do not disrupt running Batch API work. The owner chose 02:00 India time.
+
+Keep exact source/coverage gates. Correct mechanical rendering and identity
+defects, preserve settled work, and expose an actionable cause instead of a
+generic instruction to retry the same unusable checkpoint. Failure evidence is
+durable on the server. Because the repository is public, only strictly
+allowlisted machine diagnostics are exported to its separate diagnostics branch.
+The nightly task may prepare, test, merge and deploy scoped corrective PRs after
+the required checks; it cannot change semantic policy, reset sources/checkpoints,
+cancel/recreate batches or silently switch pricing. Full operational details:
+[nightly maintenance](nightly-maintenance.md).

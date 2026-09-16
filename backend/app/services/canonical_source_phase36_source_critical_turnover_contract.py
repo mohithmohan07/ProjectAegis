@@ -208,7 +208,18 @@ def _replace_job_source_from_pdf(
             "verified GPT PDF-to-ACSD turnover returned no canonical replacement"
         )
 
-    removed_caches = _purge_source_dependent_semantic_caches(artifact_dir)
+    # Reconstruction reuses independently verified paid page evidence. A
+    # successful replay can therefore return the SAME source: refreshing its
+    # canonical display artifacts is not a new semantic source contract and
+    # must not erase accepted decisions, review boundaries or checkpoints.
+    if replacement_mmd == previous_mmd:
+        progress.log(
+            "Verified PDF evidence produced the same source text. Canonical "
+            "display artifacts were refreshed; saved semantic decisions and "
+            "generation checkpoints remain intact.",
+        )
+        return canonical
+
     job.mmd_text = replacement_mmd
     job.question_inventory = {}
     job.generation_checkpoint = {}
@@ -232,6 +243,10 @@ def _replace_job_source_from_pdf(
         job.status = previous_status
         job.detail = previous_detail
         raise
+
+    # A failed database commit must leave the old source's accepted artifacts
+    # available. Only retire them after the replacement is durably adopted.
+    removed_caches = _purge_source_dependent_semantic_caches(artifact_dir)
 
     marker = {
         "version": _TURNOVER_VERSION,
@@ -299,6 +314,11 @@ def _prepare_job_context_with_turnover(
                 issues=issues,
                 original_error=source_error,
             )
+        except fallback.CanonicalSourceGateError:
+            # The queue consumes this typed error's recovery policy and full
+            # diagnostics. Wrapping it would turn a persistent source defect
+            # into a generic retryable failure and replay the same turnover.
+            raise
         except Exception as turnover_error:
             raise ValueError(
                 "Automatic GPT PDF source turnover failed after the canonical "

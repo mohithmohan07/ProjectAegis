@@ -266,5 +266,7 @@ def normalize_final_records(
     # Assemble's audit lane. A split here must rewind to the authoritative Host
     # owner decision instead of being normalized into a publishable payload.
     generation.cr.assert_single_concept_type_hosts(cleaned)
-    cleaned = generation.cr.renumber_types_continuously(cleaned)
+    cleaned = generation.cr.renumber_types_continuously(
+        cleaned, source_examples=generation._inventory_source_examples(inventory),
+        source_key=generation._inventory_coverage_key)
     return generation.cv.ensure_valid_learner_analysis(cleaned)

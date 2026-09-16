@@ -46,6 +46,26 @@ def test_pending_deployment_does_not_email_failure(store):
     mail.queue_task_result(db, task, state='queued', error='deployment')
     assert db.query(models.RunNotification).count() == 0
 
+def test_source_integrity_stop_notifies_starter_without_sending_private_evidence(store):
+    from app.services import chapter_queue
+    db, factory, job, task = store
+    chapter_queue.finish(db, task.id, state='blocked', blocked_kind='source_integrity',
+                         failure_code='source_evidence_mismatch', error='private PDF evidence')
+    db.refresh(task)
+    item = db.query(models.RunNotification).one()
+    assert task.state == 'blocked' and item.recipient == 'starter@example.test'
+    assert 'needs source repair' in item.subject
+    assert 'private PDF evidence' not in item.body
+    mail.queue_task_result(db, task, state='blocked'); db.commit()
+    assert db.query(models.RunNotification).count() == 1
+
+@pytest.mark.parametrize('kind', ['source_review', 'storage_capacity', 'batch_wait', ''])
+def test_other_pauses_do_not_send_source_failure_email(store, kind):
+    db, factory, job, task = store
+    task.blocked_kind = kind
+    mail.queue_task_result(db, task, state='blocked')
+    assert db.query(models.RunNotification).count() == 0
+
 def test_missing_sender_keeps_notification_pending(store, monkeypatch):
     db, factory, job, task = store
     mail.queue_task_result(db, task, state='failed', error='secret provider payload'); db.commit()

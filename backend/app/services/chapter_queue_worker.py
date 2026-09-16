@@ -477,6 +477,7 @@ class ChapterQueueWorker:
             self._note_job(task_id, task, db)
             verdict = chapter_queue.reconcile_before_dispatch(db, task)
             if verdict is not None:
+                _record_failure_outcome(db, task, verdict)
                 chapter_queue.finish(
                     db, task_id, state=verdict["state"],
                     failure_code=verdict.get("failure_code", ""),
@@ -502,7 +503,10 @@ class ChapterQueueWorker:
                 # settling the task is the one write that must still land —
                 # otherwise the row stays leased and looks busy forever.
                 db.rollback()
-                self._settle(db, task_id, classify_exception(exc))
+                outcome = classify_exception(exc)
+                _record_failure_outcome(db, task, outcome, error=exc)
+                outcome["_failure_observed"] = True
+                self._settle(db, task_id, outcome)
                 _schedule_checkpoint_backup(db, task)
             except Exception:  # noqa: BLE001
                 log.error(
@@ -539,6 +543,8 @@ class ChapterQueueWorker:
 
     def _settle(self, db, task_id: int, outcome: dict[str, Any]) -> None:
         state = str(outcome.get("state") or "failed")
+        if not outcome.get("_failure_observed"):
+            _record_failure_outcome(db, db.get(models.ChapterBatchTask, task_id), outcome)
         if state == "retry":
             task = db.get(models.ChapterBatchTask, int(task_id))
             attempts = int(task.attempt or 0) if task else 0
@@ -748,6 +754,31 @@ def _schedule_checkpoint_backup(db, task) -> None:
                   exc_info=True)
 
 
+def _record_failure_outcome(db, task, outcome, *, error=None) -> None:
+    """Capture before settlement clears the lease; waiting is not failure."""
+    try:
+        state = str(outcome.get("state") or "failed")
+        if state not in {"failed", "blocked", "retry"} or outcome.get("refund_attempt"):
+            return
+        if task is None:
+            return
+        from . import failure_reports
+        job_id = getattr(task, "job_id", None)
+        if not job_id:
+            row = db.get(models.ChapterBatchRow, task.batch_row_id)
+            job_id = getattr(row, "job_id", None)
+        disposition = state
+        if state == "retry" and int(task.attempt or 0) >= int(task.max_attempts or 0):
+            disposition = "failed"
+        failure_reports.record_failure(
+            db, job_id, error, task=task, disposition=disposition,
+            origin="queue", failure_code=str(outcome.get("failure_code") or ""),
+            message=str(outcome.get("error") or ""),
+        )
+    except Exception:
+        log.warning("chapter queue: failure evidence unavailable")
+
+
 def classify_exception(exc: BaseException) -> dict[str, Any]:
     """Turn a raised step into an outcome a person can act on.
 
@@ -763,6 +794,15 @@ def classify_exception(exc: BaseException) -> dict[str, Any]:
                 "error": str(exc)}
     if isinstance(exc, batch_broker.BatchUnavailable):
         return {"state": "failed", "failure_code": "batch_failed", "error": str(exc)}
+
+    from .canonical_source_phase3 import SourceEvidenceMismatch
+    from .canonical_source_phase221_fallback import CanonicalSourceGateError
+    if isinstance(exc, (SourceEvidenceMismatch, CanonicalSourceGateError)):
+        return {
+            "state": "blocked", "blocked_kind": "source_integrity",
+            "failure_code": exc.failure_code,
+            "error": exc.recovery_message,
+        }
 
     if isinstance(exc, uploads.JobAlreadyRunningError):
         # Another route holds the per-job lock. This was never a real try, so
@@ -982,6 +1022,12 @@ def _after_generation(db, job_id: int, result: Any) -> dict[str, Any]:
         if incomplete.get("resume_allowed") is False:
             return {
                 "state": "failed", "failure_code": "non_resumable",
+                "error": str(incomplete.get("recovery") or message),
+            }
+        if incomplete.get("automatic_retry_allowed") is False:
+            return {
+                "state": "blocked", "blocked_kind": "source_integrity",
+                "failure_code": str(incomplete.get("failure_code") or "run_incomplete"),
                 "error": str(incomplete.get("recovery") or message),
             }
         return {

@@ -18,6 +18,8 @@ canonical-looking paraphrase must be refused as firmly as a defect.
 from __future__ import annotations
 
 from pathlib import Path
+import copy
+import json
 
 import pytest
 
@@ -409,4 +411,248 @@ def test_a_critic_that_raises_is_also_a_refusal():
     assert _repair(graph, _canonical(_DEFECT), _author(), _explodes) == [
         "BLK-0001"
     ]
+    assert "source_override" not in graph["blocks"][0]
+
+
+def test_author_receives_repair_contract_not_selector_prohibition_and_can_correct_feedback():
+    requests = []
+    reviews = []
+
+    def author(packet):
+        requests.append(copy.deepcopy(packet))
+        assert "Do not write replacement text" not in packet["instruction"]
+        assert "canonical_text" in packet["instruction"]
+        assert "[Katex]" in packet["rich_text_contract"]
+        if len(requests) == 1:
+            return _author(canonical_text=_DEFECT)(packet)
+        assert packet["previous_proposal"]["canonical_text"] == _DEFECT
+        assert packet["repair_feedback"][0]["gate"] == "faithfulness"
+        assert "still refused" in packet["repair_feedback"][0]["detail"]
+        return _author()(packet)
+
+    def critic(packet, proposal):
+        reviews.append(proposal)
+        return _critic()(packet, proposal)
+
+    graph = _graph()
+    assert _repair(graph, _canonical(_DEFECT), author, critic) == []
+    assert len(requests) == 2
+    assert len(reviews) == 1
+    assert graph["blocks"][0]["source_override"]["resolved_text"] == _CLEAN
+
+
+def _two_defective_blocks():
+    canonical = _canonical(_DEFECT)
+    second = "Coal output fell by \\textbf{12} per cent."
+    canonical["blocks"].append({
+        "block_id": "BLK-0002", "order": 2, "kind": "paragraph",
+        "display_text": second, "raw_text": second,
+        "raw_sha256": phase3._sha256_text(second), "source_start": 40,
+    })
+    graph = _graph()
+    graph["blocks"].append({"block_id": "BLK-0002", "kind": "paragraph"})
+    return graph, canonical
+
+
+def test_accepted_sibling_decision_is_durable_and_replayed_after_later_refusal(tmp_path):
+    graph, canonical = _two_defective_blocks()
+    original = copy.deepcopy(canonical)
+    first_calls = []
+
+    def first_author(packet):
+        block_id = packet["canonical_block"]["block_id"]
+        first_calls.append(block_id)
+        return _author(
+            canonical_text=_CLEAN if block_id == "BLK-0001" else "Coal output collapsed.",
+        )(packet)
+
+    assert _repair(graph, canonical, first_author, _critic(), repair_cache_dir=tmp_path) == ["BLK-0002"]
+    assert all("source_override" not in block for block in graph["blocks"])
+    assert len(list((tmp_path / "rich-text-repairs").glob("*.json"))) == 1
+    assert graph["rich_text_repair_refusals"] == [{
+        "block_id": "BLK-0002", "gate": "faithfulness", "attempt": 3,
+        "rich_text_issue_codes": ["raw_latex"],
+    }]
+    resumed = _graph()
+    resumed["blocks"].append({"block_id": "BLK-0002", "kind": "paragraph"})
+    def no_paid_calls(*args):
+        pytest.fail("a restart must not repay accepted or exhausted sibling work")
+
+    assert _repair(resumed, canonical, no_paid_calls, no_paid_calls, repair_cache_dir=tmp_path) == ["BLK-0002"]
+    assert resumed["rich_text_repair_refusals"] == graph["rich_text_repair_refusals"]
+    assert resumed[phase3._RICH_TEXT_REPAIR_MEMO] == graph[phase3._RICH_TEXT_REPAIR_MEMO]
+    assert all("source_override" not in block for block in resumed["blocks"])
+    assert first_calls == ["BLK-0001", "BLK-0002", "BLK-0002", "BLK-0002"]
+    assert canonical == original
+
+
+def test_paid_sibling_receipt_survives_cooperative_suspension_before_graph_save(tmp_path):
+    from app.services import run_control
+
+    graph, canonical = _two_defective_blocks()
+    def author(packet):
+        if packet["canonical_block"]["block_id"] == "BLK-0002":
+            raise run_control.RunDeferred("deployment", reason="deployment")
+        return _author()(packet)
+
+    with pytest.raises(run_control.RunDeferred):
+        _repair(graph, canonical, author, _critic(), repair_cache_dir=tmp_path)
+    assert len(list((tmp_path / "rich-text-repairs").glob("*.json"))) == 1
+    fresh_graph, _ = _two_defective_blocks()
+    def resume(packet):
+        assert packet["canonical_block"]["block_id"] == "BLK-0002"
+        return _author(canonical_text="Coal output fell by 12 per cent.")(packet)
+    assert _repair(fresh_graph, canonical, resume, _critic(), repair_cache_dir=tmp_path) == []
+
+
+@pytest.mark.parametrize("change", ["tamper", "source", "page_evidence"])
+def test_repair_receipt_cannot_replay_for_tampered_or_different_evidence(tmp_path, change):
+    graph = _graph()
+    canonical = _canonical(_DEFECT)
+    assert _repair(graph, canonical, _author(), _critic(), repair_cache_dir=tmp_path) == []
+    bundle = _bundle()
+    if change == "tamper":
+        path = next((tmp_path / "rich-text-repairs").glob("*.json"))
+        receipt = json.loads(path.read_text())
+        receipt["proposal"]["canonical_text"] = "Invented source."
+        path.write_text(json.dumps(receipt))
+    elif change == "source":
+        canonical["blocks"][0]["raw_text"] += " "
+    else:
+        bundle["pdf_sha256"] = "different_pdf"
+    calls = []
+    def author(packet):
+        calls.append(packet)
+        return _author()(packet)
+    resumed = _graph()
+    assert phase3._repair_rich_text_blocks(
+        resumed, canonical=canonical, page_bundle=bundle,
+        source_path=Path("/nonexistent.pdf"), allow_automatic_reconciliation=True,
+        repair_provider=author, repair_critic=_critic(), repair_cache_dir=tmp_path,
+    ) == []
+    # A corrupt final receipt can be recovered from the independently verified
+    # attempt journal; changed evidence must obtain a new decision.
+    assert len(calls) == (0 if change == "tamper" else 1)
+    assert resumed["blocks"][0]["source_override"]["resolved_text"] == _CLEAN
+
+
+@pytest.mark.parametrize("failure", ["deferred", "transport"])
+def test_paid_author_draft_is_durable_before_critic_and_resumes_without_reauthor(tmp_path, failure):
+    from app.services import run_control
+
+    canonical = _canonical(_DEFECT)
+    graph = _graph()
+
+    def interrupted_critic(packet, proposal):
+        paths = list((tmp_path / "rich-text-repair-attempts").glob("*.json"))
+        assert len(paths) == 1
+        journal = json.loads(paths[0].read_text())
+        assert journal["attempts"][0]["proposal"] == proposal
+        assert "verification" not in journal["attempts"][0]
+        if failure == "deferred":
+            raise run_control.RunDeferred("deployment", reason="deployment")
+        raise RuntimeError("temporary critic outage")
+
+    if failure == "deferred":
+        with pytest.raises(run_control.RunDeferred):
+            _repair(graph, canonical, _author(), interrupted_critic, repair_cache_dir=tmp_path)
+    else:
+        assert _repair(graph, canonical, _author(), interrupted_critic, repair_cache_dir=tmp_path) == ["BLK-0001"]
+
+    def no_reauthor(packet):
+        pytest.fail("the paid author draft must survive a critic interruption")
+
+    resumed = _graph()
+    assert _repair(resumed, canonical, no_reauthor, _critic(), repair_cache_dir=tmp_path) == []
+    assert resumed["blocks"][0]["source_override"]["resolved_text"] == _CLEAN
+
+
+def test_critic_refusal_and_feedback_survive_restart_without_reverification(tmp_path):
+    from app.services import run_control
+
+    requests = []
+    reviews = []
+
+    def first_author(packet):
+        requests.append(copy.deepcopy(packet))
+        if packet["repair_attempt"] == 2:
+            raise run_control.RunDeferred("deployment", reason="deployment")
+        return _author()(packet)
+
+    def first_critic(packet, proposal):
+        reviews.append(proposal)
+        return _critic(verdict="refused", issues=["Check the original typography"])(packet, proposal)
+
+    with pytest.raises(run_control.RunDeferred):
+        _repair(_graph(), _canonical(_DEFECT), first_author, first_critic, repair_cache_dir=tmp_path)
+
+    def resumed_author(packet):
+        assert packet == requests[1]
+        assert packet["repair_attempt"] == 2
+        assert packet["repair_feedback"][0]["gate"] == "critic"
+        return _author()(packet)
+
+    def resumed_critic(packet, proposal):
+        reviews.append(proposal)
+        return _critic()(packet, proposal)
+
+    assert _repair(_graph(), _canonical(_DEFECT), resumed_author, resumed_critic, repair_cache_dir=tmp_path) == []
+    assert len(reviews) == 2
+
+
+def test_author_transport_failure_does_not_create_an_attempt_or_block_later_recovery(tmp_path):
+    def interrupted_author(packet):
+        raise RuntimeError("temporary author outage")
+
+    assert _repair(_graph(), _canonical(_DEFECT), interrupted_author, _critic(), repair_cache_dir=tmp_path) == ["BLK-0001"]
+    assert not list((tmp_path / "rich-text-repair-attempts").glob("*.json"))
+
+    def resumed_author(packet):
+        assert packet["repair_attempt"] == 1
+        return _author()(packet)
+
+    assert _repair(_graph(), _canonical(_DEFECT), resumed_author, _critic(), repair_cache_dir=tmp_path) == []
+
+
+@pytest.mark.parametrize("corruption", ["invalid_json", "context", "hash", "request"])
+def test_corrupt_same_context_attempt_journal_fails_closed_without_new_paid_calls(tmp_path, corruption):
+    from app.services import run_control
+
+    def interrupted_critic(packet, proposal):
+        raise run_control.RunDeferred("deployment", reason="deployment")
+
+    with pytest.raises(run_control.RunDeferred):
+        _repair(_graph(), _canonical(_DEFECT), _author(), interrupted_critic, repair_cache_dir=tmp_path)
+    path = next((tmp_path / "rich-text-repair-attempts").glob("*.json"))
+    if corruption == "invalid_json":
+        path.write_text("{invalid")
+    else:
+        journal = json.loads(path.read_text())
+        if corruption == "context":
+            journal["context_sha256"] = "other-source"
+        elif corruption == "hash":
+            journal["attempts"][0]["proposal"]["canonical_text"] = "Invented source."
+        else:
+            journal["attempts"][0]["request_sha256"] = "other-request"
+            journal["journal_sha256"] = phase3._sha256_json({
+                "context_sha256": journal["context_sha256"], "attempts": journal["attempts"],
+            })
+        path.write_text(json.dumps(journal))
+
+    def no_paid_calls(*args):
+        pytest.fail("a corrupt spent-attempt record must not reset the paid budget")
+
+    with pytest.raises(ValueError, match="preserved for recovery"):
+        _repair(_graph(), _canonical(_DEFECT), no_paid_calls, no_paid_calls, repair_cache_dir=tmp_path)
+
+
+@pytest.mark.parametrize("author,critic", [
+    (_author(confidence="not a score"), _critic()),
+    (_author(), lambda packet, proposal: "not an object"),
+    (_author(), _critic(confidence="not a score")),
+    (_author(suppressed=True), _critic()),
+])
+def test_malformed_repair_verdicts_are_refused_without_crashing(author, critic):
+    graph = _graph()
+    assert _repair(graph, _canonical(_DEFECT), author, critic) == ["BLK-0001"]
     assert "source_override" not in graph["blocks"][0]

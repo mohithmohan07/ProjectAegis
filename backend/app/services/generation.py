@@ -15485,7 +15485,7 @@ def _append_inventory_example_to_record(
 
 
 def _dedupe_rendered_inventory_examples(
-    records: list[dict], inventory: dict | None,
+    records: list[dict], inventory: dict | None, *, source_inventory: dict | None = None,
 ) -> tuple[list[dict], int]:
     """Keep the first Exact inventory Example; drop later duplicates."""
     expected_keys = {
@@ -15539,6 +15539,11 @@ def _dedupe_rendered_inventory_examples(
     for record in records:
         rec = dict(record)
         details = rec.get("concept_details") or ""
+        from . import rendered_source_spans
+        details, restore_source = rendered_source_spans.mask_examples(
+            details, _inventory_source_examples(source_inventory or inventory),
+            comparison_key=_inventory_coverage_key,
+        )
         sections = cr.split_sections(details)
         types_idx = next(
             (
@@ -15578,7 +15583,7 @@ def _dedupe_rendered_inventory_examples(
                 removed_carriers: list[str] = []
                 collapsed_note = ""
                 for example in examples:
-                    key = _inventory_coverage_key(example)
+                    key = _inventory_coverage_key(restore_source(example))
                     if key in expected_keys:
                         if key in seen:
                             removed += 1
@@ -15648,7 +15653,8 @@ def _dedupe_rendered_inventory_examples(
             else:
                 sections.pop(types_idx)
             rec["concept_details"] = cr.join_sections(sections)
-            cr.carry_type_origin_metadata(record, rec)
+            cr.carry_type_origin_metadata({**record, "concept_details": details}, rec)
+            rec["concept_details"] = restore_source(rec["concept_details"])
         out.append(rec)
     return out, removed
 
@@ -15709,6 +15715,7 @@ def _align_activity_examples_with_hubs(
         ordered, _removed = _dedupe_rendered_inventory_examples(
             [candidate[index] for index in order],
             {"items": [item]},
+            source_inventory=inventory,
         )
         rebuilt = [dict(record) for record in candidate]
         for position, index in enumerate(order):
@@ -15723,7 +15730,10 @@ def _align_activity_examples_with_hubs(
             "final Activity/Info Hub concept.",
             level="success",
         )
-    return cr.renumber_types_continuously(out)
+    return cr.renumber_types_continuously(
+        out, source_examples=_inventory_source_examples(inventory),
+        source_key=_inventory_coverage_key,
+    )
 
 
 def _repair_rendered_inventory_coverage(
@@ -15859,6 +15869,43 @@ def _repair_rendered_inventory_coverage(
     return out
 
 
+class RenderedInventoryCoverageError(RuntimeError):
+    """An exact coverage failure with durable source identity diagnostics."""
+
+    def __init__(self, message: str, diagnostics: dict):
+        self.coverage_diagnostics = diagnostics
+        missing = ", ".join(diagnostics["missing_qids"]) or "none"
+        duplicate = ", ".join(diagnostics["duplicate_qids"]) or "none"
+        super().__init__(f"{message}; missing QIDs: {missing}; duplicate QIDs: {duplicate}")
+
+
+def _rendered_inventory_coverage_error(message: str, *, stage: str, records: list[dict],
+                                     inventory: dict | None, defects: dict,
+                                     before: list[dict] | None = None) -> RenderedInventoryCoverageError:
+    affected = set(defects["missing"]) | set(defects["duplicate"])
+    identities = []
+    for item in (inventory or {}).get("items") or []:
+        qid = str(item.get("qid") or "").strip()
+        if qid not in affected:
+            continue
+        identities.append({
+            "qid": qid,
+            "source_kind": str(item.get("source_kind") or ""),
+            "source_label": str(item.get("source_label") or ""),
+            "expected_question_sha256": hashlib.sha256(_inventory_task_text(item).encode()).hexdigest(),
+            "recorded_owner_rows": [index for index, row in enumerate(records)
+                                    if qid in (row.get("_aegis_release_qids") or [])],
+            "rendered_rows": _rendered_inventory_example_locations(records, item),
+            "before_placement_rows": _rendered_inventory_example_locations(before, item) if before is not None else None,
+            "hub_rows": _activity_hub_locations(records, item) if item.get("_activity_origin") else [],
+        })
+    diagnostics = {"version": 1, "code": "rendered_inventory_coverage", "stage": stage,
+                   "missing_qids": list(defects["missing"]), "duplicate_qids": list(defects["duplicate"]),
+                   "source_identities": identities}
+    progress.log("Source inventory coverage diagnostics: " + json.dumps(diagnostics, sort_keys=True), level="error")
+    return RenderedInventoryCoverageError(message, diagnostics)
+
+
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
@@ -15893,11 +15940,12 @@ def _enforce_rendered_inventory_coverage(
     if defects["duplicate"]:
         out, defects = _via_fixer(out, defects)
     if defects["duplicate"]:
-        raise RuntimeError(
+        raise _rendered_inventory_coverage_error(
             "rendered Types failed exact inventory coverage: "
             f"{len(defects['missing'])} missing, "
             f"{len(defects['duplicate'])} duplicate "
-            "source question(s)"
+            "source question(s)", stage="coverage_repair", records=out,
+            inventory=inventory, defects=defects,
         )
     if defects["missing"]:
         # Last-chance force place before enforcing the exact-once contract.
@@ -15910,36 +15958,40 @@ def _enforce_rendered_inventory_coverage(
         if defects["duplicate"] or defects["missing"]:
             out, defects = _via_fixer(out, defects)
         if defects["duplicate"]:
-            raise RuntimeError(
+            raise _rendered_inventory_coverage_error(
                 "rendered Types failed exact inventory coverage: "
                 f"{len(defects['missing'])} missing, "
                 f"{len(defects['duplicate'])} duplicate "
-                "source question(s)"
+                "source question(s)", stage="coverage_repair", records=out,
+                inventory=inventory, defects=defects,
             )
         if defects["missing"]:
-            raise RuntimeError(
+            raise _rendered_inventory_coverage_error(
                 "rendered Types failed exact inventory coverage with "
                 f"{len(defects['missing'])} still-missing placeable "
                 f"source question(s): {', '.join(defects['missing'][:8])}"
                 + ("…" if len(defects["missing"]) > 8 else "")
-                + ".",
+                + ".", stage="coverage_repair", records=out,
+                inventory=inventory, defects=defects,
             )
     # Coverage may already be exact while later merge/refinement passes have
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
     # (Chapter-wide Examples stay wherever the Host pass routed them — a
     # Culmination row included; the legacy relocation pass is retired.)
+    before_placement = copy.deepcopy(out)
     out = _align_activity_examples_with_hubs(out, inventory)
     terminal_defects = _rendered_inventory_coverage_defects(out, inventory)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
         out, terminal_defects = _via_fixer(out, terminal_defects)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
-        raise RuntimeError(
+        raise _rendered_inventory_coverage_error(
             "rendered Types failed exact inventory coverage after final "
             "placement: "
             f"{len(terminal_defects['missing'])} missing, "
             f"{len(terminal_defects['duplicate'])} duplicate source "
-            "question(s)"
+            "question(s)", stage="final_placement", records=out,
+            inventory=inventory, defects=terminal_defects, before=before_placement,
         )
     return out
 
@@ -23258,7 +23310,9 @@ def concepts_from_mmd(
                     f"{len(coverage_before_resume_repair['duplicate'])} duplicate.",
                     level="success",
                 )
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 out = cv.ensure_valid_learner_analysis(out)
                 out = _canonicalize_concept_rich_text(out)
                 final_checkpoint_changed = True
@@ -23280,7 +23334,9 @@ def concepts_from_mmd(
             out = _enforce_rendered_inventory_coverage(
                 out, question_task_inventory, mined_types,
                 fixer=p3_fixer.default_provider())
-            out = cr.renumber_types_continuously(out)
+            out = cr.renumber_types_continuously(
+                out, source_examples=_inventory_source_examples(question_task_inventory),
+                source_key=_inventory_coverage_key)
             out = cv.ensure_valid_learner_analysis(out)
             out = _canonicalize_concept_rich_text(out)
             resumed_coverage_repaired = True
@@ -23314,7 +23370,9 @@ def concepts_from_mmd(
             out = _disambiguate_certified_split_type_cases(
                 out, question_task_inventory, mined_types)
             if out != before_type_heading_repair:
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 final_checkpoint_changed = True
 
             out, rich_text_repaired = _repair_final_rich_text_via_api(
@@ -23343,7 +23401,9 @@ def concepts_from_mmd(
             out = _disambiguate_certified_split_type_cases(
                 out, question_task_inventory, mined_types)
             if out != before_final_type_heading_repair:
-                out = cr.renumber_types_continuously(out)
+                out = cr.renumber_types_continuously(
+                    out, source_examples=_inventory_source_examples(question_task_inventory),
+                    source_key=_inventory_coverage_key)
                 final_checkpoint_changed = True
             before_final_reground = out
             out = _reground_drifted_final_source_claims(out)

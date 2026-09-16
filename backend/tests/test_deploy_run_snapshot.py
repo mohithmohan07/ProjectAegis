@@ -142,8 +142,9 @@ class DeploymentSnapshotTests(unittest.TestCase):
         self.assertEqual(result["preserved_active_job_count"], 3)
         self.assertEqual(result["current_jobs"]["4"]["queue_states"], ["queued"])
 
-    def test_after_reports_changed_run_identity_and_recovery_status(self):
+    def test_after_fails_changed_stable_run_identity_without_rolling_back(self):
         module.snapshot(self.root, self.revision)
+        before = self.manifest()
         self.migrated()
         with sqlite3.connect(self.db) as connection:
             connection.execute("UPDATE upload_jobs SET run_id='replacement' WHERE id=1")
@@ -151,14 +152,55 @@ class DeploymentSnapshotTests(unittest.TestCase):
                 json.dumps({"_aegis_run_recovery_request": {"status": "blocked"}}),
             ))
         with mock.patch.dict(module.os.environ, {"AEGIS_RELEASE_SHA": self.revision}):
-            result = module.snapshot(self.root, self.revision, after=True)
+            with self.assertRaisesRegex(module.DeploymentIdentityError, r"changed run identity: \[1\]") as refused:
+                module.snapshot(self.root, self.revision, after=True)
+        result = refused.exception.report
         self.assertEqual(result["changed_run_identity_job_ids"], [1])
+        self.assertEqual(result["preserved_active_job_count"], 2)
         self.assertEqual(result["current_jobs"]["3"]["recovery_status"], "blocked")
+        self.assertEqual(self.manifest(), before)
         with sqlite3.connect(self.db) as connection:
+            self.assertEqual(connection.execute("SELECT run_id FROM upload_jobs WHERE id=1").fetchone()[0], "replacement")
             connection.execute("DELETE FROM upload_jobs WHERE id=1")
         with mock.patch.dict(module.os.environ, {"AEGIS_RELEASE_SHA": self.revision}):
             with self.assertRaisesRegex(RuntimeError, "active jobs missing"):
                 module.snapshot(self.root, self.revision, after=True)
+
+    def test_after_allows_legacy_identity_initialization_and_reports_blocked_recovery(self):
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE upload_jobs SET run_id='' WHERE id=1")
+        module.snapshot(self.root, self.revision)
+        self.migrated()
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE upload_jobs SET run_id='first-stable-id' WHERE id=1")
+            connection.execute("UPDATE upload_jobs SET question_inventory=? WHERE id=3", (
+                json.dumps({"_aegis_run_recovery_request": {"status": "blocked"}}),
+            ))
+        with mock.patch.dict(module.os.environ, {"AEGIS_RELEASE_SHA": self.revision}):
+            result = module.snapshot(self.root, self.revision, after=True)
+        self.assertEqual(result["changed_run_identity_job_ids"], [])
+        self.assertEqual(result["current_jobs"]["3"]["recovery_status"], "blocked")
+
+    def test_cli_prints_structured_identity_failure_and_exits_nonzero(self):
+        module.snapshot(self.root, self.revision)
+        self.migrated()
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE upload_jobs SET run_id='replacement' WHERE id=1")
+            connection.execute("UPDATE upload_jobs SET question_inventory=? WHERE id=3", (
+                json.dumps({"_aegis_run_recovery_request": {"status": "blocked"}}),
+            ))
+        output = io.StringIO()
+        with mock.patch.dict(module.os.environ, {
+            "AEGIS_DATA_DIR": str(self.root), "AEGIS_RELEASE_SHA": self.revision,
+        }), mock.patch.object(module, "wait_for_release") as health, mock.patch("sys.stdout", output):
+            with self.assertRaises(SystemExit) as stopped:
+                module.main([self.revision, "--after"])
+        self.assertEqual(stopped.exception.code, 1)
+        health.assert_called_once_with(self.revision)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["changed_run_identity_job_ids"], [1])
+        self.assertEqual(report["preserved_active_job_count"], 2)
+        self.assertEqual(report["current_jobs"]["3"]["recovery_status"], "blocked")
 
     def test_legacy_nullable_json_is_safe_and_invalid_json_stops_preflight(self):
         with sqlite3.connect(self.db) as connection:

@@ -745,6 +745,8 @@ export interface GenerationRecovery {
   error?: string;
   message?: string;
   resume_allowed: boolean;
+  automatic_retry_allowed?: boolean;
+  failure_code?: string;
   recovery_action?: string;
   recovery?: string;
   /** Compatibility text present only for resumable failures. */

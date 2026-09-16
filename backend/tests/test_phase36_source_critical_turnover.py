@@ -271,3 +271,80 @@ def test_cache_purge_keeps_independent_pdf_page_evidence(tmp_path: Path):
     assert set(removed) == set(remove)
     assert all(not (tmp_path / name).exists() for name in remove)
     assert all((tmp_path / name).exists() for name in keep)
+
+
+def _prepare_replacement_case(tmp_path, monkeypatch, *, replacement):
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.7\n")
+    artifacts = tmp_path / "source-shadow"
+    artifacts.mkdir()
+    retained = artifacts / "source.semantic-graph.json"
+    retained.write_text('"paid accepted graph"')
+    monkeypatch.setattr(phase36, "_can_turn_over", lambda _job: (True, ""))
+    monkeypatch.setattr(uploads, "upload_file_path", lambda _job: pdf)
+    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _id: artifacts)
+    monkeypatch.setattr(fallback, "reconstruct_pdf_to_acsd", lambda *_a, **_kw: {
+        "mmd_text": replacement, "canonical": {"phase2_inventory_ready": True},
+        "reconstruction": {"status": "verified"},
+    })
+    return retained
+
+
+def test_same_source_turnover_keeps_checkpoint_inventory_and_accepted_graph(tmp_path, monkeypatch):
+    job = _job()
+    before = dict(vars(job))
+    retained = _prepare_replacement_case(tmp_path, monkeypatch, replacement=job.mmd_text)
+    db = _FakeDb()
+    result = phase36._replace_job_source_from_pdf(
+        db, job, issues=ELECTRICITY_ISSUES, original_error=ValueError("source gate"),
+    )
+    assert result["phase2_inventory_ready"]
+    assert vars(job) == before
+    assert db.commits == db.refreshes == 0
+    assert retained.read_text() == '"paid accepted graph"'
+
+
+def test_failed_source_adoption_retains_old_paid_graph_and_job_state(tmp_path, monkeypatch):
+    job = _job()
+    before = dict(vars(job))
+    retained = _prepare_replacement_case(tmp_path, monkeypatch, replacement="new verified MMD")
+    db = _FakeDb()
+    monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("commit failed")))
+    with pytest.raises(RuntimeError, match="commit failed"):
+        phase36._replace_job_source_from_pdf(
+            db, job, issues=ELECTRICITY_ISSUES, original_error=ValueError("source gate"),
+        )
+    assert vars(job) == before
+    assert db.rollbacks == 1
+    assert retained.read_text() == '"paid accepted graph"'
+
+
+def test_turnover_preserves_typed_source_gate_recovery_policy(tmp_path, monkeypatch):
+    job = _job()
+    before = dict(vars(job))
+    db = _FakeDb()
+    retained = _prepare_replacement_case(tmp_path, monkeypatch, replacement=job.mmd_text)
+    monkeypatch.setattr(phase36, "_load_source_state", lambda _job: (
+        {}, {"phase2_issues": ELECTRICITY_ISSUES}, ELECTRICITY_ISSUES,
+    ))
+    error = fallback.CanonicalSourceGateError(
+        "Cached source markup still fails the exact gate", ELECTRICITY_ISSUES,
+    )
+    def reconstruct(*_args, **_kwargs):
+        raise error
+    def prepare(*_args):
+        raise ValueError("Phase 2 source gate failed")
+    monkeypatch.setattr(fallback, "reconstruct_pdf_to_acsd", reconstruct)
+
+    with pytest.raises(fallback.CanonicalSourceGateError) as caught:
+        phase36._prepare_job_context_with_turnover(prepare, db, job)
+    assert caught.value is error
+    assert caught.value.automatic_retry_allowed is False
+    assert caught.value.resume_allowed is True
+    assert caught.value.recovery_action == "repair_source_markup"
+    assert caught.value.validation_diagnostics == {
+        "code": "source_canonical_gate", "issues": ELECTRICITY_ISSUES,
+    }
+    assert vars(job) == before
+    assert db.commits == 0
+    assert retained.read_text() == '"paid accepted graph"'

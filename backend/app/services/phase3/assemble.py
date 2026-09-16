@@ -1147,7 +1147,9 @@ def _assemble(
             generation_quality_policy.culmination_mastery_formatted(env)
         )
         out_rows = concept_refiner.refine_chapter(
-            out_rows, format_culminations=format_culminations
+            out_rows, format_culminations=format_culminations,
+            source_examples=generation._inventory_source_examples(dict(env["inventory"])),
+            source_key=generation._inventory_coverage_key,
         )
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         out_rows = generation._ensure_mastery_lines_via_api(
@@ -1165,7 +1167,10 @@ def _assemble(
             out_rows, dict(env["inventory"]), dict(env["mined_types"])
         )
         out_rows = generation._canonicalize_concept_rich_text(out_rows)
-        out_rows = concept_refiner.renumber_types_continuously(out_rows)
+        out_rows = concept_refiner.renumber_types_continuously(
+            out_rows, source_examples=generation._inventory_source_examples(dict(env["inventory"])),
+            source_key=generation._inventory_coverage_key,
+        )
         out_rows = cv.ensure_valid_learner_analysis(out_rows)
         return out_rows
 

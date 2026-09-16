@@ -373,7 +373,9 @@ def _deposit_deterministic_pipeline(
         generation_quality_policy.culmination_mastery_formatted(metadata)
     )
     out_rows = concept_refiner.refine_chapter(
-        out_rows, format_culminations=format_culminations
+        out_rows, format_culminations=format_culminations,
+        source_examples=generation._inventory_source_examples(inventory),
+        source_key=generation._inventory_coverage_key,
     )
     out_rows = cv.ensure_valid_learner_analysis(out_rows)
     out_rows = generation._ensure_mastery_lines_via_api(
@@ -389,7 +391,9 @@ def _deposit_deterministic_pipeline(
         out_rows, inventory, mined_types
     )
     out_rows = generation._canonicalize_concept_rich_text(out_rows)
-    out_rows = concept_refiner.renumber_types_continuously(out_rows)
+    out_rows = concept_refiner.renumber_types_continuously(
+        out_rows, source_examples=generation._inventory_source_examples(inventory),
+        source_key=generation._inventory_coverage_key)
     out_rows = cv.ensure_valid_learner_analysis(out_rows)
     return out_rows
 

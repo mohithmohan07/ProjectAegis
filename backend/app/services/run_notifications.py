@@ -46,7 +46,10 @@ def _recipient(job, task) -> str:
 
 
 def queue_task_result(db, task, *, state: str, error: str = "") -> None:
-    if state not in {"done", "failed"}:
+    source_blocked = (
+        state == "blocked" and getattr(task, "blocked_kind", "") == "source_integrity"
+    )
+    if state not in {"done", "failed"} and not source_blocked:
         return
     row = db.get(models.ChapterBatchRow, int(task.batch_row_id))
     job_id = int(getattr(task, "job_id", 0) or (row.job_id if row else 0) or 0)
@@ -63,11 +66,12 @@ def queue_task_result(db, task, *, state: str, error: str = "") -> None:
     title = str(getattr(chapter, "chapter_display_name", "") or
                 getattr(chapter, "chapter_title", "") or job.filename)
     stage = {"step01": "Concept files", "step02": "Master files", "publish": "Publication"}.get(task.kind, task.kind)
-    outcome = "ready for review" if state == "done" and task.kind != "publish" else (
-        "completed" if state == "done" else "failed")
+    outcome = "needs source repair" if source_blocked else (
+        "ready for review" if state == "done" and task.kind != "publish" else (
+            "completed" if state == "done" else "failed"))
     url = config.PUBLIC_BASE_URL.rstrip("/")
     lines = [f"{title}: {stage} {outcome}.", "", f"Run: {job.run_id or job.id}"]
-    if state == "failed":
+    if state == "failed" or source_blocked:
         # Avoid emailing raw provider exception payloads or document content.
         lines.append("Open Aegis for the recorded reason, saved work and recovery action.")
     elif task.kind == "step01":

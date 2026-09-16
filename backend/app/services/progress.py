@@ -500,6 +500,9 @@ def stream(
                 "message": str(exc)}, "ts": time.time(),
             })
         except Exception as exc:  # noqa: BLE001 — surface to the client stream
+            if journal_job_id and not getattr(exc, "_aegis_failure_report_id", None):
+                from . import failure_reports
+                failure_reports.record_failure_for_job(journal_job_id, exc, origin="stream")
             publish({
                 "type": "error",
                 "message": str(exc) or exc.__class__.__name__,

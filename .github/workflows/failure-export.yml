@@ -1,0 +1,64 @@
+name: Nightly failure export
+
+on:
+  schedule:
+    # 01:45 Asia/Kolkata, before the 02:00 maintenance review.
+    - cron: '15 20 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+
+# Collection never occupies or cancels a deployment slot. If an image handoff
+# interrupts SSH, collection fails honestly and the post-deploy export retries.
+concurrency:
+  group: aegis-failure-export
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Archive saved historical failures after deployment
+        if: github.event_name == 'workflow_run'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl ssh console -a projectaegis -C "python /app/scripts/export_failure_reports.py --backfill-existing"
+      - name: Collect allowlisted incident records without altering runs
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: python backend/scripts/collect_failure_reports.py --output "$RUNNER_TEMP/aegis-public-export"
+      - name: Save diagnostics on their own branch
+        env:
+          DIAGNOSTIC_BRANCH: ops/run-failures
+        run: |
+          set -euo pipefail
+          destination="$RUNNER_TEMP/aegis-diagnostics-branch"
+          if git ls-remote --exit-code --heads origin "$DIAGNOSTIC_BRANCH" > /dev/null; then
+            git fetch --no-tags origin "$DIAGNOSTIC_BRANCH"
+            git worktree add --detach "$destination" FETCH_HEAD
+          else
+            git worktree add --detach "$destination" HEAD
+            git -C "$destination" checkout --orphan "$DIAGNOSTIC_BRANCH"
+            git -C "$destination" rm -rf --quiet .
+          fi
+          cp -R "$RUNNER_TEMP/aegis-public-export/." "$destination/"
+          git -C "$destination" config user.name 'Aegis incident collector'
+          git -C "$destination" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$destination" add incidents latest.json README.md
+          if ! git -C "$destination" diff --cached --quiet; then
+            git -C "$destination" commit -m 'Record sanitized chapter failure diagnostics'
+            git -C "$destination" push origin "HEAD:refs/heads/$DIAGNOSTIC_BRANCH"
+          fi
