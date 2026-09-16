@@ -95,7 +95,7 @@ test("waits at pending review with distinct downloads and correction inputs", ()
   expect(screen.getByRole("link", { name: "Download the Pre-Learning Concept File" })).toBeDefined();
   expect(screen.getByTestId("corrected-input-post")).toBeDefined();
   expect(screen.getByTestId("corrected-input-pre")).toBeDefined();
-  expect(screen.getByRole("button", { name: "Generate Master Files" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Generate Master Files · standard rates", hidden: true })).toBeDefined();
   expect(screen.queryByText(/upload.*CMS/i)).toBeNull();
 });
 
@@ -132,6 +132,7 @@ test("only the explicit Generate Master action starts the second run", async () 
   );
 
   expect(streamMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Advanced: immediate Masters at standard API rates"));
   fireEvent.click(screen.getByTestId("generate-master"));
   await waitFor(() => expect(streamMock).toHaveBeenCalled());
   expect(apiMock.paths.masterGenerate).toHaveBeenCalledWith(55);
@@ -148,6 +149,6 @@ test("a stopped Master worker permits revised uploads and a Step 2 retry", () =>
   render(<RunConsoleProvider><ConceptReviewWorkflow job={current} onJob={vi.fn()} /></RunConsoleProvider>);
   expect(screen.getByText("Step 2 stopped · retry available")).toBeDefined();
   expect((screen.getByTestId("corrected-input-post") as HTMLInputElement).disabled).toBe(false);
-  expect((screen.getByRole("button", { name: "Generate Master Files" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "Generate Master Files · standard rates", hidden: true }) as HTMLButtonElement).disabled).toBe(false);
   expect((screen.getByTestId("corrected-input-post") as HTMLInputElement).accept).toContain(".pdf");
 });

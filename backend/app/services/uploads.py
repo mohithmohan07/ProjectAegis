@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from . import auth, generation_recovery, mmd, openai_usage, progress, run_state
+from . import auth, generation_recovery, mmd, openai_usage, progress, run_state, run_control
 
 
 _usage_job_locks: dict[int, threading.Lock] = {}
@@ -189,6 +189,21 @@ def get_shared_job(
         query = query.filter(
             models.UploadJob.learning_kind == learning_kind.strip().lower())
     job = query.first()
+    if not job:
+        # A replacement keeps earlier source jobs on the shared board. Only
+        # explicit persisted memberships grant access; filenames/owner names
+        # and chapter similarities never do.
+        historical = any(
+            int(job_id) in (previous or [])
+            for (previous,) in db.query(models.ChapterBatchRow.previous_job_ids)
+        )
+        if historical:
+            previous_query = db.query(models.UploadJob).filter(models.UploadJob.id == job_id)
+            if module:
+                previous_query = previous_query.filter(models.UploadJob.module == module)
+            if learning_kind:
+                previous_query = previous_query.filter(models.UploadJob.learning_kind == learning_kind.strip().lower())
+            job = previous_query.first()
     if not job:
         raise UploadJobNotFound("upload job not found")
     return job
@@ -650,6 +665,17 @@ def run_with_openai_usage(
                 job, require_pre=require_pre
             ):
                 result = fn()
+        except run_control.RunDeferred as exc:
+            # Deployment/provider waiting is not an author or review failure.
+            # Preserve the same run, all paid receipts and settled decisions.
+            db.rollback()
+            job = get_job(db, job_id, owner_sub=owner_sub)
+            run_state.set_for_job(job, run_state.suspend(run_state.for_job(job)))
+            job.detail = str(exc)
+            db.commit()
+            persist_current_openai_usage(db, job_id, owner_sub=owner_sub)
+            persist_current_generation_log(db, job_id, owner_sub=owner_sub)
+            raise
         except Exception as exc:
             # A failed generation transaction must not erase usage from provider
             # responses already received (and therefore potentially billed).
@@ -672,12 +698,26 @@ def run_with_openai_usage(
                     db, job_id, error=exc, owner_sub=owner_sub)
             except Exception:  # pragma: no cover - preserve the generation error
                 db.rollback()
+            try:
+                from . import run_notifications
+                job = get_job(db, job_id, owner_sub=owner_sub)
+                run_notifications.queue_direct_result(db, job, failed=True)
+                db.commit()
+            except Exception:
+                db.rollback()
             raise
 
         summary = persist_current_openai_usage(
             db, job_id, owner_sub=owner_sub)
         persist_current_generation_log(
             db, job_id, owner_sub=owner_sub)
+        try:
+            from . import run_notifications
+            job = get_job(db, job_id, owner_sub=owner_sub)
+            run_notifications.queue_direct_result(db, job)
+            db.commit()
+        except Exception:
+            db.rollback()
         if isinstance(result, dict):
             result = {**result, "openai_usage": summary}
         return result

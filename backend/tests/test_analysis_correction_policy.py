@@ -45,7 +45,9 @@ def golden_rows() -> list[dict]:
 
 def _stamped(env: dict) -> dict:
     new_env = copy.deepcopy(env)
-    new_env["metadata"][policy.KEY] = policy.VERSION
+    # These are Q68/v1 replay assertions; v2 coverage has its own regression
+    # tests and must not retroactively extend a sealed Q68 inventory.
+    new_env["metadata"][policy.KEY] = policy.VERSION_V1
     new_env["envelope_sha256"] = settle_golden.envelope_mod.seal_sha256(new_env)
     return new_env
 
@@ -213,7 +215,7 @@ def test_analyse_carries_the_correction_and_keys_the_build_to_the_policy(
         critic=recording_critic, store=kernel.DecisionStore(),
     )
     build = next(c for c in calls if c.get("stage") == "analyse.inventory")
-    assert build[policy.KEY] == policy.VERSION
+    assert build[policy.KEY] == policy.VERSION_V1
     assert (
         "never restate one as the other. " + policy.AUTHOR_INSTRUCTION + " "
     ) in build["rules"]
@@ -280,7 +282,7 @@ def test_pre_lane_build_carries_the_correction_and_keys_to_the_policy(
     build = next(
         r for r in requests if r.get("stage") == "prelearn.analyse.inventory"
     )
-    assert build[policy.KEY] == policy.VERSION
+    assert build[policy.KEY] == policy.VERSION_V1
     assert (
         "never restate one as the other. " + policy.AUTHOR_INSTRUCTION + " "
     ) in build["rules"]

@@ -6,11 +6,17 @@ Language syllabus is replicated across its four configured boards.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from zipfile import BadZipFile
 
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy.orm import Session
 
 from .. import config, models
@@ -51,6 +57,82 @@ SYLLABUS_FILES = {
     "icse": "UnitChapter_List__ICSE.xlsx",
     "ncf": "UnitChapter_List__NCF.xlsx",
 }
+
+CBSE_CATALOGUE_SOURCE = "CBSE"
+_CBSE_MANIFEST = "active-cbse-catalogue.json"
+_log = logging.getLogger(__name__)
+
+
+def _workbook_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _active_cbse_source() -> Path | None:
+    """One explicit revision, not the union of arbitrarily named uploads.
+
+    A release's supplied workbook supersedes unregistered legacy runtime
+    copies. Subsequent explicit uploads can replace it through the manifest.
+    The manifest records the bundle it superseded, so a later owner-supplied
+    bundle revision cannot be silently shadowed by an older runtime file.
+    """
+    bundled = config.BUNDLED_SYLLABUS_DIR / SYLLABUS_FILES["cbse"]
+    fallback = bundled if bundled.is_file() else None
+    manifest_path = config.SYLLABUS_DIR / _CBSE_MANIFEST
+    if not manifest_path.is_file():
+        return fallback
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (manifest.get("version") != 1
+                or manifest.get("base_revision") != (_workbook_digest(bundled) if fallback else "")):
+            return fallback
+        digest = str(manifest.get("revision") or "")
+        # This is a content-addressed filename, never an interpreted title.
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError("invalid catalogue revision digest")
+        source = (config.SYLLABUS_DIR / "catalogue_revisions" / "CBSE"
+                  / digest / SYLLABUS_FILES["cbse"])
+        if _workbook_digest(source) != digest:
+            raise ValueError("catalogue revision checksum mismatch")
+        return source
+    except (OSError, ValueError, TypeError, AttributeError):
+        _log.warning("Invalid CBSE catalogue manifest; using the supplied bundle", exc_info=True)
+        return fallback
+
+
+def activate_cbse_upload(path: Path) -> str:
+    """Register an explicitly uploaded revision after validating its rows.
+
+    The immutable workbook and atomic manifest survive restarts. Existing
+    chapter identities are reconciled separately, never inferred from names.
+    """
+    try:
+        rows = parse_workbook(path, default_board="CBSE")
+    except (BadZipFile, InvalidFileException, KeyError, ValueError, IndexError) as exc:
+        raise ValueError("The CBSE catalogue is not a readable .xlsx workbook.") from exc
+    if not rows or any(row.board != "CBSE" for row in rows):
+        raise ValueError("The CBSE catalogue must contain named CBSE chapters.")
+    if any(row.subject == "English Language" for row in rows):
+        raise ValueError("Upload shared English Language separately from the CBSE catalogue.")
+    bundled = config.BUNDLED_SYLLABUS_DIR / SYLLABUS_FILES["cbse"]
+    digest = _workbook_digest(path)
+    destination = (config.SYLLABUS_DIR / "catalogue_revisions" / "CBSE"
+                   / digest / SYLLABUS_FILES["cbse"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(path.read_bytes())
+    manifest = {
+        "version": 1, "revision": digest,
+        "base_revision": _workbook_digest(bundled) if bundled.is_file() else "",
+        "uploaded_filename": path.name,
+    }
+    manifest_path = config.SYLLABUS_DIR / _CBSE_MANIFEST
+    with NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=config.SYLLABUS_DIR,
+        prefix=f".{_CBSE_MANIFEST}.", suffix=".tmp", delete=False,
+    ) as stream:
+        stream.write(json.dumps(manifest, indent=2) + "\n")
+        temporary = Path(stream.name)
+    temporary.replace(manifest_path)
+    return digest
 
 # Owner correction, 9 September 2026 (95cbddf5 screenshot): the original
 # Grade 01 Maths workbook interchanged these unit/chapter cells. Retain that
@@ -588,11 +670,17 @@ def _resolve_file(key: str) -> Path | None:
 
 
 def _discover_workbooks() -> list[Path]:
-    """All syllabus workbooks from bundled + runtime dirs (runtime wins on clash)."""
+    """One active CBSE revision; other workbooks keep their existing precedence."""
+    active_cbse = _active_cbse_source()
     by_name: dict[str, Path] = {}
     for directory in config.syllabus_workbook_dirs():
         for path in sorted(directory.glob("*.xlsx")):
+            if active_cbse and _infer_file_options(path.name).get("default_board") == "CBSE":
+                by_name[SYLLABUS_FILES["cbse"]] = active_cbse
+                continue
             by_name[path.name] = path
+    if active_cbse:
+        by_name[SYLLABUS_FILES["cbse"]] = active_cbse
     return list(by_name.values())
 
 
@@ -684,6 +772,51 @@ def _chapter_has_content(chapter: models.Chapter, db: Session | None = None) -> 
     return False
 
 
+def _apply_cbse_catalogue(
+    db: Session, rows: list[SyllabusRow], revision: str,
+    holders: dict[str, tuple[str, str]],
+) -> dict[str, int]:
+    """Project exact supplied membership/order without touching run identity.
+
+    A renamed or consolidated title is a new chapter unless it already has
+    that exact stored identity. We keep the old row, code, sources and jobs
+    available in History, even when it has no authored topics yet.
+    """
+    desired: dict[str, tuple[SyllabusRow, int]] = {}
+    scopes = {
+        (row.board, row.grade,
+         directory.effective_subject_for_tags(row.board, row.subject))
+        for row in rows
+    }
+    for position, row in enumerate(rows, start=1):
+        code = directory.resolve_chapter_code(
+            row.board, row.grade, row.subject, row.unit, row.chapter, holders,
+        )
+        desired.setdefault(code, (row, position))
+    active = 0
+    retired = 0
+    for chapter in db.query(models.Chapter).filter_by(board="CBSE").all():
+        scope = (chapter.board, chapter.grade,
+                 directory.effective_subject_for_tags(chapter.board, chapter.subject))
+        if scope not in scopes and chapter.catalogue_source != CBSE_CATALOGUE_SOURCE:
+            continue
+        wanted = desired.get(chapter.chapter_code)
+        if wanted is not None:
+            chapter.catalogue_active = True
+            chapter.catalogue_source = CBSE_CATALOGUE_SOURCE
+            chapter.catalogue_revision = revision
+            chapter.catalogue_order = wanted[1]
+            active += 1
+        else:
+            if chapter.catalogue_active is not False:
+                retired += 1
+            chapter.catalogue_active = False
+            chapter.catalogue_source = CBSE_CATALOGUE_SOURCE
+            # Keep the last known revision/order as historical provenance.
+    db.commit()
+    return {"catalogue_active": active, "catalogue_retired": retired}
+
+
 def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
     """Make the stored directory mirror the bundled workbooks.
 
@@ -711,11 +844,16 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         }
 
     all_rows: list[SyllabusRow] = []
+    cbse_rows: list[SyllabusRow] = []
+    active_cbse = _active_cbse_source()
     loaded: list[str] = []
     for path in paths:
         opts = _infer_file_options(path.name)
         universal = opts.pop("universal_boards", None)
-        all_rows.extend(parse_workbook(path, universal_boards=universal, **opts))
+        parsed = parse_workbook(path, universal_boards=universal, **opts)
+        all_rows.extend(parsed)
+        if active_cbse and path.resolve() == active_cbse.resolve():
+            cbse_rows = [_correct_supplied_row(row) for row in parsed]
         loaded.append(path.name)
 
     # The owner's explicit corrections are applied BEFORE codes are resolved:
@@ -834,10 +972,24 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
     counts = upsert_chapters(db, all_rows, holders) if all_rows else {
         "created": 0, "skipped": 0, "total_rows": 0,
     }
+    catalogue = {}
+    if cbse_rows and active_cbse:
+        catalogue = _apply_cbse_catalogue(
+            db, cbse_rows, _workbook_digest(active_cbse), holders,
+        )
 
     if reconcile:
         for chapter in db.query(models.Chapter).all():
             if chapter.chapter_code in desired:
+                continue
+            if chapter.catalogue_source == CBSE_CATALOGUE_SOURCE:
+                # Historical catalogue rows remain addressable regardless of
+                # whether their first task has reached the topic-writing seam.
+                if _chapter_has_content(chapter, db):
+                    retained.append(
+                        f"{chapter.board} {chapter.grade} {chapter.subject}: "
+                        f"{chapter.chapter_title}"
+                    )
                 continue
             if _chapter_has_content(chapter, db):
                 retained.append(
@@ -858,6 +1010,7 @@ def refresh_syllabus(db: Session, *, prune: bool = True) -> dict:
         "pruned": pruned,
         "retained_with_content": retained,
         "contested_codes": sorted(set(contested)),
+        **catalogue,
     }
 
 

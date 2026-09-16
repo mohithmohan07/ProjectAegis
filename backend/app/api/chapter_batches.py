@@ -50,7 +50,7 @@ class PushRequest(BaseModel):
     # so their stage fan-outs land in one provider wave, at the batch price;
     # ``start_at`` is the slot the owner asked for ("12:00, 12:30, 1:00…"),
     # which is what makes them start together rather than trickle.
-    cohort: bool = False
+    cohort: bool = True
     start_at: datetime | None = None
 
 
@@ -92,6 +92,7 @@ def list_rows(
     subject: str = "",
     q: str = "",
     state: str = "",
+    catalogue: str = "active",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_db),
@@ -101,6 +102,7 @@ def list_rows(
     return chapter_batches.list_page(
         db,
         board=board, grade=grade, subject=subject, q=q, state=state,
+        catalogue=catalogue,
         page=page, page_size=page_size,
         capacity=chapter_queue_worker.capacity(),
         worker_alive=chapter_queue_worker.worker_alive(),

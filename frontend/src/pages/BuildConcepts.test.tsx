@@ -570,8 +570,9 @@ test("checkpoint recovery presents usage as one resumed cumulative file total", 
   fireEvent.click(screen.getByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   expect(await screen.findByText(
@@ -604,8 +605,9 @@ test("a non-resumable result renders as an error, never a green success", async 
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   const heading = await screen.findByText(
@@ -653,8 +655,9 @@ test("a terminal run with one missing Master is not presented as four-file succe
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   const heading = await screen.findByText(
@@ -692,8 +695,9 @@ test("a failed post-run refresh cannot re-enable a non-resumable run", async () 
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   expect(await screen.findByText(
@@ -701,7 +705,7 @@ test("a failed post-run refresh cannot re-enable a non-resumable run", async () 
   )).toBeDefined();
   expect(screen.queryByRole("button", { name: /Resume from/ })).toBeNull();
   expect(screen.queryByRole("button", {
-    name: "Parse & generate concepts",
+    name: "Generate concepts · standard rates",
   })).toBeNull();
   expect(screen.queryByText("Review and correct the output")).toBeNull();
   expect(apiMock.listConceptRevisions).not.toHaveBeenCalled();
@@ -723,7 +727,7 @@ test("a persisted non-resumable job offers no resume or generate action", async 
 
   expect(screen.queryByRole("button", { name: /Resume from/ })).toBeNull();
   expect(screen.queryByRole("button", {
-    name: "Parse & generate concepts",
+    name: "Generate concepts · standard rates",
   })).toBeNull();
   expect(streamMock).not.toHaveBeenCalled();
 });
@@ -757,15 +761,16 @@ test("refreshes a rejected 98% checkpoint to the retained 91% stage", async () =
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 98% checkpoint",
+    name: "Resume at standard rates from 98% checkpoint",
   }));
 
   expect(await screen.findByText(
     /final validation failed; prior checkpoint retained/,
   )).toBeDefined();
   expect(await screen.findByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   })).toBeDefined();
   expect(apiMock.getUploadJob).toHaveBeenCalledTimes(2);
 });
@@ -786,8 +791,9 @@ test("a successfully agent-resolved run completes without rendering a pause", as
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   expect(await screen.findByText(
@@ -823,8 +829,9 @@ test("a released run shows its output, never a chooser", async () => {
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   await screen.findByText(/Released 23 concept row/);
@@ -843,8 +850,9 @@ test("a carried semantic issue is read-only and offers no choices", async () => 
   fireEvent.click(await screen.findByRole("button", {
     name: "Select Electricity target",
   }));
+  fireEvent.click(screen.getByText("Advanced: run this source immediately at standard API rates"));
   fireEvent.click(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   }));
 
   // The issue is reported, with the reference needed to find it in the export.
@@ -871,7 +879,7 @@ test("a stale pending decision never blocks starting a run", async () => {
   }));
 
   expect(screen.getByRole("button", {
-    name: "Resume from 91% checkpoint",
+    name: "Resume at standard rates from 91% checkpoint",
   })).toBeDefined();
 });
 

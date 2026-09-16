@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .. import config
 from . import (
@@ -21,6 +22,22 @@ from . import (
     generation_repair_policy as repair,
     reviewed_file_workflow_policy as workflow,
 )
+
+
+_job_id: ContextVar[int | None] = ContextVar("aegis_routing_job_id", default=None)
+
+
+def current_job_id() -> int | None:
+    return _job_id.get()
+
+
+@contextmanager
+def _bind_job_id(job_id):
+    token = _job_id.set(int(job_id))
+    try:
+        yield
+    finally:
+        _job_id.reset(token)
 
 
 def _record_path(job):
@@ -99,6 +116,7 @@ def bind_job(job, *, require_pre: bool = False):
     profile = profile_for_job(job)
     record = json.loads(_record_path(job).read_text(encoding="utf-8"))
     with (
+        _bind_job_id(job.id),
         model_provider.bind_profile(profile),
         quality.bind_run(record.get(quality.KEY)),
         repair.bind_run(record.get(repair.KEY)),

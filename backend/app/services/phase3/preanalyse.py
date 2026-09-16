@@ -1,5 +1,10 @@
 """Pass 2.9b — Preanalyse: the PRE lane's own misconception/error inventory.
 
+The historical Q1 behavior below is replayed for legacy/v1 envelopes. The
+Corrections 2.0 v2 stamp adds API-authored misconception/correction coverage
+for ordinary Pre concepts the inventory/allotment stages leave uncovered,
+using this lane's captured prerequisite evidence and an independent critic.
+
 Q1 reaches the Pre lane (docs/aegis-restructure.md §4 Phase 2.4 + Phase
 04 4.3, §12 Q1). The retired every-concept learner-analysis writer (§10
 step 7's delete ledger — the Pre lane's old critic-gated retry loop with
@@ -146,6 +151,8 @@ def build_evidence(
     prerequisites: Mapping[str, Any],
     rows: list[Mapping[str, Any]],
     qids: list[str] | None = None,
+    *,
+    include_retained_atoms: bool = False,
 ) -> dict[str, Any]:
     """The Pre lane's own evidence: the capture, and the Pre Descriptions.
 
@@ -166,6 +173,9 @@ def build_evidence(
             "rationale": premap_mod._redact_ids(
                 _normal(row.get("rationale")), qids
             ),
+            **({"retained_atoms": premap_mod._redact_evidence_ids(
+                row.get("retained_atoms") or [], qids,
+            )} if include_retained_atoms else {}),
         }
         for row in (prerequisites or {}).get("prerequisites") or []
         if isinstance(row, Mapping)
@@ -294,6 +304,10 @@ def _allot_checker(
 
 
 def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("stage") or "").endswith(".coverage"):
+        from . import analyse as post_analyse
+
+        return post_analyse._live_coverage(payload)
     from . import prompts
     from .. import generation
 
@@ -319,6 +333,10 @@ def _live_allot(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("stage") or "").endswith(".coverage"):
+        from . import analyse as post_analyse
+
+        return post_analyse._live_coverage_call(payload, critic=True)
     from . import prompts
     from .. import generation
 
@@ -391,6 +409,7 @@ def analyse(
     rules_suffix: str = "",
     provider: kernel.Provider | None = None,
     allot_provider: kernel.Provider | None = None,
+    coverage_provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
@@ -400,10 +419,12 @@ def analyse(
     ``rows`` are the finished Pre rows, each carrying its
     ``_pre_concept_id``. Returns ``{"inventory": [items], "allotments":
     {item_id: pre_concept_id}, "rationales": {item_id: rationale},
-    "review_flags": {item_id: [flags]}}``. An empty Pre map, or an empty
-    inventory over a thin one, returns cleanly — never padded.
+    "review_flags": {item_id: [flags]}}``. An empty Pre map returns cleanly.
+    Legacy/v1 empty inventories remain empty; v2 authors source-backed pairs
+    for uncovered concepts through the coverage/Fixer seam.
     """
     from . import fixer as fixer_mod
+    from . import analyse as post_analyse
     from . import premap as premap_mod
 
     env = envelope_mod.validate(env)
@@ -421,22 +442,39 @@ def analyse(
         envelope_mod.require_live_api()
         provider = _live_build
         allot_provider = allot_provider or _live_allot
+        coverage_provider = coverage_provider or post_analyse._live_coverage
         critic = critic if critic is not None else _live_critic
         fixer = fixer or fixer_mod.live_fixer
     allot_provider = allot_provider or provider
+    coverage_provider = coverage_provider or provider
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     qids = list(qids or [])
 
     # ---- 2.4 Build: one decision over the Pre lane's own evidence -----
     correction = analysis_correction_policy.fields(env)
+    evidence = build_evidence(
+        prerequisites, rows, qids,
+        include_retained_atoms=analysis_correction_policy.covers_every_concept(env),
+    )
+    concepts_payload = [
+        {
+            "pre_concept_id": str(row.get("_pre_concept_id") or ""),
+            "pre_topic_id": str(row.get("_semantic_topic_id") or ""),
+            "concept_title": _normal(row.get("concept_title")),
+            "description": premap_mod._description_of(
+                row.get("concept_details")
+            ),
+        }
+        for row in rows
+    ]
     build_payload = {
         "stage": "prelearn.analyse.inventory",
         **capture_policy.boundary_fields(env),
         **correction,
         "rules": _inventory_rules(rules_suffix, correction),
         "chapter": premap_mod.chapter_calibration(env),
-        "evidence": build_evidence(prerequisites, rows, qids),
+        "evidence": evidence,
     }
     # The pre-spend post-condition of the redaction above: the model
     # authoring a prerequisite misconception is never shown a source
@@ -491,7 +529,11 @@ def analyse(
     if not inventory:
         if build_flags:
             empty["inventory_review_flags"] = build_flags
-        return empty
+        return post_analyse.complete_concept_coverage(
+            env, empty, concepts_payload, evidence,
+            provider=coverage_provider, critic=critic, store=store, fixer=fixer,
+            pre=True, qids=qids, rules_suffix=rules_suffix,
+        )
 
     # ---- 4.3 Allot: every item to exactly one pre-concept ------------
     #
@@ -508,17 +550,6 @@ def analyse(
     # map-reading skills of earlier years" is an ordinary prerequisite,
     # and its item must be able to land on it. The target set is
     # therefore exactly what ``build_evidence`` offered the inventory.
-    concepts_payload = [
-        {
-            "pre_concept_id": str(row.get("_pre_concept_id") or ""),
-            "pre_topic_id": str(row.get("_semantic_topic_id") or ""),
-            "concept_title": _normal(row.get("concept_title")),
-            "description": premap_mod._description_of(
-                row.get("concept_details")
-            ),
-        }
-        for row in rows
-    ]
     known_concept_ids = {row["pre_concept_id"] for row in concepts_payload}
 
     allotments: dict[str, str] = {}
@@ -596,12 +627,15 @@ def analyse(
         "carries no analysis section, which is the design (Q1).",
         level="success",
     )
-    return {
+    return post_analyse.complete_concept_coverage(env, {
         "inventory": inventory,
         "allotments": allotments,
         "rationales": rationales,
         "review_flags": review_flags,
-    }
+    }, concepts_payload, evidence,
+        provider=coverage_provider, critic=critic, store=store, fixer=fixer,
+        pre=True, qids=qids, rules_suffix=rules_suffix,
+    )
 
 
 def stamp(

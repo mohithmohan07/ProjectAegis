@@ -5,6 +5,9 @@
 
 app = 'projectaegis'
 primary_region = 'ams'
+# Give the worker time to persist suspension before a replacement starts.
+kill_signal = 'SIGTERM'
+kill_timeout = 120
 
 [build]
   dockerfile = 'Dockerfile'

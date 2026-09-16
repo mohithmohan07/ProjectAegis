@@ -865,6 +865,9 @@ _POST_PAYLOAD_KEYS = {
     # allowlist (``source_release_sha256``), so recording it can never
     # read as an in-place edit.
     "terminal_generation_complete",
+    # A fresh draft freezes the column contract so its Concept and Master
+    # siblings use the same delimiter even after later policy releases.
+    "_column_spec_policy",
 }
 
 

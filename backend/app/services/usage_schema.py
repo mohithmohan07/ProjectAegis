@@ -67,13 +67,21 @@ class Attempt(CurrencyFields):
     outcome: Literal[
         "queued", "in_flight", "response_received", "success", "provider_error",
         "queue_timeout", "truncated_response", "invalid_json", "invalid_schema",
-        "refused_response", "error",
+        "refused_response", "error", "batch_pending",
     ]
     usage_reported: bool
     elapsed_seconds: Seconds | None = None
     error_type: Label | None = None
     http_status: Annotated[int, Field(ge=100, le=599)] | None = None
-    usage_status: Literal["reported", "missing", "incomplete"] | None = None
+    usage_status: Literal["reported", "missing", "incomplete", "reused"] | None = None
+    batched: bool | None = None
+    delivery_mode: Literal["batch", "synchronous", "unknown"] | None = None
+    reused: bool | None = None
+    receipt_id: Identifier | None = None
+    resolved_receipt_id: Identifier | None = None
+    batch_id: Identifier | None = None
+    request_sha256: Identifier | None = None
+    wave_id: Identifier | None = None
     input_tokens: Count | None = None
     cached_input_tokens: Count | None = None
     cache_write_tokens: Count | None = None
@@ -88,7 +96,7 @@ class Attempt(CurrencyFields):
     usage_accounting_basis: Label | None = None
     estimated_cost_usd: Cost | None = None
     pricing_as_of: Label | None = None
-    pricing_basis: Literal["standard_text_token_rates", "unpriced_model_or_service_tier", "incomplete_usage_receipt"] | None = None
+    pricing_basis: Literal["standard_text_token_rates", "unpriced_model_or_service_tier", "incomplete_usage_receipt", "reused_batch_receipt"] | None = None
     pricing_effective_date: Label | None = None
     pricing_policy: Label | None = None
     pricing_source: Annotated[str, Field(max_length=2048)] | None = None
@@ -163,6 +171,16 @@ class MechanicalSpan(Closed):
     outcome: Literal["running", "success", "error"]
 
 
+class PendingBatchAttempt(Closed):
+    attempt_id: Identifier
+    batch_id: Identifier
+    request_sha256: Identifier
+    wave_id: Identifier
+    stage: Label
+    lane: Label
+    provider: Label
+
+
 class UsageExtensionsV2(CurrencyFields):
     usage_schema_version: Annotated[int, Field(ge=2, le=2)]
     attempt_count: Count
@@ -175,6 +193,9 @@ class UsageExtensionsV2(CurrencyFields):
     usage_complete: bool
     known_usage_estimated_cost_usd: Cost
     request_attempts: list[Attempt] = Field(max_length=20_000)
+    billed_receipt_ids: list[Identifier] = Field(default_factory=list, max_length=20_000)
+    completed_batch_receipt_ids: list[Identifier] = Field(default_factory=list, max_length=20_000)
+    pending_batch_attempts: list[PendingBatchAttempt] = Field(default_factory=list, max_length=20_000)
     latest_request: Attempt | None = None
     cost_by_stage_lane_model: list[CostMatrixRow] = Field(max_length=20_000)
     stage_timings: list[StageTiming] = Field(max_length=20_000)

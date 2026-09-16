@@ -8,9 +8,9 @@ testable without a worker. What it provides that the pipeline did not have:
   for a chapter that was mid-run and a second run would start on top of the
   first. A lease row with a boot nonce distinguishes a live run from a crashed
   one exactly, not by timing.
-* **an attempt budget charged at claim.** A worker killed mid-run has still
-  spent an attempt, which is what stops a crash-loop from spending the owner's
-  money in a circle overnight.
+* **an attempt budget for actual failures.** Claims reserve an attempt, but
+  deployment/batch waits and orphaned leases refund it. Provider decisions and
+  submitted waves survive independently, so restart resumes purchased work.
 * **a reconcile before every spend.** A task is never re-dispatched on trust:
   the job is re-read first, so work that actually finished before a crash is
   settled without a second charge, and a run the engine declared unresumable is
@@ -28,7 +28,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, case, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -97,7 +97,7 @@ def enqueue_one(
     actor_sub: str = "",
     actor_email: str = "",
     lanes: Sequence[str] | None = None,
-    cohort_id: str = "",
+    cohort_id: str | None = None,
     start_after: datetime | None = None,
     running_probe=None,
 ) -> dict[str, Any]:
@@ -204,17 +204,27 @@ def enqueue_one(
 
     task = models.ChapterBatchTask(
         batch_row_id=int(row.id),
+        job_id=int(job.id),
         kind=step,
         lanes=resolved_lanes,
         state="queued",
         attempt=0,
         push_group_id=str(push_group_id or ""),
-        cohort_id=str(cohort_id or ""),
+        cohort_id=(str(cohort_id) if cohort_id is not None else
+                   str(push_group_id or new_push_group_id())) if step != "publish" else "",
         start_after=start_after,
         enqueued_by_sub=str(actor_sub or ""),
         enqueued_by_email=str(actor_email or ""),
         enqueued_at=_now(),
     )
+    # This is the authenticated initiator, not necessarily the PDF uploader.
+    # Later retries and reviewers retain the original run attribution.
+    if actor_sub and not job.started_by_sub:
+        job.started_by_sub = str(actor_sub)
+        job.started_by_email = str(actor_email or "")
+    if step != "publish":
+        job.execution_mode = "batch" if task.cohort_id else "synchronous"
+        job.requested_chapter_id = int(chapter_id)
     db.add(task)
     try:
         db.flush()
@@ -329,6 +339,9 @@ def retry_one(
             "this run recorded an explicit do-not-resume verdict; follow its "
             "recovery action instead of retrying",
         )
+    if task.job_id and int(task.job_id) != int(row.job_id or 0):
+        return _refusal(chapter_id, "source_replaced",
+                        "this task belongs to the previous source; push the current upload instead")
     changed = db.execute(
         update(models.ChapterBatchTask)
         .where(
@@ -345,12 +358,21 @@ def retry_one(
             enqueued_at=_now(),
             enqueued_by_sub=str(actor_sub or ""),
             enqueued_by_email=str(actor_email or ""),
+            job_id=int(task.job_id or row.job_id),
+            cohort_id=(str(task.cohort_id or task.push_group_id or new_push_group_id())
+                       if task.kind != "publish" else ""),
+            start_after=None,
             max_attempts=models.ChapterBatchTask.max_attempts + 1,
         )
         .execution_options(synchronize_session=False)
     )
     if changed.rowcount != 1:
         return _refusal(chapter_id, "already_live", "this chapter changed state")
+    if task.kind != "publish":
+        job = db.get(models.UploadJob, int(task.job_id or row.job_id))
+        if job is not None:
+            job.execution_mode = "batch"
+            job.requested_chapter_id = int(chapter_id)
     chapter_batches.record_act(
         row, act="returned to the queue", actor_sub=actor_sub,
         actor_email=actor_email,
@@ -414,6 +436,8 @@ def claim(db: Session, task_id: int) -> models.ChapterBatchTask | None:
         update(models.ChapterBatchTask)
         .where(
             models.ChapterBatchTask.id == int(task_id),
+            or_(models.ChapterBatchTask.start_after.is_(None),
+                models.ChapterBatchTask.start_after <= now),
             or_(
                 models.ChapterBatchTask.state == "queued",
                 and_(
@@ -430,8 +454,8 @@ def claim(db: Session, task_id: int) -> models.ChapterBatchTask | None:
             heartbeat_at=now,
             lease_expires_at=expires,
             started_at=now,
-            # Charged HERE, not at success: a worker that dies mid-run has
-            # still spent an attempt, so a crash-loop cannot spin forever.
+            # Reserved here. Cooperative waits and interrupted workers refund
+            # it; actual repeated content/provider failures still have a cap.
             attempt=models.ChapterBatchTask.attempt + 1,
         )
         .execution_options(synchronize_session=False)
@@ -491,19 +515,31 @@ def finish(
         "finished_at": now if state in {"done", "failed", "cancelled"} else None,
     }
     if refund_attempt:
-        # Another route held the per-job lock, so this was never a real try.
-        values["attempt"] = models.ChapterBatchTask.attempt - 1
-    db.execute(
+        values["attempt"] = case((models.ChapterBatchTask.attempt > 0,
+                                  models.ChapterBatchTask.attempt - 1), else_=0)
+    changed = db.execute(
         update(models.ChapterBatchTask)
-        .where(models.ChapterBatchTask.id == int(task_id))
+        .where(models.ChapterBatchTask.id == int(task_id),
+               or_(models.ChapterBatchTask.state != "leased",
+                   models.ChapterBatchTask.lease_owner.in_(("", WORKER_TOKEN))))
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+    if changed.rowcount != 1:
+        db.rollback()
+        return
+    task = db.get(models.ChapterBatchTask, int(task_id))
+    if task is not None:
+        db.refresh(task)
+        from . import run_notifications
+
+        run_notifications.queue_task_result(db, task, state=state, error=error)
     db.commit()
 
 
 def requeue(
     db: Session, task_id: int, *, error: str = "", refund_attempt: bool = False,
+    delay_seconds: float = 0, reason: str = "",
 ) -> None:
     """Put a retryable task back in line, keeping its recorded diagnostic."""
     now = _now()
@@ -515,15 +551,25 @@ def requeue(
         "lease_expires_at": None,
         "last_error": str(error or "")[:4000],
         "last_error_at": now if error else None,
+        "start_after": now + timedelta(seconds=max(0.0, delay_seconds)),
+        "failure_code": str(reason or ""),
+        "blocked_kind": "",
+        "finished_at": None,
     }
     if refund_attempt:
-        values["attempt"] = models.ChapterBatchTask.attempt - 1
-    db.execute(
+        values["attempt"] = case((models.ChapterBatchTask.attempt > 0,
+                                  models.ChapterBatchTask.attempt - 1), else_=0)
+    changed = db.execute(
         update(models.ChapterBatchTask)
-        .where(models.ChapterBatchTask.id == int(task_id))
+        .where(models.ChapterBatchTask.id == int(task_id),
+               or_(models.ChapterBatchTask.state != "leased",
+                   models.ChapterBatchTask.lease_owner.in_(("", WORKER_TOKEN))))
         .values(**values)
         .execution_options(synchronize_session=False)
     )
+    if changed.rowcount != 1:
+        db.rollback()
+        return
     db.commit()
 
 
@@ -563,22 +609,23 @@ def reclaim_orphans(db: Session, *, in_flight: Sequence[int] = ()) -> dict[str, 
             continue
         if not foreign and int(task.id) in protected:
             continue
-        if int(task.attempt or 0) < int(task.max_attempts or 0):
-            task.state = "queued"
-            requeued += 1
-        else:
-            task.state = "failed"
-            task.failure_code = "worker_restart"
-            task.finished_at = now
-            failed += 1
-        task.lease_owner = ""
-        task.leased_at = None
-        task.heartbeat_at = None
-        task.lease_expires_at = None
-        task.last_error = (
-            "the worker stopped while this step was running"
-        )
-        task.last_error_at = now
+        # Compare expiry again in the UPDATE: a heartbeat may land after the
+        # SELECT, and must win instead of having its live lease reclaimed.
+        changed = db.execute(update(models.ChapterBatchTask).where(
+            models.ChapterBatchTask.id == task.id,
+            models.ChapterBatchTask.state == "leased",
+            models.ChapterBatchTask.lease_owner == task.lease_owner,
+            or_(models.ChapterBatchTask.lease_expires_at.is_(None),
+                models.ChapterBatchTask.lease_expires_at < now),
+        ).values(
+            state="queued", attempt=max(0, int(task.attempt or 0) - 1),
+            lease_owner="", leased_at=None, heartbeat_at=None, lease_expires_at=None,
+            failure_code="worker_restart", blocked_kind="", finished_at=None,
+            start_after=now + timedelta(seconds=1),
+            last_error="the server restarted; saved work will resume automatically",
+            last_error_at=now,
+        ).execution_options(synchronize_session=False))
+        requeued += int(changed.rowcount == 1)
     if requeued or failed:
         db.commit()
     return {"requeued": requeued, "failed": failed}
@@ -623,7 +670,17 @@ def reconcile_before_dispatch(
             "state": "failed", "failure_code": "job_missing",
             "error": "the staged upload for this chapter is gone",
         }
-    job = db.get(models.UploadJob, int(row.job_id))
+    if task.job_id and int(task.job_id) != int(row.job_id):
+        return {
+            "state": "failed", "failure_code": "source_replaced",
+            "error": "this task belongs to an earlier upload; it cannot run against the replacement source",
+        }
+    if not task.job_id:
+        # Additive migration for pre-binding queued tasks. Pin before spending,
+        # and never change the binding after this first resolution.
+        task.job_id = int(row.job_id)
+        db.commit()
+    job = db.get(models.UploadJob, int(task.job_id))
     if job is None:
         return {
             "state": "failed", "failure_code": "job_missing",

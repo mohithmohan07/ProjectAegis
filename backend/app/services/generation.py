@@ -3009,8 +3009,8 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
     endpoint returns, so the SDK's own model validates it and every line
     below this point — usage recording, finish-reason handling, refusal
     handling, JSON parsing — stays exactly as it is for both paths. A body
-    the SDK cannot read is transport trouble, not a decision: the caller
-    falls back to the ordinary request.
+    the SDK cannot read is a transport failure. Batch-selected runs never
+    silently fall back to full-price synchronous requests.
     """
     from openai.types.chat import ChatCompletion
 
@@ -3023,37 +3023,47 @@ def _chat_completion_from_body(body: Mapping[str, Any]):
 
 
 def batched_completion(body: Mapping[str, Any], *, provider: str, fresh: bool = False):
-    """Answer one request body from the cohort's wave, or return ``None``.
+    """Use the selected Batch transport without a full-price fallback.
 
-    ``None`` means "make the ordinary call you were going to make": this run
-    is not in a cohort, the route is not OpenAI, or the wave could not answer
-    in time. Every provider call in the app goes through this one door, so a
-    cohort is billed at the batch price for its WHOLE run — the source read
-    included — and a lone run is untouched.
-
-    A batched wait deliberately does not hold a synchronous provider slot:
-    the request is queued at the provider, and holding the gate would stall
-    the machine for the length of the wave.
+    Only an explicitly synchronous run returns None. A pending paid batch
+    suspends the worker at a durable boundary, outside semantic retry loops.
     """
-    broker = batch_broker.bound() if provider == "openai" else None
+    from . import run_control, model_routing_run, openai_usage
+
+    run_control.check()
+    broker = batch_broker.bound()
     if broker is None:
         return None
+    if provider != "openai":
+        raise batch_broker.BatchUnavailable(
+            "This recorded provider cannot use OpenAI Batch. Choose an "
+            "explicit synchronous run to continue its historical route."
+        )
     openai_usage.record_service_started()
     try:
-        response = _chat_completion_from_body(broker.call(body, fresh=fresh))
-    except batch_broker.BatchUnavailable as exc:
-        progress.log(
-            f"Batch wave unavailable ({exc}); making the ordinary request "
-            "for this one.",
-            level="info",
+        result = broker.call_result(
+            body, fresh=fresh, owner_job_id=model_routing_run.current_job_id(),
         )
-        return None
+        response = _chat_completion_from_body(result.body)
+    except batch_broker.BatchPending as exc:
+        openai_usage.record_batch_pending(
+            batch_id=exc.batch_id, request_sha256=exc.request_sha256,
+            wave_id=exc.wave_id,
+        )
+        raise run_control.RunDeferred(str(exc), reason="batch_wait", delay=30) from exc
     except BaseException as exc:
         openai_usage.record_attempt_outcome("provider_error", error=exc)
         raise
     finally:
         openai_usage.record_service_ended()
-    openai_usage.record_batched_attempt()
+    openai_usage.record_batched_attempt(
+        reused=(result.reused or (
+            result.owner_job_id is not None
+            and model_routing_run.current_job_id() is not None
+            and result.owner_job_id != model_routing_run.current_job_id()
+        )), batch_id=result.batch_id,
+        request_sha256=result.request_sha256, receipt_id=result.receipt_id,
+    )
     return response
 
 
@@ -3316,6 +3326,10 @@ def _openai_json(
                     response_schema.validate_response(response)
                 openai_usage.record_attempt_outcome("success")
                 return response
+            except batch_broker.BatchUnavailable:
+                # A provider-rejected batch is a transport failure, not bad
+                # author JSON and not permission to purchase an identical retry.
+                raise
             except OpenAIQueueTimeoutError as exc:
                 openai_usage.record_attempt_outcome("queue_timeout", error=exc)
                 raise
@@ -4647,6 +4661,11 @@ def _figure_hub_note(figure: dict) -> str:
         note = f"Figure — {caption.rstrip(' .:-')}"
         alt = caption
     else:
+        from . import generation_quality_policy as _quality_policy
+        if figure.get("caption_policy") == _quality_policy.V5:
+            # A v5 Place decision must author a public caption. Refuse a
+            # broken recorded decision rather than minting an internal ID.
+            raise ValueError("placed figure is missing its model-authored public caption")
         marker = block_id or "source figure"
         note = f"Figure — {marker}"
         alt = f"Figure {block_id}".strip() if block_id else "Figure"
@@ -4660,6 +4679,34 @@ def _figure_hub_note(figure: dict) -> str:
             # caption note still records the placement.
             pass
     return kr.canonicalize_rich_text(note)
+
+
+def _deduplicate_shared_hub_images(details: str) -> str:
+    """Remove repeated Hub assets by exact URL, retaining every question embed.
+
+    The same source image may legitimately support separate questions. Those
+    copies remain with each complete question; only redundant support copies
+    of the identical asset URL are projected away. Caption text remains.
+    """
+    sections = cr.split_sections(details)
+    seen = {
+        match.group("src")
+        for label, content in sections if not cr.is_activity_hub_label(label)
+        for match in kr._CANONICAL_IMAGE_TAG_RE.finditer(content)
+    }
+    output = []
+    for label, content in sections:
+        if cr.is_activity_hub_label(label):
+            def keep_first(match):
+                url = match.group("src")
+                if url in seen:
+                    return ""
+                seen.add(url)
+                return match.group(0)
+            content = kr._CANONICAL_IMAGE_TAG_RE.sub(keep_first, content)
+            content = re.sub(r"[ \t]+(?=\n|$)", "", content)
+        output.append((label, content))
+    return cr.join_sections(output)
 
 
 def _figure_placement_markers(record: dict) -> list[dict]:
@@ -4729,8 +4776,13 @@ def _normalize_activity_hubs_from_inventory(
 
     target_by_qid: dict[str, int] = {}
     q14_hub_overrides: dict[str, tuple[int, int]] = {}
+    from . import generation_quality_policy as _quality_policy
+    semantic_placement = any(_quality_policy.semantic_case_ownership(row) for row in records)
     for item in items:
         qid = str(item.get("qid") or "").strip()
+        if semantic_placement and qid in placed_by_qid:
+            target_by_qid[qid] = placed_by_qid[qid]
+            continue
         # Q14 is the explicit precedence rule: a reusable Type's final QID
         # owner outranks per-question routing.  After Phase 3 Host projects
         # that owner into ``_aegis_release_qids``, a later Hub normalization
@@ -4812,7 +4864,13 @@ def _normalize_activity_hubs_from_inventory(
                 _figure_hub_note(figure),
             )
 
-    out = _align_activity_examples_with_hubs(out, inventory)
+    if not semantic_placement:
+        out = _align_activity_examples_with_hubs(out, inventory)
+    else:
+        for record in out:
+            record["concept_details"] = _deduplicate_shared_hub_images(
+                record.get("concept_details") or ""
+            )
     if out != records:
         if items:
             progress.log(
@@ -4879,6 +4937,16 @@ def _hub_inventory_contract_violations(
             record.get("concept_details") or "")
         if expected_notes:
             expected_body = " ".join(expected_notes)
+            from . import generation_quality_policy as _quality_policy
+            if _quality_policy.source_output_corrections(record):
+                expected_details = cr.join_sections([
+                    (label, content)
+                    for label, content in cr.split_sections(record.get("concept_details") or "")
+                    if not cr.is_activity_hub_label(label)
+                ] + [("Activity/Info Hub", expected_body)])
+                expected_body = cr.activity_hub_body(
+                    _deduplicate_shared_hub_images(expected_details)
+                )
             if _inventory_comparison_text(
                 actual_body
             ).strip() != _inventory_comparison_text(
@@ -14253,7 +14321,10 @@ def _inventory_coverage_key(text: str) -> str:
     # exercises") because the validator rejects them. The authoritative
     # inventory prompt still carries the source pointer, so both sides of the
     # coverage comparison must see the same neutralized wording.
-    value = concept_cleanup.scrub_validator_artifacts(value)
+    from . import generation_quality_policy as _quality_policy
+    value = concept_cleanup.scrub_validator_artifacts(
+        value, keep_tables=_quality_policy.bound_source_output_corrections()
+    )
     return value.replace("…", "...")
 
 
@@ -14555,6 +14626,11 @@ def _activity_example_hub_alignment_violations(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
     """Assessable Activity Examples and Hub copies must share one concept row."""
+    from . import generation_quality_policy as _quality_policy
+    if any(_quality_policy.semantic_case_ownership(row) for row in records):
+        # Source support and the question it contextualises have independent
+        # recorded semantic placements; formatting must not re-decide either.
+        return []
     violations: list[dict] = []
     for item in (inventory or {}).get("items") or []:
         if not item.get("_activity_origin"):

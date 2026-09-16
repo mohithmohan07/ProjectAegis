@@ -23,13 +23,19 @@ KEY = "generation_quality_policy"
 #: ``duplicate_case_titles_returned`` — two Cases of one mined Type sharing a
 #: case_title are a coverage-class defect the Type miner sends back to the
 #: model, with the Fixer as the final resort. A run keeps the version it
-#: recorded; only newly stamped work adopts the latest.
+#: recorded; only newly stamped work adopts the latest. v5 (16 September
+#: 2026, Corrections 2.0): numbered table references survive output and
+#: exact coverage; semantic question/Case/Hub placement cannot be overridden
+#: by an answering-form Type owner; each concept gets distinct rendered Type
+#: identities; placed figures receive source-grounded public captions and
+#: redundant Hub image copies are removed by exact asset URL.
 V1 = "owner-generation-quality-2026-09-11-v1"
 V2 = "owner-generation-quality-2026-09-13-v2"
 V3 = "owner-generation-quality-2026-09-13-v3"
 V4 = "owner-generation-quality-2026-09-13-v4"
-SUPPORTED: tuple[str, ...] = (V1, V2, V3, V4)
-VERSION = V4
+V5 = "owner-generation-quality-2026-09-16-v5"
+SUPPORTED: tuple[str, ...] = (V1, V2, V3, V4, V5)
+VERSION = V5
 POST_DESCRIPTION_INSTRUCTION = """POST CONCEPT DESCRIPTION AND QUESTION CONTEXT
 Teach the concept in coherent, original, source-faithful language. Do not copy
 large chapter extracts into a concept description merely to supply context for
@@ -128,6 +134,27 @@ def figure_references_kept(value: Mapping[str, Any] | None) -> bool:
     return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V2)
 
 
+def source_output_corrections(value: Mapping[str, Any] | None) -> bool:
+    """Corrections 2.0 applies only to new v5 runs, never sealed predecessors."""
+    recorded = version_of(value)
+    return recorded is not None and SUPPORTED.index(recorded) >= SUPPORTED.index(V5)
+
+
+def table_references_kept(value: Mapping[str, Any] | None) -> bool:
+    """A printed table number is source evidence, not disposable apparatus."""
+    return source_output_corrections(value)
+
+
+def semantic_case_ownership(value: Mapping[str, Any] | None) -> bool:
+    """Question/Case content owns placement; a shared answering form cannot override it."""
+    return source_output_corrections(value)
+
+
+def bound_source_output_corrections() -> bool:
+    value = _run_policy.get()
+    return value is not _UNBOUND and source_output_corrections({KEY: value})
+
+
 def bound_figure_references_kept() -> bool:
     """The answer for the run this process is BOUND to (``model_routing_run.bind_job``).
 
@@ -205,4 +232,3 @@ def bound_culmination_mastery_formatted() -> bool:
     """The answer for the run this process is BOUND to (see ``bound_figure_references_kept``)."""
     value = _run_policy.get()
     return value is not _UNBOUND and culmination_mastery_formatted({KEY: value})
-

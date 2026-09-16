@@ -39,6 +39,8 @@ export default function SyllabusUploader({
         Syllabus workbooks (CBSE, ICSE, Maharashtra, Karnataka, English
         Language) fill the directory so you can pick where to deposit
         concepts — nothing is inferred from the PDF filename.
+        Uploading a CBSE workbook replaces the active CBSE catalogue. Previous
+        entries and their runs remain available under Previous catalogue.
       </div>
       <label className="upload-label upload-label-ghost mt-8">
         {busy && <span className="spinner" aria-hidden="true" />}

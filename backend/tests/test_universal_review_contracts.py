@@ -134,9 +134,9 @@ def test_type_declared_answer_cells_use_one_whole_cell_medium():
     assert "equation_katex_wrapper" in kr.answer_cell_issues(
         "Equation", "[Katex]x=2[/Katex]"
     )
-    assert "equation_plain_text" in kr.answer_cell_issues(
-        "Equation", "the answer is x=2"
-    )
+    # Deciding prose versus mathematical identifiers belongs to the API
+    # author/reviewer, not a lexical gate over consecutive letters.
+    assert kr.raw_answer_cell("Equation", "the answer is x=2") == "the answer is x=2"
     assert kr.answer_cell_issues("Phrases", "Six crore: Yes") == []
     assert kr.answer_cell_issues("Phrases", "The value is x = 2.") == []
     assert "phrases_katex" in kr.answer_cell_issues(

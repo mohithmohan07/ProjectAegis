@@ -1,6 +1,7 @@
 """Bulk Import workbook IO: import a database workbook, export the output workbook."""
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from uuid import uuid4
 
 from fastapi import (
     APIRouter,
@@ -257,15 +258,38 @@ async def upload_syllabus(
         total_bytes += len(raw_bytes)
         pending.append((Path(file.filename).name, raw_bytes))
 
+    cbse_names = [
+        name for name, _raw in pending
+        if syllabus_svc._infer_file_options(name).get("default_board") == "CBSE"
+    ]
+    if len(cbse_names) > 1:
+        raise HTTPException(400, "Upload one CBSE catalogue revision at a time.")
+
     saved: list[str] = []
     paths: list[Path] = []
     for filename, raw_bytes in pending:
-        dest = config.SYLLABUS_DIR / filename
+        # Do not overwrite the bundle when the development runtime shares its
+        # directory, and do not create another root-level CBSE candidate.
+        folder = (config.SYLLABUS_DIR / "catalogue_uploads" / uuid4().hex
+                  if filename in cbse_names else config.SYLLABUS_DIR)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / filename
         dest.write_bytes(raw_bytes)
         saved.append(filename)
         paths.append(dest)
 
-    result = syllabus_svc.import_syllabus_paths(db, paths)
+    if cbse_names:
+        cbse_path = next(path for path in paths if path.name == cbse_names[0])
+        try:
+            revision = syllabus_svc.activate_cbse_upload(cbse_path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # Membership retirement preserves CBSE history. An upload does not
+        # authorize pruning unrelated boards merely because their files moved.
+        result = syllabus_svc.refresh_syllabus(db, prune=False)
+        result["catalogue_revision"] = revision
+    else:
+        result = syllabus_svc.import_syllabus_paths(db, paths)
     result["uploaded_files"] = saved
     return result
 

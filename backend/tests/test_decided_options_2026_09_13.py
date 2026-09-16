@@ -44,7 +44,7 @@ def _v2_job(db):
 # 1. admission
 # --------------------------------------------------------------------------- #
 
-def test_the_worker_refuses_to_start_below_the_gate_it_needs(monkeypatch):
+def test_a_low_synchronous_gate_does_not_disable_the_batch_worker(monkeypatch):
     monkeypatch.setattr(worker_mod.config, "OPENAI_MAX_CONCURRENCY", 8, raising=False)
     monkeypatch.setattr(worker_mod.config, "phase3_decision_workers", lambda: 6)
     monkeypatch.delenv("AEGIS_QUEUE_PROVIDER_RESERVE", raising=False)
@@ -55,10 +55,15 @@ def test_the_worker_refuses_to_start_below_the_gate_it_needs(monkeypatch):
     assert "AEGIS_OPENAI_MAX_CONCURRENCY=8" in reason
     assert "at least 28" in reason           # 16 reserve + 6 workers x cost 2
 
+    monkeypatch.setattr(worker_mod.ChapterQueueWorker, "start", lambda self: None)
+    monkeypatch.setattr(worker_mod, "_recover_batch_waves", lambda: 0)
     started = worker_mod.initialize_chapter_queue(lambda: None)
-    assert started is None
+    assert started is not None
+    assert started.admits("step01", cohort=True)
+    assert not started.admits("step01", cohort=False)
     assert worker_mod.worker_alive() is False
-    assert worker_mod.disabled_reason() == reason
+    assert worker_mod.disabled_reason() == ""
+    assert worker_mod.capacity_details()["synchronous_admission_reason"] == reason
 
 
 def test_the_production_gate_has_no_shortfall(monkeypatch):

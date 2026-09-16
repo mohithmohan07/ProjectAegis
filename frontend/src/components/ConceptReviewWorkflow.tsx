@@ -393,6 +393,10 @@ export default function ConceptReviewWorkflow({
             required to match. Publication follows in Step 03.
           </div>
         </div>
+        <div>
+          <a className="button-link" href="/chapters">Select chapters &amp; batch Step 02</a>
+          <details className="mt-8"><summary>Advanced: immediate Masters at standard API rates</summary>
+            <p className="hint">This separate synchronous action uses standard pricing. Select reviewed chapters together on Chapters for Batch API pricing.</p>
         <button
           className="primary"
           type="button"
@@ -402,8 +406,10 @@ export default function ConceptReviewWorkflow({
         >
           {continuing || masterRunning
             ? <><span className="spinner" aria-hidden="true" /> Generating Master Files…</>
-            : "Generate Master Files"}
+            : "Generate Master Files · standard rates"}
         </button>
+          </details>
+        </div>
       </div>
 
       {notice && <div className="muted mt-12" role="status">{notice}</div>}

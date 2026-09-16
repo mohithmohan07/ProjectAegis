@@ -17,6 +17,7 @@ from datetime import datetime
 
 from sqlalchemy import String, Integer, BigInteger, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint, Index, event, inspect, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean
 
 from .db import Base
 
@@ -81,6 +82,12 @@ class Chapter(Base):
     unit: Mapped[str] = mapped_column(String(128), default="General")
     chapter_title: Mapped[str] = mapped_column(String(255), default="")
     chapter_display_name: Mapped[str] = mapped_column(String(255), default="")
+    # Catalogue membership is presentation metadata, never checkpoint identity.
+    # Retiring a syllabus entry must not delete or re-key its paid runs.
+    catalogue_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    catalogue_source: Mapped[str] = mapped_column(String(64), default="")
+    catalogue_revision: Mapped[str] = mapped_column(String(64), default="")
+    catalogue_order: Mapped[int] = mapped_column(Integer, default=0)
     chapter_duration: Mapped[str] = mapped_column(String(32), default="")
     pre_topics: Mapped[str] = mapped_column(Text, default="")
     post_topics: Mapped[str] = mapped_column(Text, default="")
@@ -368,6 +375,12 @@ class UploadJob(Base):
     # upload. Never use mutable email addresses as the authorization key.
     owner_sub: Mapped[str] = mapped_column(
         String(255), default="local:default", index=True)
+    # The authenticated first starter, distinct from the person who uploaded.
+    # Used for attribution/notifications only; owner_sub remains authorization.
+    requested_chapter_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_by_sub: Mapped[str] = mapped_column(String(255), default="")
+    started_by_email: Mapped[str] = mapped_column(String(320), default="")
+    execution_mode: Mapped[str] = mapped_column(String(24), default="")
     module: Mapped[str] = mapped_column(String(32))  # build_assessments|build_concepts
     upload_type: Mapped[str] = mapped_column(String(32), default="textbook")
     # textbook|questions|questions_and_answers|handwritten|document
@@ -850,6 +863,25 @@ class ChapterBatchRow(Base):
         cascade="all, delete-orphan")
 
 
+class RunNotification(Base):
+    """Transactional notification outbox; delivery never owns run success."""
+
+    __tablename__ = "run_notifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("upload_jobs.id"), index=True)
+    task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recipient: Mapped[str] = mapped_column(String(320))
+    subject: Mapped[str] = mapped_column(String(512))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ChapterBatchTask(Base):
     """One queued machine step, with the lease that makes it restart-safe.
 
@@ -870,6 +902,9 @@ class ChapterBatchTask(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     batch_row_id: Mapped[int] = mapped_column(
         ForeignKey("chapter_batch_rows.id"), nullable=False, index=True)
+    # Immutable binding: replacing a row's source cannot retarget its history.
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("upload_jobs.id"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False,
                                       default="step01")
     # Which lanes a publish task covers. Read from the run's OWN available

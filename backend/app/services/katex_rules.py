@@ -112,12 +112,9 @@ def raw_equation_cell(content: str) -> str:
     value = str(content or "")
     matches = list(_KATEX_TAG_RE.finditer(value))
     if not matches:
-        if (
-            not _KATEX_TOKEN_RE.search(value)
-            and not _KATEX_LIKE_TAG_RE.search(value)
-            and _equation_has_loose_prose(value)
-        ):
-            return _tex_text(value).strip()
+        # Consecutive letters may be geometry labels or products. Deciding
+        # that they are prose belongs to the author and independent reviewer;
+        # serialization must never escape an authored TeX command.
         return value.strip()
     # Do not guess through malformed wrapper-shaped text.  Its checker/read-
     # back defect remains visible and blocks publication.
@@ -1287,33 +1284,6 @@ def _mask_tex_comments(value: str) -> str:
     return "".join(masked)
 
 
-def _equation_has_loose_prose(value: str) -> bool:
-    lexical = _mask_tex_text_groups(_mask_tex_comments(value))
-    # A dimension row-spacing argument (``\\[0.12 cm]``, supported per owner
-    # decision D1 2026-08-29) is structural LaTeX; without masking, its unit
-    # ("cm") reads as a two-letter word of prose.
-    lexical = _RAW_ROW_SPACING_RE.sub(" ", lexical)
-    # Likewise \hspace's braced dimension ("{1em}") and \phantom's sizing
-    # template ("{ab}") are structural arguments, not prose — the generic
-    # command mask below strips only the command name and would leave their
-    # unit/template letters behind as false "loose prose", escaping a valid
-    # owner-sanctioned equation into literal text (review finding on D1).
-    lexical = re.sub(r"\\(?:hspace|phantom)\s*\{[^{}]*\}", " ", lexical)
-    # The canonical array column declaration is structural LaTeX, not prose.
-    # Mask it as one token before the generic environment-name pass; otherwise
-    # a declaration such as ``{cc}`` is misread as a two-letter word and the
-    # serializer escapes the entire valid array into ``\text{...}``.
-    lexical = re.sub(
-        r"\\begin\{array\}\{[^{}\r\n]+\}", " ", lexical,
-    )
-    lexical = re.sub(
-        r"\\(?:begin|end)\{[^}]*\}", " ", lexical,
-    )
-    lexical = re.sub(r"\\[A-Za-z]+", " ", lexical)
-    lexical = re.sub(r"\\.", " ", lexical)
-    return re.search(r"[A-Za-z]{2,}", lexical) is not None
-
-
 def answer_cell_issues(answer_type: str, content: str) -> list[str]:
     """Validate a type-declared answer cell by syntax, never by meaning."""
 
@@ -1353,13 +1323,8 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
             or _BARE_URL_RE.search(value)
         ):
             issues.append("equation_non_latex_markup")
-        # Whole-cell Equation rendering means prose must be explicit TeX
-        # text, not English left loose between math spans.  This lexical gate
-        # masks balanced text/style atoms and command/environment names, then
-        # rejects any remaining multi-letter ASCII run.  It does not decide
-        # what the words or equation mean.
-        if _equation_has_loose_prose(value):
-            issues.append("equation_plain_text")
+        # Whether letter runs are prose, products or geometry labels is an
+        # API judgment. Only representation/syntax checks belong here.
     elif kind == "phrases":
         if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
             issues.append("phrases_katex")

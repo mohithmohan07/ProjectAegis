@@ -1,5 +1,26 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q75 (durable selected-chapter Batch runs, Corrections 2.0 and the current CBSE workbook, 16 September 2026).**
+Uploads stage only. New chapter pushes default to OpenAI Batch; an unfinished or
+unavailable batch never silently becomes a standard-rate call. Open waves,
+request identities and paid-line receipts survive deployment; provider waiting
+and deployment suspension resume the same run without consuming failure attempts.
+Existing reviewed boundaries, source identities, versioned decisions and sealed
+historical output remain intact. The authenticated first starter owns outcome
+email attribution; a transactional outbox delivers stage completion/failure after
+SMTP configuration. Dashboard totals count immutable upload runs and paid receipts
+once and distinguish incomplete/unallocated costs. Default batch admission is six
+chapter runs, with a separate memory-conscious Master ceiling; the UI reports both.
+The attached CBSE workbook is the active ordered catalogue, with superseded chapter
+IDs and all their jobs retained in history. New generation-quality v5 runs keep
+Table references, question/Case/Hub model placements, valid geometry, meaningful
+per-concept misconception pairs, and essential question media. These supersede the
+older whole-Type placement and optional-misconception rulings only for new runs.
+The frozen column policy governs both Concept and Master keyword delimiters.
+See `docs/durable-batch-rollout-2026-09-16.md` for configuration and recovery limits.
+
+**Historical Q73 implementation (superseded by Q75 where it permits synchronous fallback):**
+
 **Latest owner amendment: Q73 (the batch lane and the keyword delimiter, 14 September 2026).**
 Two decisions. (1) **Keywords are a `" | "` list**, as contract §16 and
 Appendix B.1 always said: `column_spec.VERSION` is

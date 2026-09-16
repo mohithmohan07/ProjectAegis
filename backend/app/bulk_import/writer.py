@@ -589,6 +589,7 @@ def _validate_concepts_workbook_bytes(
     *,
     exact_rows: bool,
     sheet_layout: layouts.SheetLayout | None = None,
+    column_policy: Mapping | None = None,
 ) -> list[dict]:
     """Read the serialized XLSX back and verify final delivery identity.
 
@@ -625,12 +626,13 @@ def _validate_concepts_workbook_bytes(
                 include_group_columns=False,
                 export_scope=export_scope,
                 sheet_layout=layout,
+                column_policy=column_policy,
             )
             expected[key] = {
                 "topic_title": str(front[idx_topic_title] or ""),
                 "concept_labels": str(front[labels_index] or ""),
                 "topic_description": str(front[description_index] or ""),
-                "column_policy": column_spec.for_metadata({"subject": topic.chapter.subject}),
+                "column_policy": column_policy if column_policy is not None else column_spec.for_metadata({"subject": topic.chapter.subject}),
             }
 
     workbook = openpyxl.load_workbook(
@@ -854,6 +856,7 @@ def _list_cell(value: str) -> str:
 def _concept_field_value(
     concept: models.Concept, topic: models.Topic, field: str, *,
     include_group_columns: bool, publication: str | None = None,
+    column_policy: Mapping | None = None,
 ) -> str:
     # Parent Concept ships empty by team decision: concepts sit flat under
     # their topic. The target layout (spec-step8 Q5) has no parent_concept
@@ -874,7 +877,7 @@ def _concept_field_value(
         return concept.concept_details
     if field == "keywords":
         return column_spec.keyword_cell(
-            concept.keywords, column_spec.for_metadata({"subject": topic.chapter.subject}),
+            concept.keywords, column_policy if column_policy is not None else column_spec.for_metadata({"subject": topic.chapter.subject}),
         )
     if field == "digicards":
         return _list_cell(concept.digicards)
@@ -927,7 +930,8 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
                  concept_question_labels: str = "",
                  export_scope: ConceptExportScope | None = None,
                  sheet_layout: layouts.SheetLayout | None = None,
-                 publication: str | None = None) -> list:
+                 publication: str | None = None,
+                 column_policy: Mapping | None = None) -> list:
     """Chapter + Topic + Concept bands, with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
@@ -1009,6 +1013,7 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
             concept, topic, field,
             include_group_columns=include_group_columns,
             publication=publication,
+            column_policy=column_policy,
         )
         for field in concept_fields
     ]
@@ -1819,7 +1824,8 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
                     sheet_layout: layouts.SheetLayout | None = None,
                     export_scope: ConceptExportScope | None = None,
                     decisions: list[dict] | None = None,
-                    publication: str | None = None) -> list:
+                    publication: str | None = None,
+                    column_policy: Mapping | None = None) -> list:
     """Build a concept-catalog row (chapter/topic/concept filled, no question).
 
     ``topic`` selects the placement: the concept's authoring home
@@ -1850,6 +1856,7 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
         export_scope=export_scope,
         sheet_layout=sheet_layout,
         publication=publication,
+        column_policy=column_policy,
     ))
     expected_front = (
         len(sheet_layout.block_fields("chapter"))
@@ -2465,6 +2472,7 @@ def write_workbook(db: Session, dest: Path | None = None,
 def write_concepts_workbook(
     db: Session, concept_ids: list[int], *, layout_id: str | None = None,
     publication: str | None = None,
+    column_policy: Mapping | None = None,
 ) -> bytes:
     """Write a fresh canonical workbook holding only the given concepts.
 
@@ -2503,6 +2511,7 @@ def write_concepts_workbook(
                     sheet_layout=sheet_layout,
                     export_scope=export_scope,
                     publication=publication,
+                    column_policy=column_policy,
                 ),
                 start=1,
             ):
@@ -2528,6 +2537,7 @@ def write_concepts_workbook(
         # 7, concept_title 12 vs 14), so it could neither confirm nor
         # refute the topology it exists to check.
         sheet_layout=sheet_layout,
+        column_policy=column_policy,
     )
     return data
 

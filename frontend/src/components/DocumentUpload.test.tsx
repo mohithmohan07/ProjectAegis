@@ -20,6 +20,8 @@ const apiMock = vi.hoisted(() => ({
   runDiagnosticsUrl: vi.fn((id: number) => `/diagnostics/${id}`),
   clearConceptCheckpoint: vi.fn(),
   postLearningUpload: vi.fn(),
+  chapterBatchStageSource: vi.fn(),
+  chapterBatchDetail: vi.fn(),
   authConfig: vi.fn(),
   authMe: vi.fn(),
   authGoogle: vi.fn(),
@@ -310,89 +312,39 @@ test("a slow saved-job lookup cannot overwrite a new upload", async () => {
   expect(onJob).toHaveBeenLastCalledWith(expect.objectContaining({ id: 99 }));
 });
 
-test("a parent upload echo does not cancel one-shot conversion continuation", async () => {
-  const uploaded: UploadJob = {
-    ...restoredJob(),
-    id: 98,
-    filename: "one-shot.pdf",
-    status: "uploaded",
-    mmd_text: "",
-    checkpoint_available: false,
-    created_at: "2026-08-30T02:00:00Z",
-  };
+test("upload only stages the file; a parent echo cannot trigger paid parsing", async () => {
+  const uploaded: UploadJob = { ...restoredJob(), id: 98, filename: "staged.pdf", status: "uploaded", mmd_text: "", checkpoint_available: false };
   apiMock.postLearningUpload.mockResolvedValue(uploaded);
-  let resolveConversion!: (result: {
-    status: string;
-    mmd_text: string;
-    mmd_chars: number;
-  }) => void;
-  streamNdjsonMock.mockReturnValue(new Promise((resolve) => {
-    resolveConversion = resolve;
-  }));
-  const onJob = vi.fn();
   const onConverted = vi.fn();
-
-  function ControlledOneShot() {
+  function ControlledUpload() {
     const [externalJob, setExternalJob] = useState<UploadJob | null>(null);
-    return (
-      <RunConsoleProvider>
-        <DocumentUpload
-          module="concepts"
-          conceptKind="post"
-          externalJob={externalJob}
-          onJob={(next) => {
-            onJob(next);
-            setExternalJob(next ? { ...next } : null);
-          }}
-          onConverted={onConverted}
-          uploadLabel="Upload, parse & generate"
-        />
-        <output data-testid="parent-job-status">
-          {externalJob?.status ?? "none"}
-        </output>
-      </RunConsoleProvider>
-    );
+    return <RunConsoleProvider><DocumentUpload module="concepts" conceptKind="post" externalJob={externalJob}
+      onJob={(next) => setExternalJob(next ? { ...next } : null)} onConverted={onConverted} />
+      <output data-testid="parent-job-status">{externalJob?.status ?? "none"}</output></RunConsoleProvider>;
   }
-
-  const { container } = render(<ControlledOneShot />);
-  const uploadInput = container.querySelector(
-    'input[type="file"]:not([accept])',
-  ) as HTMLInputElement;
-  fireEvent.change(uploadInput, {
-    target: {
-      files: [new File(["pdf"], "one-shot.pdf", {
-        type: "application/pdf",
-      })],
-    },
+  const { container } = render(<ControlledUpload />);
+  fireEvent.change(container.querySelector('input[type="file"]:not([accept])') as HTMLInputElement, {
+    target: { files: [new File(["pdf"], "staged.pdf", { type: "application/pdf" })] },
   });
-  fireEvent.click(screen.getByRole("button", {
-    name: "Upload, parse & generate",
-  }));
-
-  await waitFor(() => {
-    expect(screen.getByTestId("parent-job-status").textContent).toBe("uploaded");
-    expect(streamNdjsonMock).toHaveBeenCalledTimes(1);
-  });
-  await act(async () => {
-    resolveConversion({
-      status: "converted",
-      mmd_text: "## One shot",
-      mmd_chars: 11,
-    });
-  });
-
-  await waitFor(() => {
-    expect(onConverted).toHaveBeenCalledTimes(1);
-    expect(onConverted).toHaveBeenCalledWith(expect.objectContaining({
-      id: 98,
-      status: "converted",
-      mmd_text: "## One shot",
-    }));
-    expect(screen.getByTestId("parent-job-status").textContent)
-      .toBe("converted");
-  });
+  fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+  await waitFor(() => expect(screen.getByTestId("parent-job-status").textContent).toBe("uploaded"));
   expect(apiMock.postLearningUpload).toHaveBeenCalledTimes(1);
-  expect(streamNdjsonMock).toHaveBeenCalledTimes(1);
+  expect(streamNdjsonMock).not.toHaveBeenCalled();
+  expect(onConverted).not.toHaveBeenCalled();
+});
+
+test("an upload with a chapter target is staged on the shared chapter worklist", async () => {
+  const uploaded: UploadJob = { ...restoredJob(), id: 99, status: "uploaded", mmd_text: "", checkpoint_available: false };
+  apiMock.chapterBatchStageSource.mockResolvedValue({ chapter_id: 23 });
+  apiMock.chapterBatchDetail.mockResolvedValue({ job: uploaded });
+  const onJob = vi.fn();
+  const { container } = render(<RunConsoleProvider><DocumentUpload module="concepts" chapterId={23} onJob={onJob} /></RunConsoleProvider>);
+  const file = new File(["pdf"], "chapter.pdf", { type: "application/pdf" });
+  fireEvent.change(container.querySelector('input[type="file"]:not([accept])') as HTMLInputElement, { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "Upload" }));
+  await waitFor(() => expect(onJob).toHaveBeenCalledWith(uploaded));
+  expect(apiMock.chapterBatchStageSource).toHaveBeenCalledWith(23, file, "", 0);
+  expect(streamNdjsonMock).not.toHaveBeenCalled();
 });
 
 test("shows configured automatic Drive backup status from auth config", async () => {
@@ -489,8 +441,9 @@ test("locks file-changing controls while conversion is active", async () => {
     </RunConsoleProvider>,
   );
 
+  fireEvent.click(screen.getByText("Advanced: immediate parsing at standard API rates"));
   fireEvent.click(await screen.findByRole("button", {
-    name: "Parse source document",
+    name: "Parse source document · standard rates",
   }));
 
   await waitFor(() => {

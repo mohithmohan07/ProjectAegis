@@ -1032,6 +1032,8 @@ export interface ChapterBatchLane {
 
 export interface ChapterBatchQueue {
   task_id: number | null;
+  cohort_id?: string;
+  start_after?: string | null;
   kind: ChapterBatchStep | null;
   state: "queued" | "leased" | "blocked" | "done" | "failed" | "cancelled" | null;
   position: number | null;            // 1-based place in the queue, null unless queued
@@ -1061,6 +1063,9 @@ export interface ChapterBatchCan {
 
 export interface ChapterBatchRow {
   chapter_id: number;
+  catalogue_active?: boolean;
+  catalogue_revision?: string;
+  catalogue_order?: number;
   chapter_code: string;
   chapter_title: string;
   chapter_display_name: string;
@@ -1069,6 +1074,9 @@ export interface ChapterBatchRow {
   source_filename: string;
   source_book: string;
   staged_by_email: string;
+  started_by_email?: string;
+  saved_stage?: string;
+  saved_progress?: number | null;
   source_staged_at: string | null;
   state: ChapterBatchState;
   state_label: string;                // server-supplied; the client never invents one
@@ -1095,6 +1103,9 @@ export interface ChapterBatchFacets {
 
 export interface ChapterBatchQueueSummary {
   running: number; queued: number; blocked: number;
+  batch_capacity?: number;
+  batch_master_capacity?: number;
+  recovering?: number;
   capacity: number;                   // max concurrent generation runs
   worker_alive: boolean;
 }
@@ -1139,4 +1150,64 @@ export interface ChapterBatchPushResult {
 export interface ChapterBatchDetail {
   row: ChapterBatchRow;
   job: UploadJob | null;              // the full job, drawer only
+}
+
+export interface DashboardCost {
+  known_cost_usd: number;
+  known_cost_inr: number | null;
+  cost_complete: boolean;
+  batch_cost_usd: number;
+  synchronous_cost_usd: number;
+  unclassified_cost_usd: number;
+  batch_requests: number;
+  synchronous_requests: number;
+  reused_responses: number;
+  pending_requests: number;
+  unresolved_requests: number;
+  request_count: number;
+  incomplete_runs?: number;
+  recovered_batch_receipts?: number;
+  unreconciled_batch_receipts?: number;
+  unreconciled_batch_cost_usd?: number;
+}
+export interface DashboardRun extends DashboardCost {
+  job_id: number;
+  chapter_id: number | null;
+  chapter_title: string;
+  chapter_code: string;
+  board: string;
+  grade: string;
+  subject: string;
+  catalogue_active: boolean | null;
+  historical_source: boolean;
+  filename: string;
+  started: boolean;
+  created_at: string | null;
+  state: string;
+  state_label: string;
+  stage: string;
+  initiator_email: string;
+  requested_mode: string;
+  cohort_id: string;
+  error: string;
+  concepts_complete: boolean;
+  masters_complete: boolean;
+  published: boolean;
+  notification?: { state: string; recipient: string; error?: string } | null;
+}
+export interface RunDashboard {
+  summary: DashboardCost & {
+    uploaded_runs: number; runs_started: number; unique_chapters_started: number;
+    unassigned_runs: number; running: number; queued: number; recovering: number;
+    failed: number; concepts_complete: number; masters_complete: number; published: number;
+  };
+  states: Array<{ value: string; label: string; count: number }>;
+  users: Array<DashboardCost & { email: string; runs: number }>;
+  items: DashboardRun[];
+  page: number; page_size: number; total: number; total_pages: number;
+  queue: ChapterBatchQueueSummary;
+  server_time: string;
+  cost_scope: string;
+  visibility: string;
+  notifications?: { configured: boolean; pending?: number; sent?: number; failed?: number };
 }

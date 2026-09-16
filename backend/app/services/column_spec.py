@@ -66,8 +66,8 @@ TEACHING_QUALITY = (
     "are supplied by their owning stages; do not invent them or duplicate "
     "them here. In every subject, keywords name 3–6 short terms actually "
     "taught, in their textual order. Keep the internal keyword "
-    "string pipe-delimited; the workbook projects keyword cells with "
-    "comma-space and leaves relationship lists pipe-delimited.\n"
+    "string pipe-delimited; the workbook uses the run's frozen "
+    "keywords_separator and leaves relationship lists pipe-delimited.\n"
 )
 
 REVIEW_QUALITY = (
@@ -171,6 +171,21 @@ def from_profile(profile: Mapping[str, Any] | None) -> dict[str, Any]:
     """Absent policy on a persisted profile means the legacy contract."""
     carried = (profile or {}).get(POLICY_KEY)
     return copy.deepcopy(dict(carried)) if isinstance(carried, Mapping) else {}
+
+
+def freeze_for_release(metadata: Mapping[str, Any], *sources: Mapping | None) -> dict[str, Any]:
+    """Freeze on staging, carrying an earlier run/envelope stamp unchanged.
+
+    A historical unstamped download is not retroactively stamped by its
+    renderer. This helper is only for creating a new staged release.
+    """
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for surface in (source, source.get("metadata")):
+            if isinstance(surface, Mapping) and isinstance(surface.get(POLICY_KEY), Mapping):
+                return copy.deepcopy(dict(surface[POLICY_KEY]))
+    return for_metadata(metadata)
 
 
 def bind_metadata(metadata: Mapping[str, Any], profile: Mapping[str, Any]) -> dict:

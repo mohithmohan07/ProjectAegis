@@ -199,7 +199,7 @@ test("renders one row per chapter with the server's state and queue summary", as
   const summary = screen.getByTestId("chapter-queue-summary");
   expect(within(summary).getByText("1 running")).toBeDefined();
   expect(within(summary).getByText("2 queued")).toBeDefined();
-  expect(within(summary).getByText("capacity 2")).toBeDefined();
+  expect(within(summary).getByText("Batch capacity 2")).toBeDefined();
   expect(screen.getByTestId("chapter-worker-alive")).toBeDefined();
 
   // Nothing is running on these rows, so no row draws a progress bar.
@@ -207,7 +207,7 @@ test("renders one row per chapter with the server's state and queue summary", as
   expect(screen.queryByTestId("chapter-102-progress")).toBeNull();
 
   // One primary action per row, read from the server's can map.
-  expect(screen.getByText("Run Step 01")).toBeDefined();
+  expect(screen.getByText("Start Batch · Step 01")).toBeDefined();
   expect(screen.getByText("Upload reviewed Concept files")).toBeDefined();
 });
 
@@ -311,7 +311,7 @@ test("selecting rows and pushing sends ONE request with only the eligible rows",
 
   const step01 = screen.getByTestId("push-step01");
   // Two rows selected, but only one of them may be sent Step 01.
-  expect(step01.textContent).toBe("Run Step 01 (1 of 2)");
+  expect(step01.textContent).toBe("Start Batch · Step 01 (1 of 2)");
 
   fireEvent.click(step01);
 
@@ -320,7 +320,7 @@ test("selecting rows and pushing sends ONE request with only the eligible rows",
   });
   expect(apiMock.chapterBatchPush).toHaveBeenCalledWith("step01", [
     { chapter_id: 101 },
-  ]);
+  ], { cohort: true, startAt: undefined });
 
   // The freshly projected row is folded straight back into the table.
   expect(await screen.findByTestId("chapter-101-queue-position")).toBeDefined();
@@ -648,4 +648,26 @@ test("a slot resolves to the instant the queue compares against, and now is no g
   expect(new Date(String(iso)).getTime()).toBeGreaterThan(from.getTime());
   expect(slotIso("", from)).toBeUndefined();
   expect(slotIso("not a slot", from)).toBeUndefined();
+});
+
+test("history selector explicitly requests the previous catalogue", async () => {
+  renderPage();
+  await screen.findByText("Shapes Around Us");
+  fireEvent.change(screen.getByLabelText("Catalogue"), { target: { value: "history" } });
+  await waitFor(() => expect(apiMock.chapterBatchList).toHaveBeenLastCalledWith(expect.objectContaining({ catalogue: "history", page: 1 })));
+});
+
+test("failed runs offer source replacement without starting a provider call", async () => {
+  apiMock.chapterBatchList.mockResolvedValue(page({ items: [row({ ...STAGED, state: "failed", can: can({ upload_source: true, retry: true }) })] }));
+  renderPage();
+  await screen.findByText("Shapes Around Us");
+  expect(screen.getByText("Replace source PDF")).toBeDefined();
+  expect(apiMock.chapterBatchPush).not.toHaveBeenCalled();
+});
+
+test("exact half-hour slots always point into the future", () => {
+  const from = new Date("2026-09-16T11:30:18");
+  const [first] = nextSlots(from, 1);
+  expect(first).toMatch(/12:00/);
+  expect(new Date(slotIso(first, from)!).getTime()).toBeGreaterThan(from.getTime());
 });

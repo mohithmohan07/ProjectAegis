@@ -12,6 +12,7 @@ Three defects the owner hit on 12 September 2026, each pinned here:
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from app import models
 from app.services import build_concepts_release as release
@@ -28,7 +29,21 @@ from test_build_concepts_release import (  # noqa: E402
 
 def _reviewable_job(db):
     """A job with both Concept lanes staged and a review gate initialized."""
-    job, chapter = _job(db)
+    job, seeded_chapter = _job(db)
+    # The suite keeps committed queue rows between tests. Give this run its
+    # own saved target: recovery must never replace another job's binding to
+    # the shared seeded chapter merely to satisfy this fixture.
+    chapter = models.Chapter(
+        chapter_code=f"master-recovery-{uuid4().hex}",
+        board=seeded_chapter.board, grade=seeded_chapter.grade,
+        subject=seeded_chapter.subject, unit=seeded_chapter.unit,
+        chapter_title=seeded_chapter.chapter_title,
+        chapter_duration=seeded_chapter.chapter_duration,
+    )
+    db.add(chapter)
+    db.flush()
+    job.deposit_scope_ids = [chapter.id]
+    db.commit()
     release.stage_release(
         db, job,
         target_chapter_id=chapter.id,
@@ -70,12 +85,8 @@ def test_a_recorded_lane_failure_is_readable_as_its_reason(db):
     assert "marking contract" in issue["message"]
 
 
-def test_a_build_interrupted_by_a_dead_process_is_retired_at_startup(db):
-    """``master_building`` is durable; the running flag is not.
-
-    A process that has just started holds no generation lock, so any job still
-    marked building belongs to a worker that no longer exists.
-    """
+def test_a_build_interrupted_by_a_dead_process_is_queued_at_startup(db):
+    """An interrupted interactive build resumes its recorded chapter via queue."""
     job = _reviewable_job(db)
     release.update_concept_review_state(
         db, job,
@@ -87,19 +98,20 @@ def test_a_build_interrupted_by_a_dead_process_is_retired_at_startup(db):
         release.CONCEPT_REVIEW_MASTER_BUILDING
     )
 
-    retired = release.sweep_interrupted_master_builds(db)
+    recovered = release.sweep_interrupted_master_builds(db)
 
-    assert job.id in retired
+    assert job.id in recovered
     db.refresh(job)
     assert release.concept_review_state(job)["status"] == (
-        release.CONCEPT_REVIEW_MASTER_FAILED
+        release.CONCEPT_REVIEW_MASTER_BUILDING
     )
-    assert "interrupted" in (job.detail or "").lower()
-    assert "retry step 2" in (job.detail or "").lower()
+    assert "automatically" in (job.detail or "").lower()
+    task = db.query(models.ChapterBatchTask).filter_by(job_id=job.id).one()
+    assert task.state == "queued" and task.kind == "step02"
 
 
 def test_the_sweep_leaves_every_other_lifecycle_state_alone(db):
-    """Only a stranded build is retired — a paused review is not a failure."""
+    """Only an active build is adopted; a paused review remains a review."""
     keep = []
     for status in (
         release.CONCEPT_REVIEW_PENDING,

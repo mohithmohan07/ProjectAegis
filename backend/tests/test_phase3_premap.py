@@ -1493,7 +1493,7 @@ def test_decide_once_replays_the_whole_map_for_free(golden_envelope):
 # the existing passes are untouched
 
 
-def test_no_unrelated_existing_pass_moved_for_this_slice():
+def test_no_unrelated_existing_pass_moved_for_this_slice(monkeypatch):
     from app.services import semantic_confidence_policy as confidence_policy
     from app.services.phase3 import analyse, place, prelearn
 
@@ -1507,10 +1507,20 @@ def test_no_unrelated_existing_pass_moved_for_this_slice():
     assert prelearn.POLICY_VERSION == "prelearn-1"
     assert premap.POLICY_VERSION == "premap-1"
 
+    # Analyse's new coverage policy uses Pre map calibration deliberately.
+    # The sealed Q68/v1 pass must retain its old paid decision and systems;
+    # only a newly stamped v2 envelope may author additional paired coverage.
+    from app.services import analysis_correction_policy as correction_policy
+    from tests.test_analysis_concept_coverage import assert_post_analysis_policy_replay
+
+    assert_post_analysis_policy_replay(
+        monkeypatch, historical_stamp=correction_policy.VERSION_V1,
+    )
+
     from pathlib import Path
 
     root = Path(place.__file__).parent
-    for name in ("settle.py", "host.py", "place.py", "analyse.py",
+    for name in ("settle.py", "host.py", "place.py",
                  "polish.py", "assemble.py", "prelearn.py"):
         text = (root / name).read_text(encoding="utf-8")
         assert "premap" not in text.lower(), name

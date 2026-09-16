@@ -5093,3 +5093,18 @@ over days. The recorded estimate is $4.9718 → about $2.17.
 Offline only: `tests/test_batch_broker.py` (14), `tests/test_batch_pricing.py`
 (4), `tests/test_batch_cohort_queue.py` (9), and the frontend slot tests. No
 paid generation.
+
+
+## Q75 — decided — durable selected-chapter batches and Corrections 2.0
+
+**Owner, 16 September 2026:** fix the audited gaps; ongoing chapters must continue
+through deployment; notify the starter on completion/failure; show total chapters,
+stages and costs; uploading must not begin individual paid processing; run selected
+chapters together through Batch API and remove the two-run bottleneck.
+
+This supersedes Q73's 90-minute full-price fallback. Batch waiting is a durable
+non-failure state; the same provider request and batch ID are reconciled after a
+restart. No deployment resets source conversion, accepted review files, sealed
+output or model decision identities. New output fixes are generation-quality v5;
+old stamped policies remain replayable. See
+[implementation and operations](durable-batch-rollout-2026-09-16.md).

@@ -14,9 +14,9 @@ router = APIRouter(prefix="/directory", tags=["directory"])
 
 
 @router.get("/tree")
-def get_tree(db: Session = Depends(get_db)):
+def get_tree(include_history: bool = False, db: Session = Depends(get_db)):
     """Board > Grade > Subject > Unit > Chapter hierarchy."""
-    return directory.tree(db)
+    return directory.tree(db, include_history=include_history)
 
 
 @router.get("/resolve-chapter")

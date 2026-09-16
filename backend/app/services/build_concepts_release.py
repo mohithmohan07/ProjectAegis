@@ -208,6 +208,7 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # Q35: complete immutable evidence and lossless structural repair history
     # accompany the staged row, but are not learner-facing database columns.
     "_aegis_source_evidence",
+    "generation_quality_policy",
     "_aegis_structure_original",
     "_aegis_polish_repairs",
     "_aegis_concept_coherence",
@@ -717,45 +718,10 @@ def sweep_markerless_batch_runs(db: Session) -> list[int]:
 
 
 def sweep_interrupted_master_builds(db: Session) -> list[int]:
-    """Retire Step 2 runs whose process died mid-build, at startup.
+    """Compatibility entrypoint: recover interrupted runs into the durable queue."""
+    from .run_recovery import recover_interrupted_runs
 
-    ``master_building`` is durable; the "is it still running?" answer is a
-    process-local ``threading.Lock``. A worker that dies — OOM, a deploy
-    replacing the machine, any hard stop — therefore leaves a job that reads
-    *building* forever, with nothing to finish it and no way for the console to
-    tell it apart from a run in progress (owner report, job 139, 12 September
-    2026: "Step 2 stopped · retry available", stranded).
-
-    A process that has just started holds no generation lock by definition, so
-    every ``master_building`` marker seen here belongs to a process that no
-    longer exists. Mark them failed with a named reason so the reviewer sees
-    what happened and can retry. Mechanics only: no content is judged, and the
-    staged Concept files and every stored decision are untouched.
-    """
-
-    interrupted: list[int] = []
-    for job in db.query(models.UploadJob).filter(
-        models.UploadJob.module == "build_concepts",
-    ).all():
-        state = concept_review_state(job)
-        if state.get("status") != CONCEPT_REVIEW_MASTER_BUILDING:
-            continue
-        try:
-            update_concept_review_state(
-                db, job,
-                status=CONCEPT_REVIEW_MASTER_FAILED,
-                master_completed_at=datetime.now(timezone.utc).isoformat(),
-            )
-            job.detail = (
-                "Master generation was interrupted before it finished — the "
-                "server restarted while Step 2 was running. Your reviewed "
-                "files and every settled decision are saved; retry Step 2."
-            )
-            db.commit()
-            interrupted.append(int(job.id))
-        except Exception:
-            db.rollback()
-    return interrupted
+    return recover_interrupted_runs(db)
 
 
 def update_concept_review_state(
@@ -3552,8 +3518,13 @@ def stage_release(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
     released_at = datetime.now(timezone.utc).isoformat()
+    from . import column_spec
     payload = {
         "version": RELEASE_VERSION,
+        column_spec.POLICY_KEY: column_spec.freeze_for_release(
+            directory_metadata, generation_policy, checkpoint_value,
+            release_payload(job, lane=LANE_POST),
+        ),
         **reviewed_file_workflow_policy.run_fields(),
         **(generation_quality_fields(generation_policy, chapter_id=target)
            or generation_quality_fields(checkpoint_value, chapter_id=target)),
@@ -4658,6 +4629,7 @@ def stage_pre_release(
     source_document_hash = "sha256:" + hashlib.sha256(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
+    from . import column_spec
     payload = {
         "version": RELEASE_VERSION,
         # Minted per LANE, so a Pre re-stage never reads as a Post one
@@ -4675,6 +4647,10 @@ def stage_pre_release(
         # publication) to stamp Pre topics. It is a PROJECTION detail, not
         # the lane's authority — the slot is (spec T3).
         "learning_kind": LANE_PRE,
+        column_spec.POLICY_KEY: column_spec.freeze_for_release(
+            directory_metadata, source, release_payload(job, lane=LANE_PRE),
+            release_payload(job, lane=LANE_POST),
+        ),
         **foundation_fields,
         **generation_quality_policy.fields(source),
         **generation_repair_policy.fields(source),

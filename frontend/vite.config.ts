@@ -47,6 +47,7 @@ export default defineConfig({
         // which no proxied prefix matches ("/chapters" does not start with
         // "/chapter-batches"), so it needs nothing in SPA_PATHS.
         "/chapter-batches",
+        "/run-dashboard",
         "/directory",
         "/health",
         "/tagging",

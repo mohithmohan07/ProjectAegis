@@ -65,7 +65,7 @@ def _state(value: Mapping[str, Any] | None) -> dict[str, Any]:
     started = _float(raw.get("started_at_epoch"), now)
     progress = max(0.0, min(1.0, _float(raw.get("progress"))))
     status = str(raw.get("status") or "processing")
-    if status not in {"processing", "review", "master", "completed", "failed"}:
+    if status not in {"processing", "review", "master", "waiting", "completed", "failed"}:
         status = "processing"
     state = {
         "schema_version": SCHEMA_VERSION,
@@ -307,6 +307,18 @@ def resume(value: Mapping[str, Any], *, now: float | None = None,
     return state
 
 
+def suspend(value: Mapping[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    """Wait for a provider or restart without losing the stage or progress."""
+    now = _now() if now is None else float(now)
+    state = _snapshot(value, now=now, rebase=True)
+    state["active_started_at_epoch"] = None
+    state["review_started_at_epoch"] = None
+    state["status"] = "waiting"
+    state["finished_at"] = ""
+    state["finished_at_epoch"] = None
+    return state
+
+
 def finish(value: Mapping[str, Any], *, now: float | None = None,
            progress: float | None = None, status: str = "completed",
            stage: str = "") -> dict[str, Any]:
@@ -333,7 +345,7 @@ def validate(value: Any, *, path: str = "run_state") -> None:
         raise ValueError(f"{path}.schema_version is not supported")
     if not isinstance(value.get("run_id"), str) or not value["run_id"].strip():
         raise ValueError(f"{path}.run_id must be non-empty")
-    if value.get("status") not in {"processing", "review", "master", "completed", "failed"}:
+    if value.get("status") not in {"processing", "review", "master", "waiting", "completed", "failed"}:
         raise ValueError(f"{path}.status is not supported")
     for field in ("progress", "active_elapsed_seconds", "review_wait_seconds", "wall_elapsed_seconds"):
         number = value.get(field)

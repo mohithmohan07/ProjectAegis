@@ -388,7 +388,7 @@ def _tidy(text: str) -> str:
     return text.strip()
 
 
-def strip_dangling_references(text: str, *, keep_figures: bool = False) -> str:
+def strip_dangling_references(text: str, *, keep_figures: bool = False, keep_tables: bool = False) -> str:
     """Remove bare source-artifact references; keep real worded content.
 
     When the text embeds an actual image URL, figure/table references stay
@@ -396,12 +396,15 @@ def strip_dangling_references(text: str, *, keep_figures: bool = False) -> str:
     With ``keep_figures`` a figure reference stays even without an image on
     the section: the figure a Description cites is the one the row's hub or
     Example carries, and deleting the token left the sentence without its
-    subject (Q67). Example/Exercise/page apparatus is neutralised as before.
+    subject (Q67). V5 ``keep_tables`` also preserves numbered table references
+    when their table is elsewhere in the same learner material; the authors
+    and coverage checks own the evidence, not a regex replacement. Earlier
+    stamps retain their recorded cleanup. Example/page apparatus is unchanged.
     """
     if not text:
         return text
     has_image = bool(_IMAGE_URL_RE.search(text))
-    if has_image:
+    if has_image or keep_tables:
         paren_re, inline_re = _PAREN_REF_NO_FIG_RE, _INLINE_REF_NO_FIG_RE
     elif keep_figures:
         paren_re, inline_re = _PAREN_REF_KEEP_FIG_RE, _INLINE_REF_KEEP_FIG_RE
@@ -467,7 +470,7 @@ _ARTIFACT_NEUTRALIZATIONS = [
     (re.compile(r"\bp\.?\s*\d+\b", re.IGNORECASE),
      "in the chapter"),
 ]
-# Table references are neutralized before deposit. Figure references are kept
+# Legacy table references are neutralized before deposit. Figure references are kept
 # so strict validation can require the matching canonical image tag.
 _TABLE_NEUTRALIZATIONS = [
     (re.compile(r"\btables?\.?\s*\d+(?:\.\d+)*\b", re.IGNORECASE),
@@ -475,13 +478,13 @@ _TABLE_NEUTRALIZATIONS = [
 ]
 
 
-def neutralize_source_artifacts(text: str) -> str:
+def neutralize_source_artifacts(text: str, *, keep_tables: bool = False) -> str:
     """Rewrite bare source references into neutral wording (content kept)."""
     if not text:
         return text
     for pat, repl in _ARTIFACT_NEUTRALIZATIONS:
         text = pat.sub(repl, text)
-    for pat, repl in _TABLE_NEUTRALIZATIONS:
+    for pat, repl in (() if keep_tables else _TABLE_NEUTRALIZATIONS):
         text = pat.sub(repl, text)
     return _tidy(text)
 
@@ -509,7 +512,7 @@ _VALIDATOR_ALIGNED_TABLE_SCRUBS = [
 ]
 
 
-def scrub_validator_artifacts(text: str) -> str:
+def scrub_validator_artifacts(text: str, *, keep_tables: bool = False) -> str:
     """Force-clear any token the concept validator treats as source_artifact.
 
     Used as a final deposit guarantee after named neutralization. Figure
@@ -521,7 +524,7 @@ def scrub_validator_artifacts(text: str) -> str:
     text = replace_mmd_references(text)
     for pat, repl in _VALIDATOR_ALIGNED_SCRUBS:
         text = pat.sub(repl, text)
-    for pat, repl in _VALIDATOR_ALIGNED_TABLE_SCRUBS:
+    for pat, repl in (() if keep_tables else _VALIDATOR_ALIGNED_TABLE_SCRUBS):
         text = pat.sub(repl, text)
     return _tidy(text)
 
@@ -538,6 +541,7 @@ _TEXTBOOK_SECTION_REF_RE = re.compile(
 
 def _clean_details(
     details: str, *, neutralize: bool = True, keep_figures: bool = False,
+    keep_tables: bool = False,
 ) -> str:
     """Sanitize a concept_details string section-by-section.
 
@@ -566,7 +570,7 @@ def _clean_details(
             cleaned = replace_mmd_references(part)
         else:
             cleaned = replace_mmd_references(
-                strip_dangling_references(part, keep_figures=keep_figures)
+                strip_dangling_references(part, keep_figures=keep_figures, keep_tables=keep_tables)
             )
         if (
             label.startswith("description")
@@ -576,7 +580,7 @@ def _clean_details(
         # Source-owned figures stay attached in every section. Whether a
         # visual supports this concept belongs to the API author/critic;
         # formatting must not silently delete its evidence.
-        out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
+        out.append(neutralize_source_artifacts(cleaned, keep_tables=keep_tables) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
 
 
@@ -603,6 +607,7 @@ def _neutralize_name_artifacts(name: str) -> str:
 
 def clean_concept_record(
     rec: dict, *, neutralize_artifacts: bool = True, keep_figures: bool | None = None,
+    keep_tables: bool | None = None,
 ) -> dict:
     """Return ``rec`` with its name + description normalized (mutates in place).
 
@@ -620,6 +625,12 @@ def clean_concept_record(
 
     if keep_figures is None:
         keep_figures = generation_quality_policy.figure_references_kept(rec)
+    if keep_tables is None:
+        keep_tables = (
+            generation_quality_policy.table_references_kept(rec)
+            if generation_quality_policy.version_of(rec) is not None
+            else generation_quality_policy.bound_source_output_corrections()
+        )
     for field in ("topic", "parent_concept", "concept_title", "concept_details"):
         if rec.get(field):
             rec[field] = strip_control_chars(rec[field])
@@ -642,13 +653,13 @@ def clean_concept_record(
             rec["concept_details"])
         rec["concept_details"] = _clean_details(
             rec["concept_details"], neutralize=neutralize_artifacts,
-            keep_figures=keep_figures)
+            keep_figures=keep_figures, keep_tables=keep_tables)
     if neutralize_artifacts:
         # Absolute last resort: scrub any validator-shaped token that named
         # neutralization missed (OCR forms, MMD leftovers, page14, etc.).
         for field in ("topic", "parent_concept", "concept_title", "concept_details"):
             if rec.get(field):
-                rec[field] = scrub_validator_artifacts(rec[field])
+                rec[field] = scrub_validator_artifacts(rec[field], keep_tables=keep_tables)
     return rec
 
 

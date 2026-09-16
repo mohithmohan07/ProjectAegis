@@ -863,7 +863,7 @@ def test_merge_exhaustion_without_a_fixer_fails_closed(
 # the existing passes are untouched (spec T1)
 
 
-def test_no_unrelated_existing_pass_was_re_keyed_by_this_slice():
+def test_no_unrelated_existing_pass_was_re_keyed_by_this_slice(monkeypatch):
     """Adding a ``prerequisites`` field to Settle/Host/Place/Analyse would
     re-key every stored decision for those passes (kernel.decision_key
     hashes the whole payload and store.put never overwrites). The capture
@@ -900,11 +900,18 @@ def test_no_unrelated_existing_pass_was_re_keyed_by_this_slice():
     ]
     assert prelearn.POLICY_VERSION == "prelearn-1"
 
-    # And no existing pass mentions the capture at all.
+    # Corrections 2.0 intentionally shares Pre boundary helpers in Analyse's
+    # new v2 coverage pass. Guard the historical payload/key and live-system
+    # behavior instead of rejecting that versioned import by its spelling.
+    from tests.test_analysis_concept_coverage import assert_post_analysis_policy_replay
+
+    assert_post_analysis_policy_replay(monkeypatch, historical_stamp=None)
+
+    # The remaining original passes still do not own capture decisions.
     from pathlib import Path
 
     root = Path(place.__file__).parent
-    for name in ("settle.py", "host.py", "place.py", "analyse.py",
+    for name in ("settle.py", "host.py", "place.py",
                  "polish.py", "assemble.py"):
         text = (root / name).read_text(encoding="utf-8")
         assert "prerequisite" not in text.lower(), name

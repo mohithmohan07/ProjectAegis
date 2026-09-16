@@ -154,6 +154,12 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _table_references_kept(row) -> bool:
+    from . import generation_quality_policy as quality
+    return (quality.table_references_kept(row) if quality.version_of(row) is not None
+            else quality.bound_source_output_corrections())
+
+
 def _normalized_type_definition(value: str) -> str:
     """Canonical text spelling for an exact rendered-identity join."""
     return _norm(unicodedata.normalize("NFKC", value or "")).rstrip(" .,:;!?")
@@ -488,7 +494,10 @@ def validate_concept_rows(
         # validation verifies their same-Example image tag.  Other source
         # artifacts (and unshipped table references) remain invalid.
         artifact_re = (
-            _SOURCE_ARTIFACT_NO_FIG_RE if _IMAGE_URL_RE.search(details)
+            _SOURCE_ARTIFACT_NO_FIG_RE if (
+                _IMAGE_URL_RE.search(details)
+                or _table_references_kept(row)
+            )
             else _SOURCE_ARTIFACT_NO_FIGURE_RE
         )
         if artifact_re.search(row_text):

@@ -357,7 +357,10 @@ def _deposit_deterministic_pipeline(
 
     keep_figures = generation_quality_policy.figure_references_kept(metadata)
     out_rows = [
-        concept_cleanup.clean_concept_record(dict(row), keep_figures=keep_figures)
+        concept_cleanup.clean_concept_record(
+            dict(row), keep_figures=keep_figures,
+            keep_tables=generation_quality_policy.table_references_kept(metadata),
+        )
         for row in rows
     ]
     out_rows = concept_cleanup.filter_review_violations(

@@ -129,6 +129,14 @@ def _post_generate_endpoint(
             "generation is already running for this upload; wait for the active run to finish",
         )
 
+    job.requested_chapter_id = int(req.target_chapter_id)
+    # The authenticated starter is distinct from the upload's owner.
+    if not job.started_by_sub:
+        job.started_by_sub = user.sub
+        job.started_by_email = user.email
+    job.execution_mode = "synchronous"
+    db.commit()
+
     def work():
         worker_db = SessionLocal()
         try:
@@ -410,6 +418,13 @@ def _concept_review_master_endpoint(
             )
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
+
+    # The authenticated starter is distinct from the upload's owner.
+    if not job.started_by_sub:
+        job.started_by_sub = user.sub
+        job.started_by_email = user.email
+    job.execution_mode = "synchronous"
+    db.commit()
 
     def work():
         worker_db = SessionLocal()

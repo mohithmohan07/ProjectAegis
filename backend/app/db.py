@@ -75,6 +75,10 @@ def _ensure_columns() -> None:
     if not DB_URL.startswith("sqlite"):
         return
     additions = [
+        ("chapters", "catalogue_active", "BOOLEAN DEFAULT 1"),
+        ("chapters", "catalogue_source", "VARCHAR(64) DEFAULT ''"),
+        ("chapters", "catalogue_revision", "VARCHAR(64) DEFAULT ''"),
+        ("chapters", "catalogue_order", "INTEGER DEFAULT 0"),
         ("topics", "source_order", "INTEGER DEFAULT 0"),
         # Persisted identity (spec-step8 T4-1). Minted once by
         # ``services.identity``; the backfill below fills blanks only.
@@ -86,6 +90,10 @@ def _ensure_columns() -> None:
         ("assessment_sessions", "owner_sub",
          "VARCHAR(255) DEFAULT 'local:default'"),
         ("upload_jobs", "owner_sub", "VARCHAR(255) DEFAULT 'local:default'"),
+        ("upload_jobs", "requested_chapter_id", "INTEGER DEFAULT NULL"),
+        ("upload_jobs", "started_by_sub", "VARCHAR(255) DEFAULT ''"),
+        ("upload_jobs", "started_by_email", "VARCHAR(320) DEFAULT ''"),
+        ("upload_jobs", "execution_mode", "VARCHAR(24) DEFAULT ''"),
         ("upload_jobs", "upload_storage_key", "VARCHAR(512) DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
         ("upload_jobs", "chapter_duration_minutes", "INTEGER DEFAULT 0"),
@@ -127,6 +135,7 @@ def _ensure_columns() -> None:
         # which is exactly what it was.
         ("chapter_batch_tasks", "cohort_id", "VARCHAR(32) DEFAULT ''"),
         ("chapter_batch_tasks", "start_after", "DATETIME DEFAULT NULL"),
+        ("chapter_batch_tasks", "job_id", "INTEGER DEFAULT NULL"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in additions:
@@ -147,6 +156,11 @@ def _ensure_columns() -> None:
             conn.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_upload_jobs_owner_sub "
                 "ON upload_jobs(owner_sub)"
+            )
+        if "chapter_batch_tasks" in tables:
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_chapter_batch_tasks_job_id "
+                "ON chapter_batch_tasks(job_id)"
             )
         if "assessment_sessions" in tables:
             conn.exec_driver_sql(

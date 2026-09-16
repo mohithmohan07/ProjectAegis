@@ -586,6 +586,42 @@ def rebuild_lane_master(
         return _run_and_record()
 
 
+def _completed_master_for_reviewed_input(db, job_id: int, lane: str, *, owner_sub=None):
+    """Resume an exact published lane without issuing another release version.
+
+    The reviewed draft's immutable UID/version and frozen Master source seal
+    must all match. This is deliberately separate from explicit one-lane
+    rebuilds, which are allowed to append a new version. A failed, materialized
+    or superseded row is not evidence that the lane finished.
+    """
+    from . import assessment_release_snapshot, release_core
+
+    job = uploads.get_job(db, job_id, owner_sub=owner_sub, module="build_concepts")
+    db.refresh(job)
+    staged = release.release_payload(job, lane=lane)
+    if not staged or not staged.get(release.STAGED_RELEASE_UID_FIELD):
+        return None
+    existing = release_core.latest_release_for_lane(db, job_id, lane)
+    if existing is None or existing.owner_sub != job.owner_sub:
+        return None
+    if existing.state not in {"ready_for_upload", "validated_with_flags", "publication_pending", "uploaded"}:
+        return None
+    if not (existing.publication or {}).get("directory") or not (
+        (existing.workbook_hashes or {}).get("master_xlsx")
+        and (existing.workbook_hashes or {}).get("concepts_xlsx")
+    ):
+        return None
+    context = existing.provider_identity or {}
+    if (
+        context.get("staged_release_uid") != staged[release.STAGED_RELEASE_UID_FIELD]
+        or context.get("staged_release_version") != release.staged_version(staged)
+        or (existing.payload or {}).get("source_concept_release_sha256")
+        != assessment_release_snapshot.source_release_sha256(staged)
+    ):
+        return None
+    return existing
+
+
 def _build_master_siblings(
     db,
     job_id: int,
@@ -594,6 +630,7 @@ def _build_master_siblings(
     owner_sub: str | None = None,
     progress_start: float = 0.955,
     progress_end: float = 0.98,
+    reuse_completed: bool = False,
 ) -> dict[str, dict[str, Any] | None]:
     """Outputs 02 and 04, in the same run that produced 01 and 03.
 
@@ -665,6 +702,20 @@ def _build_master_siblings(
             )
             built[lane] = None
             continue
+        if reuse_completed:
+            completed = _completed_master_for_reviewed_input(
+                db, job_id, lane, owner_sub=owner_sub,
+            )
+            if completed is not None:
+                # A sibling may have committed before the other yielded for
+                # provider waiting or deployment. Keep that exact paid result
+                # and release version; reserve/spend only for unfinished lanes.
+                built[lane] = {"release_id": completed.id}
+                progress.log(
+                    f"Resuming with the completed {lane} Master "
+                    f"{completed.release_uid} v{completed.version}."
+                )
+                continue
         lanes.append(lane)
     if not lanes:
         return built
@@ -1457,6 +1508,7 @@ def build_review_masters(
             owner_sub=owner_sub,
             progress_start=0.70,
             progress_end=0.98,
+            reuse_completed=True,
         )
     except Exception as exc:
         db.rollback()
