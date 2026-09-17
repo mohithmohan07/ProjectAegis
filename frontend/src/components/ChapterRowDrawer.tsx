@@ -371,11 +371,11 @@ export default function ChapterRowDrawer({
           </dl>
 
           {row.can.upload_source && (
-            // The server offers this for any row that is not live and not
-            // dead — replacing a bad upload is how a person recovers a
-            // chapter. The table's primary action only ever shows it for a
-            // chapter with no job at all, so without this the capability is
-            // unreachable for every chapter that already has one.
+            // The server offers this for any row no step is currently
+            // holding — a `dead` row included, since replacing the source is
+            // the one action its own error message names. The table leads
+            // with a chapter's real work and only falls back to this when
+            // there is none, so the drawer carries it unconditionally.
             <div
               className="chapter-stage-source"
               data-testid={`chapter-${chapterId}-stage-source`}

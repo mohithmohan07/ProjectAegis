@@ -1055,5 +1055,25 @@ function PrimaryAction({
       </button>
     );
   }
+  if (can.upload_source) {
+    // Last, so a chapter with real work to do still leads with that work.
+    // But a chapter the server has settled as `dead` has NO other action —
+    // every branch above is false for it — and replacing the source is the
+    // one thing its own error message tells a person to do. Rendering the
+    // dash there put the dead end back in the table after the server had
+    // removed it, and the drawer was the only way through (owner report,
+    // 15 September 2026).
+    return (
+      <ChapterRowUpload
+        chapterId={row.chapter_id}
+        slot="source"
+        disabled={busy}
+        onUploaded={onRowUpdated}
+        sourceBook={row.source_book}
+        label="Replace source PDF"
+        compact
+      />
+    );
+  }
   return <span className="hint">—</span>;
 }
