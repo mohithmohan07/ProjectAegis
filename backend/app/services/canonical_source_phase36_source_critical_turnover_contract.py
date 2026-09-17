@@ -348,6 +348,10 @@ def install() -> None:
 
     @wraps(original_prepare)
     def prepare_job_context(db: Any, job: Any) -> dict[str, Any]:
+        from . import pdf_source_contract
+        if pdf_source_contract.selected_job(job):
+            canonical, _report = pdf_source_contract.load_for_job(job)
+            return canonical
         return _prepare_job_context_with_turnover(
             phase2._PHASE36_ORIGINAL_PREPARE_JOB_CONTEXT,
             db,

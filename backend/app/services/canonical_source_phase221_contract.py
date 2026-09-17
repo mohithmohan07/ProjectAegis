@@ -181,6 +181,9 @@ def install() -> None:
 
     @wraps(original_load_or_refresh)
     def load_or_refresh_for_job(job: Any):
+        from . import pdf_source_contract
+        if pdf_source_contract.selected_job(job):
+            return pdf_source_contract.load_for_job(job)
         canonical, report = original_load_or_refresh(job)
         return fallback.rehydrate_verified_fallback(
             job,

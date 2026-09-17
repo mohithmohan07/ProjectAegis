@@ -34,7 +34,7 @@ _CANDIDATE_BINDING_FIELDS = (
     "source_page",
     "text_sha256",
 )
-_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b|(?<![\w-])p[0-9]{4,}-b[0-9]{4,}(?![\w-])")
 
 
 class TopologyRepairRequired(ValueError):
@@ -328,5 +328,5 @@ def block_ids_from_issues(issues: list[str]) -> set[str]:
     return {
         match.group(0)
         for issue in issues
-        for match in re.finditer(r"\bBLK-[A-Za-z0-9_-]+\b", str(issue))
+        for match in _BLOCK_ID_RE.finditer(str(issue))
     }

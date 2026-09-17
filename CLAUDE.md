@@ -1,5 +1,20 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q79 (fresh PDF source engine, 17 September 2026).**
+The owner requested a first-principles redesign of PDF reading, sourcing and
+conversion after source failures. Use original PDFs and current primary research
+as evidence, not earlier conversion output as the design or accuracy baseline.
+New PDF conversions preserve immutable original bytes, rendered pages, positioned
+native text, typed source regions, independent audits and model-owned document
+relationships. Canonical source is projected directly from those relationships;
+Markdown is a view, never an intermediate source parser. Keep readable source
+and rich-text presentation separate, retaining exact source crops where needed.
+Save each paid decision before its next dependent call and freeze the first
+request contract so a deployment cannot silently repurchase partial work.
+Existing paid sources, reviewed files, Batch lanes and sealed runs retain their
+identities. No automatic retry, new credential dependency or pricing fallback
+is authorized by this redesign. See Q79 and `docs/pdf-source-engine-2026-09-17.md`.
+
 **Latest owner amendment: Q78 (review-upload error evidence, 17 September 2026).**
 Offer a separate optional error log when uploading each reviewed Concept file
 and each reviewed Master file, for both learning lanes. Preserve the corrected

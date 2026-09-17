@@ -67,7 +67,7 @@ _MAX_EXPANSION_CANDIDATES = 24
 _MAX_EXPANSION_BLOCKS = 32
 _MAX_EXPANSION_REFS = 32
 _SPACE_RE = re.compile(r"\s+")
-_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b|(?<![\w-])p[0-9]{4,}-b[0-9]{4,}(?![\w-])")
 _CANDIDATE_CATALOG_FIELDS = (
     "target_id",
     "concept_id",

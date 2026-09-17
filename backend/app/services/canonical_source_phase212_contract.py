@@ -61,6 +61,9 @@ def _gpt_page_ledger_reader(canonical: dict[str, Any]) -> bool:
 
 def adjudication_exempt(canonical: dict[str, Any]) -> bool:
     """A model membership authority already ruled this bundle (PDF lane)."""
+    from .pdf_source_adapter import is_canonical
+    if is_canonical(canonical):
+        return True
     outline = canonical.get("chapter_outline")
     if isinstance(outline, dict) and bool(outline.get("version")):
         return True

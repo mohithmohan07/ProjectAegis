@@ -20,6 +20,7 @@ from typing import Any, Mapping
 from .. import grounding_certificate
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import decide_with_visual_evidence
 from .assemble import GROUNDING_VERSION
 from .settle import (
     _batched,
@@ -72,6 +73,7 @@ def reground_rows(
     policy = confidence_policy.POLICY_VERSION
 
     env_view = {"graph": graph, "canonical": canonical}
+    source_structure = envelope_mod.source_structure_context(canonical)
     topics = _topic_rows(env_view)
     blocks_by_topic = _blocks_by_topic(env_view)
     known_blocks = _known_block_ids(env_view)
@@ -185,18 +187,24 @@ def reground_rows(
                 ],
                 "source_blocks": topic_blocks,
                 "other_topic_blocks": [
-                    {
+                    ({**copy.deepcopy(row), "topic_id": other_topic_id} if source_structure else {
                         "block_id": row["block_id"],
                         "topic_id": other_topic_id,
                         "kind": row["kind"],
                         "text": row["text"][:400],
-                    }
+                    })
                     for other_topic_id, rows in blocks_by_topic.items()
                     if other_topic_id != topic_id
                     for row in rows
                 ],
+                **source_structure,
             }
-            decision = kernel.decide(
+            # The fresh PDF contract may depend on exact crop pixels even when
+            # its transcription is partial. Bind those owned assets before the
+            # decision key is sealed, as Settle already does. Historical source
+            # lanes keep their previous request identity and cached decisions.
+            decide = decide_with_visual_evidence if source_structure else kernel.decide
+            decision = decide(
                 kind="reground.grounding",
                 unit_id=f"{topic_id}#reground{batch[0]}",
                 envelope_sha256=topology_sha,

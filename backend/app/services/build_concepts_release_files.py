@@ -410,7 +410,7 @@ _READY_FILL = PatternFill("solid", fgColor="D9EAD3")
 _TYPE_FILL = PatternFill("solid", fgColor="D9EAF7")
 _CASE_FILL = PatternFill("solid", fgColor="EADCF8")
 _EXAMPLE_FILL = PatternFill("solid", fgColor="F3F3F3")
-_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b|(?<![\w-])p[0-9]{4,}-b[0-9]{4,}(?![\w-])")
 
 
 ISSUES_NOTE_LABEL = "Release issues"

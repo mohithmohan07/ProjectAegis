@@ -706,7 +706,7 @@ def _section_excerpt(
         block = blocks_by_id.get(str(block_id))
         if not block or block.get("kind") in {"layout", "heading"}:
             continue
-        text = str(block.get("display_text") or block.get("raw_text") or "").strip()
+        text = str(block.get("source_evidence_text") or block.get("display_text") or block.get("raw_text") or "").strip()
         if text:
             pieces.append(_SPACE_RE.sub(" ", text))
         if sum(len(piece) for piece in pieces) >= limit:
@@ -839,6 +839,9 @@ def _numbered_main_binding_rows(
     graph-only section from the canonical heading.  No raw MMD or ACSD record
     is mutated.
     """
+    from .pdf_source_adapter import is_canonical as is_pdf_source
+    if is_pdf_source(canonical):
+        return []
 
     working_sections = sections if sections is not None else [
         copy.deepcopy(row)
@@ -1634,21 +1637,22 @@ def compile_semantic_graph(
     # evidence and independent-critic dissent land here so a reviewer sees
     # them on the graph instead of the run silently guessing or stopping.
     advisory_issues: list[dict[str, Any]] = []
-    sections.extend(_virtual_missing_main_candidates(
-        canonical, page_bundle, advisory_issues=advisory_issues,
+    from .pdf_source_adapter import is_canonical as is_pdf_source
+    direct_pdf = is_pdf_source(canonical)
+    if not direct_pdf:
+        sections.extend(_virtual_missing_main_candidates(
+            canonical, page_bundle, advisory_issues=advisory_issues,
+        ))
+    numbered_main_bindings = ([] if direct_pdf else _numbered_main_binding_rows(
+        canonical, sections, materialize_projections=True,
     ))
-    numbered_main_bindings = _numbered_main_binding_rows(
-        canonical,
-        sections,
-        materialize_projections=True,
-    )
     sections.sort(key=lambda row: (
         int(row.get("source_start") or 0),
         int(row.get("order") or 0),
         str(row.get("section_id") or ""),
     ))
 
-    mains, subs = structure.numbered_heading_inventory(canonical)
+    mains, subs = ({}, {}) if direct_pdf else structure.numbered_heading_inventory(canonical)
     numbered_hierarchy_active = bool(mains)
     if len(mains) == 1:
         only_number, only_block = next(iter(mains.items()))
@@ -1660,7 +1664,7 @@ def compile_semantic_graph(
             numbered_hierarchy_active = False
     fallback_main_section_ids: set[str] = set()
     fallback_topic_titles: list[str] = []
-    if not numbered_hierarchy_active or not mains:
+    if not direct_pdf and (not numbered_hierarchy_active or not mains):
         try:
             from . import generation as _generation
             fallback_topic_titles = _generation._topic_headings(
@@ -1774,7 +1778,7 @@ def compile_semantic_graph(
                 structural_numbers[sub_section_id] = sub_number
 
     baseline = {
-        str(section.get("section_id") or ""): _baseline_section_role(
+        str(section.get("section_id") or ""): ("content_heading" if direct_pdf else _baseline_section_role(
             section,
             chapter_title=chapter_title,
             numbered_main_section_ids=numbered_main_ids,
@@ -1782,7 +1786,7 @@ def compile_semantic_graph(
             has_numbered_mains=(
                 numbered_hierarchy_active or bool(fallback_main_section_ids)
             ),
-        )
+        ))
         for section in sections
     }
     for sid in fallback_subtopic_parent:
@@ -2142,6 +2146,11 @@ def compile_semantic_graph(
         position = int(task.get("source_start") or 0)
         topic = topic_for_position(position)
         subtopic = subtopic_for_position(topic["topic_id"], position)
+        if direct_pdf:
+            declared_section = section_graph_by_id.get(str(task.get("section_id") or ""))
+            if declared_section:
+                topic = next(row for row in topics if row["topic_id"] == declared_section["topic_id"])
+                subtopic = next((row for row in subtopics if row["subtopic_id"] == declared_section.get("subtopic_id")), None)
         tasks.append({
             "task_id": str(task.get("task_id") or ""),
             "qid": str(task.get("qid") or ""),
@@ -2160,6 +2169,9 @@ def compile_semantic_graph(
             "requires_visual": bool(task.get("requires_visual")),
             "chapter_wide": bool(task.get("chapter_wide") or task.get("_topic_scope") == "chapter"),
         })
+        if direct_pdf:
+            for field in ("source_block_ids", "source_task_ids", "source_task_tree", "prompt_block_ids", "answer_block_ids"):
+                tasks[-1][field] = copy.deepcopy(task.get(field) or [])
 
     graph = {
         "schema_name": SCHEMA_NAME,
@@ -2512,6 +2524,9 @@ def render_semantic_source(
     display-math opener, equation body, and closer into three ACSD blocks; a
     block-by-block renderer would preserve orphan ``\\[``/``\\]`` delimiters.
     """
+    from . import pdf_source_adapter
+    if pdf_source_adapter.is_canonical(canonical):
+        return pdf_source_adapter.render_semantic_source(graph, canonical)
     graph_sections = {
         str(row.get("section_id") or ""): row
         for row in graph.get("sections") or [] if isinstance(row, dict)
@@ -7186,6 +7201,9 @@ def _block_excerpt_text(
     source wording (the retired Phase 3.7/3.7.1 pair pinned both behaviors;
     the excerpts feed pre-81% consumers and stay unchanged).
     """
+    from . import pdf_source_adapter
+    if pdf_source_adapter.is_canonical(canonical):
+        return pdf_source_adapter.block_evidence_text(canonical_block)
     raw = _graph_block_text(graph_block, canonical_block)
     parts: list[str] = []
     _append_labelled_evidence(parts, "Source text", raw)
@@ -7405,6 +7423,9 @@ def load_page_evidence(
 ) -> dict[str, Any] | None:
     if source_path.suffix.lower() != ".pdf":
         return None
+    from . import pdf_source_adapter, pdf_source_contract
+    if pdf_source_adapter.is_canonical(canonical):
+        return pdf_source_contract.load_page_evidence(source_path, artifact_dir, canonical)
     artifact_path = Path(artifact_dir) / VISION_ACSD_FILENAME
     pdf_sha = page_acsd._pdf_sha256(source_path)
     if saved_graphs:

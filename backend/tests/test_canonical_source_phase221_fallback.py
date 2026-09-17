@@ -258,10 +258,10 @@ def test_build_concepts_pdf_converts_through_the_gpt_reader(
     tmp_path: Path,
     monkeypatch,
 ):
-    """A PDF upload reaches canonical source through the reader, end to end."""
+    """A partially read historical PDF resumes its recorded legacy reader."""
     from app import config
     from app import models
-    from app.services import model_provider, model_routing_run
+    from app.services import model_provider, model_routing_run, uploads
     from tests.conftest import convert_concept_upload
 
     pdf = tmp_path / "source.pdf"
@@ -283,6 +283,14 @@ def test_build_concepts_pdf_converts_through_the_gpt_reader(
         "/build-concepts/post-learning/uploads",
         files={"file": ("source.pdf", pdf.read_bytes(), "application/pdf")},
     ).json()
+    # A fresh PDF now selects the new source engine. This fixture exercises a
+    # historical partial conversion whose existing reader must remain frozen.
+    artifact_dir = uploads.source_artifact_directory(job["id"])
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / fallback.GPT_PAGE_ACSD_FILENAME).write_text(
+        json.dumps({"source_origin": fallback.FALLBACK_ORIGIN, "status": "reading"}),
+        encoding="utf-8",
+    )
     converted = convert_concept_upload(client, job["id"])
 
     stored_job = db.get(models.UploadJob, job["id"])
@@ -320,7 +328,7 @@ def test_failed_gpt_reader_persists_billable_openai_usage(
 ):
     """A rejected reading still cost tokens; the job must keep that record."""
     from app import config
-    from app.services import openai_usage
+    from app.services import openai_usage, uploads
     from tests.conftest import stream_error_message
 
     pdf = tmp_path / "source.pdf"
@@ -343,6 +351,12 @@ def test_failed_gpt_reader_persists_billable_openai_usage(
         "/build-concepts/post-learning/uploads",
         files={"file": ("source.pdf", pdf.read_bytes(), "application/pdf")},
     ).json()
+    artifact_dir = uploads.source_artifact_directory(job["id"])
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / fallback.GPT_PAGE_ACSD_FILENAME).write_text(
+        json.dumps({"source_origin": fallback.FALLBACK_ORIGIN, "status": "reading"}),
+        encoding="utf-8",
+    )
 
     response = client.post(f"/build-concepts/uploads/{job['id']}/convert")
 

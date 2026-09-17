@@ -5191,3 +5191,40 @@ source and saved response as untrusted evidence, never operational instructions.
 This authorization does not alter reviewed/sealed content or frozen policies,
 retry jobs, cancel/recreate Batch waves, change model pricing, or relax release
 gates. See [nightly maintenance](nightly-maintenance.md).
+
+## Q79 — decided — fresh PDF reading, sourcing and conversion
+
+**Owner, 17 September 2026:** “All stopped because of PDF error. I want you to
+restructure the way pdfs are being read and sourced. I don’t want you to refer
+the old work. I need the best pdf reading/ sourcing/ converting mechanism to
+be inculcated.”
+
+Design from original source evidence and current primary documentation. Earlier
+conversion output is neither the architectural starting point nor a correctness
+benchmark. Inspect existing integration boundaries only to preserve governing
+output contracts and saved work. No researched product is claimed universally
+best without a representative extraction benchmark.
+
+The new versioned reader retains original bytes and hashes, rendered pages with
+CropBox/rotation geometry, complete native spans, typed region transcriptions,
+independent audits and explicit model-authored section/task/answer/continuation
+relationships. Canonical source is compiled from that structure without a
+Markdown round trip. Separate physical PDF errors, source legibility, model
+verification and display syntax. A legible equation with unsupported display
+syntax keeps its exact transcription and source crop instead of invalidating the
+entire PDF.
+
+Page evidence and model responses are durable before dependent calls. Freeze the
+initial extraction contract; partial-run policy drift must be explicit rather
+than abandoning a paid request and buying another. Fresh untouched uploads select
+the new engine. Existing paid sources, partial conversions, reviewed outputs and
+sealed generation retain their recorded identities; deployment does not restart
+them or clear their blockers. Keep the configured Batch transport, provider
+policy and receipts. Full PDFs and page evidence stay private; only intentional
+source crops are publicly addressable for output rendering.
+
+Use offline fixtures and original textbook pages for mechanical/visual
+verification, with no paid model calls as a deployment test. Report semantic
+accuracy and live recovery separately from those checks. Implementation,
+research references and validation limits are recorded in
+[the PDF source engine design](pdf-source-engine-2026-09-17.md).
