@@ -1,0 +1,88 @@
+{
+  "capture": {
+    "private_sha256": "5efc240822c3d4905b1e6495c0d36bbfe41619e1b49a6de8ad35e4a0b6bf1b5a",
+    "truncated": false
+  },
+  "disposition": "reported",
+  "exception": {
+    "frames": [],
+    "message_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "traceback_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "type": "Exception"
+  },
+  "failure_code": "generation_review_correction",
+  "failure_code_sha256": "c1f909fd6aedf6e218b27a8c8d1b6222498a751443777f12a9aa060647259778",
+  "fingerprint": "ecde86d3cbc9e57f3afee2ebb1a4b821a54abc70f1a48fc24cc173f0967f1f00",
+  "occurred_at": "2026-09-17T12:57:36.284483Z",
+  "origin": "review_concept",
+  "policies": [],
+  "queue": {
+    "attempt": null,
+    "batch_row_id": null,
+    "cohort_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+    "id": null,
+    "kind": null,
+    "lease_expires_at": null,
+    "lease_owner_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+    "max_attempts": null
+  },
+  "related_report_id": null,
+  "report_id": "fd66084b467a47ce9780459670bf69b5",
+  "review": {
+    "corrected_sha256": "2075e85f60ab85d9b442892bdb23b0d0b14d2aa101913360ebe3195df61e040a",
+    "evidence_bytes": 18763290,
+    "evidence_file_count": 300,
+    "evidence_sha256": "26c8e5cb6b30022b7c878917300b9dd51ab5212fb55f725850045129988ee91a",
+    "kind": "concept",
+    "notes_sha256": "61656996a0a95ea39d22398496210defe3bcce56f0aef10981974aedb2d74f13",
+    "unavailable_count": 0
+  },
+  "run": {
+    "chapter_id": null,
+    "checkpoint_stage_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+    "execution_mode": "legacy",
+    "job_id": 140,
+    "lane": "post",
+    "module": "build_concepts",
+    "run_id_sha256": "900893822f66f4415e4fea78f2824f2b62a5ee9eaa646ad29c57a042b3b6047e",
+    "stage_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+  },
+  "schema_version": 1,
+  "source": {
+    "checkpoint_sha256": "19145935fa811cf7a95bf152d8fca120e1818753e9de64b12dae5e423d13916b",
+    "filename_sha256": null,
+    "inventory_sha256": "655d2130e34163ca7fc0b22125892dfa045e61dce8ebfcfcb57088e74d996d4d",
+    "mmd_sha256": null
+  },
+  "source_evidence": {
+    "actual_pdf_sha256": null,
+    "actual_semantic_context_hash": null,
+    "actual_source_contract_hash": null,
+    "expected_pdf_sha256": null,
+    "expected_semantic_context_hash": null,
+    "expected_source_contract_hash": null,
+    "page_evidence_sha256s": [],
+    "reason": null,
+    "recorded_pdf_sha256s": []
+  },
+  "usage": {
+    "attempts": [],
+    "ledger_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "omitted_attempts": 0,
+    "pricing_complete": false,
+    "totals": {
+      "attempt_count": null,
+      "cached_input_tokens": null,
+      "estimated_cost_usd": null,
+      "input_tokens": null,
+      "known_usage_estimated_cost_usd": null,
+      "output_tokens": null,
+      "pending_request_count": null,
+      "request_count": null,
+      "total_tokens": null,
+      "unresolved_usage_request_count": null
+    },
+    "usage_complete": false
+  },
+  "validation": []
+}
