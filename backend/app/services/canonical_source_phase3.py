@@ -23,6 +23,7 @@ import copy
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import tempfile
@@ -2958,8 +2959,9 @@ def _critic_source_anomaly_via_openai(
 #
 # So this lane adds the one move the defect needs — the model re-expresses the
 # block's text in the canonical form, with the verified page evidence in hand —
-# behind the same independent critic and SOURCE_CRITICAL floor the selector
-# uses. It runs INSIDE Phase 3, whose caches are job-scoped, so no page is
+# behind an independent critic. Q77 sets this repair lane's author and critic
+# confidence floor to 0.90; the selector's SOURCE_CRITICAL floor is unchanged.
+# It runs INSIDE Phase 3, whose caches are job-scoped, so no page is
 # re-read and no already-converted PDF is touched (the owner's constraint of
 # 14 September 2026).
 #
@@ -2972,6 +2974,10 @@ def _critic_source_anomaly_via_openai(
 #: is canonical.
 _REPAIR_MODE = "api_canonicalized_rich_text"
 _RICH_TEXT_REPAIR_POLICY = "source-rich-text-feedback-2026-09-16-v2"
+# Q77 changes acceptance, not the model request or its evidence identity.
+# Keep the request policy above and the global semantic-policy fingerprint
+# stable so saved drafts, verified receipts and open Batch waves remain usable.
+_RICH_TEXT_REPAIR_MIN_CONFIDENCE = 0.90
 _RICH_TEXT_REPAIR_ATTEMPTS = 3
 _RICH_TEXT_REPAIR_MEMO = "_rich_text_repair_receipts"
 _RICH_TEXT_REPAIR_DRAFTS = "_rich_text_repair_attempts"
@@ -3875,8 +3881,17 @@ def _interpret_custom_source_instruction_via_openai(
     )
 
 
+def _repair_confidence_accepted(value: Any) -> bool:
+    """Apply the owner's repair-only floor without changing source identity gates."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(score) and _RICH_TEXT_REPAIR_MIN_CONFIDENCE <= score <= 1.0
+
+
 def _repair_proposal_refusal(before: str, proposal: Any) -> tuple[str, str]:
-    """The existing source-critical gates, reusable for author feedback/replay."""
+    """Repair acceptance and source-content gates, also used for saved drafts."""
     if not isinstance(proposal, dict):
         return "author", "the repair author returned no decision"
     decision = str(proposal.get("decision") or "")
@@ -3884,10 +3899,11 @@ def _repair_proposal_refusal(before: str, proposal: Any) -> tuple[str, str]:
         return "author", str(proposal.get("reason") or "the repair author asked for review")
     if decision not in {"canonicalize", "suppress"}:
         return "shape", f"unknown repair decision {decision!r}"
-    if not confidence_policy.accepts(
-        proposal.get("confidence"), confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
-    ):
-        return "author_confidence", "the repair author is below the source-critical confidence floor"
+    if not _repair_confidence_accepted(proposal.get("confidence")):
+        return "author_confidence", (
+            "the repair author needs a finite confidence from "
+            f"{_RICH_TEXT_REPAIR_MIN_CONFIDENCE:.2f} to 1.00"
+        )
     suppressed = decision == "suppress"
     if proposal.get("suppressed") is not suppressed:
         return "shape", "the suppressed flag disagrees with the repair decision"
@@ -3912,9 +3928,7 @@ def _repair_verification_refusal(verification: Any) -> tuple[str, str]:
     if (
         verification.get("verdict") == "verified"
         and not verification.get("issues")
-        and confidence_policy.accepts(
-            verification.get("confidence"), confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
-        )
+        and _repair_confidence_accepted(verification.get("confidence"))
     ):
         return "", ""
     issues = "; ".join(
@@ -3923,7 +3937,8 @@ def _repair_verification_refusal(verification: Any) -> tuple[str, str]:
     )
     return "critic", (
         f"independent critic verdict {str(verification.get('verdict') or 'missing')!r} "
-        "did not clear the source-critical verification contract"
+        "did not clear the independent rich-text repair verification contract "
+        f"(minimum confidence {_RICH_TEXT_REPAIR_MIN_CONFIDENCE:.2f})"
         + (f" — {issues}" if issues else "")
     )
 
@@ -4220,6 +4235,7 @@ def _repair_rich_text_blocks(
             "suppressed": suppressed,
             "repair_confidence": float(proposal.get("confidence") or 0.0),
             "verification_confidence": float(verification.get("confidence") or 0.0),
+            "repair_confidence_minimum": _RICH_TEXT_REPAIR_MIN_CONFIDENCE,
         }
 
     # All or none. A partially repaired graph is strictly worse than an

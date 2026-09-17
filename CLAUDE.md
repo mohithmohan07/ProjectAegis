@@ -1,5 +1,14 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q77 (source rich-text repair acceptance, 17 September 2026).**
+The owner requested a lower acceptance parameter and explicitly selected **0.90**.
+Apply it to the rich-text repair author and independent verifier. A repair still
+needs an explicit verified verdict, no verifier issues, canonical markup and
+unchanged source content. PDF extraction, source identity, destructive decisions
+and ordinary semantic thresholds are unchanged. Preserve request identities,
+paid drafts, accepted receipts and active Batch waves; do not reset or restart
+failed jobs as part of this parameter change. See Q77 in the decision register.
+
 **Latest owner amendment: Q76 (generation blocker recovery and nightly maintenance, 16 September 2026).**
 Fix repeatable source-identity, canonical rich-text and rendered-question coverage
 failures without bypassing integrity gates or replaying completed paid work.
