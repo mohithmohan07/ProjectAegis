@@ -299,6 +299,7 @@ def _review_gate(job: models.UploadJob) -> dict[str, Any]:
 
 def _require_step_three(
     job: models.UploadJob, state: Mapping[str, Any], *, operation: str,
+    operation_locked: bool = False,
 ) -> None:
     status = str(state.get("status") or "")
     if status not in {
@@ -310,7 +311,7 @@ def _require_step_three(
             f"status is {status!r}); build the Master files from the "
             f"reviewed Concept files before you {operation}"
         )
-    if uploads.is_job_running(job.id):
+    if not operation_locked and uploads.is_job_running(job.id):
         raise MasterReviewConflict(
             "generation is running for this upload; wait for the active "
             f"run to finish before you {operation}"
@@ -1398,13 +1399,53 @@ def submit_reviewed_master(
     workbook_bytes: bytes,
     filename: str = "",
     owner_sub: str = "",
+    review_error_notes: str | None = None,
+) -> dict[str, Any]:
+    """Serialize review with generation and archive optional error evidence."""
+    from . import review_error_reports
+
+    with uploads.exclusive_job_operation(job.id):
+        db.refresh(job)
+        resolved = concept_release.normalize_lane(lane)
+        state = _review_gate(job)
+        _require_step_three(job, state, operation="submit a reviewed Master file", operation_locked=True)
+        # Verify the lane before creating a report for a nonexistent output.
+        _live_release(db, job, resolved)
+        receipt = review_error_reports.prepare(
+            db, job, review_kind="master", lane=resolved,
+            corrected_bytes=workbook_bytes, filename=filename,
+            notes=review_error_notes, actor_sub=owner_sub,
+        )
+        try:
+            result = _submit_reviewed_master(
+                db, job, lane=resolved, workbook_bytes=workbook_bytes,
+                filename=filename, owner_sub=owner_sub,
+            )
+        except Exception as error:
+            if receipt is not None:
+                review_error_reports.finish(db, job, receipt, error=error)
+            raise
+        if receipt is not None:
+            result["review_error_report"] = review_error_reports.finish(db, job, receipt, result=dict(result))
+            result["review_workflow"] = concept_release.concept_review_state(job)
+        return result
+
+
+def _submit_reviewed_master(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    lane: object,
+    workbook_bytes: bytes,
+    filename: str = "",
+    owner_sub: str = "",
 ) -> dict[str, Any]:
     """Apply the reviewer's edited Master workbook as a new release version."""
 
     resolved = concept_release.normalize_lane(lane)
     db.refresh(job)
     state = _review_gate(job)
-    _require_step_three(job, state, operation="submit a reviewed Master file")
+    _require_step_three(job, state, operation="submit a reviewed Master file", operation_locked=True)
     release = _live_release(db, job, resolved)
     if not (release.publication or {}).get("directory"):
         raise MasterReviewConflict(

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
+import ReviewedFileUpload, { ReviewErrorReceipt } from "./ReviewedFileUpload";
 import { api } from "../api/client";
-import type { ChapterBatchRow } from "../types";
+import type { ChapterBatchRow, ReviewErrorReportReceipt } from "../types";
 
 export type ChapterUploadSlot = "source" | "concept" | "master";
 
@@ -29,13 +30,14 @@ export const BOOK_SOURCES_LIST_ID = "chapter-book-sources";
  * RunState and one monotonic run id, so the last row to mount captures it
  * and detaches the others (contract §11).
  *
- * This component therefore owns only its own pending flag, its own error
+ * This component therefore owns its pending flag, error, review notes
  * and (for a source) the two fields that ride the file, touches no browser
  * storage, and scopes every DOM id by chapter id AND by `scope` — a row and
  * its open drawer both render the same lane's upload, and two elements
  * sharing one id silently mis-wire `htmlFor`.
  *
- * The source slot stages in TWO steps on purpose. `source_book` is the
+ * Every slot separates selection from submission. Reviewed uploads offer
+ * an optional maintenance error log before sending the file. `source_book` is the
  * publication that becomes the Concept Source and the extracted
  * Post-Learning Question Source (Q42/Q45); staging with it blank leaves the
  * run with no publication and blocks its database upload later. A file
@@ -68,6 +70,7 @@ export default function ChapterRowUpload({
   compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<ReviewErrorReportReceipt>();
   const [error, setError] = useState<string | null>(null);
   const [staged, setStaged] = useState<File | null>(null);
   const [book, setBook] = useState(sourceBook);
@@ -85,7 +88,7 @@ export default function ChapterRowUpload({
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  async function send(file: File) {
+  async function send(file: File, reviewErrorNotes?: string): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
@@ -104,25 +107,46 @@ export default function ChapterRowUpload({
           chapterId,
           lane ?? "post",
           file,
+          reviewErrorNotes,
         );
       } else {
         row = await api.chapterBatchUploadMasterReview(
           chapterId,
           lane ?? "post",
           file,
+          reviewErrorNotes,
         );
       }
+      setReport(row.review_error_report);
       onUploaded(row);
+      return true;
     } catch (e) {
       // Publication ordering answers 409 with a readable detail
       // ("publish the Concept file first"). Show it verbatim.
       setError(String(e));
+      return false;
     } finally {
       setBusy(false);
       // Let the same file be chosen again after a failure.
       clearInput();
     }
   }
+
+  if (slot !== "source") return (
+    <div className={compact ? "chapter-upload is-compact" : "chapter-upload"} data-testid={`${inputId}-wrap`}>
+      <ReviewedFileUpload
+        key={inputId}
+        inputId={inputId}
+        label={label ?? VERB[slot]}
+        accept={ACCEPT[slot]}
+        disabled={disabled}
+        busy={busy}
+        onUpload={send}
+      />
+      <ReviewErrorReceipt receipt={report} />
+      {error && <div className="error-box mt-8" role="alert">{error}</div>}
+    </div>
+  );
 
   const chooseLabel = slot === "source"
     ? (staged ? "Choose a different file" : label ?? VERB[slot])
@@ -149,10 +173,7 @@ export default function ChapterRowUpload({
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (!file) return;
-            // A reviewed file carries everything it needs; a source needs
-            // its publication named before it is staged.
-            if (slot === "source") setStaged(file);
-            else void send(file);
+            setStaged(file);
           }}
         />
       </label>

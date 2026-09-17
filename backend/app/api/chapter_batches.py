@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from .. import schemas
 from ..db import get_db
-from ..services import auth, uploads
+from ..services import auth, uploads, review_error_reports
 from ..services import build_concepts as build_concepts_svc
 from ..services import chapter_batches, chapter_queue, chapter_queue_worker
 from ..services import run_journal
@@ -346,6 +346,7 @@ async def upload_concept_review(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
+    review_error_notes: str | None = Depends(review_error_reports.requested_notes),
 ):
     """Step 02 input: the team's reviewed Concept file for one lane.
 
@@ -358,15 +359,19 @@ async def upload_concept_review(
     )
 
     batch_row = _bound_job(db, chapter_id)
-    await _concept_review_upload_endpoint(
+    result = await _concept_review_upload_endpoint(
         job_id=int(batch_row.job_id), lane=lane, file=file, db=db, user=user,
+        review_error_notes=review_error_notes,
     )
     chapter_batches.record_act(
         batch_row, act=f"uploaded the reviewed {lane} Concept file",
         actor_sub=user.sub, actor_email=user.email,
     )
     db.commit()
-    return _row_or_404(db, chapter_id)
+    response = _row_or_404(db, chapter_id)
+    if result.get("review_error_report") is not None:
+        response["review_error_report"] = result["review_error_report"]
+    return response
 
 
 @router.post("/{chapter_id}/master-review")
@@ -376,17 +381,22 @@ async def upload_master_review(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
+    review_error_notes: str | None = Depends(review_error_reports.requested_notes),
 ):
     """Step 03 input: the team's reviewed Master file for one lane."""
     from .build_concepts import submit_reviewed_master_file
 
     batch_row = _bound_job(db, chapter_id)
-    await submit_reviewed_master_file(
+    result = await submit_reviewed_master_file(
         job_id=int(batch_row.job_id), lane=lane, file=file, db=db, user=user,
+        review_error_notes=review_error_notes,
     )
     chapter_batches.record_act(
         batch_row, act=f"uploaded the reviewed {lane} Master file",
         actor_sub=user.sub, actor_email=user.email,
     )
     db.commit()
-    return _row_or_404(db, chapter_id)
+    response = _row_or_404(db, chapter_id)
+    if result.get("review_error_report") is not None:
+        response["review_error_report"] = result["review_error_report"]
+    return response

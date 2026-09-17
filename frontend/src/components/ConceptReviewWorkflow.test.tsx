@@ -111,15 +111,58 @@ test("uploads the same edited Concept workbook without publishing", async () => 
   fireEvent.change(screen.getByTestId("corrected-input-post"), {
     target: { files: [new File(["xlsx"], "post-edited.xlsx")] },
   });
+  expect(apiMock.uploadCorrectedConceptInput).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByTestId("corrected-concept-input-55-post-submit"));
   await waitFor(() => expect(apiMock.uploadCorrectedConceptInput).toHaveBeenCalledWith(
     55,
     "post",
     expect.any(File),
+    undefined,
   ));
   expect(apiMock.uploadEditedWorkbook).not.toHaveBeenCalled();
   expect(onJob).toHaveBeenCalledWith(expect.objectContaining({ id: 55 }));
   expect((await screen.findByTestId("accepted-input-post")).textContent)
     .toContain("Accepted file: post-edited.xlsx");
+});
+
+test("logs Concept corrections with the selected file and retains notes for a failed upload retry", async () => {
+  apiMock.uploadCorrectedConceptInput.mockRejectedValueOnce(new Error("Evidence could not be saved"));
+  apiMock.uploadCorrectedConceptInput.mockResolvedValueOnce({
+    review_error_report: { report_id: "concept-report-1", status: "queued", review_kind: "concept", lane: "pre" },
+  });
+  render(<RunConsoleProvider><ConceptReviewWorkflow job={job()} onJob={vi.fn()} /></RunConsoleProvider>);
+  const file = new File(["xlsx"], "pre-corrected.xlsx");
+  fireEvent.change(screen.getByTestId("corrected-input-pre"), { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Log errors for maintenance" }));
+  fireEvent.change(screen.getByLabelText("What did you correct? (optional)"), {
+    target: { value: "A prerequisite was missing; restored it with its example." },
+  });
+  const submit = screen.getByTestId("corrected-concept-input-55-pre-submit");
+  fireEvent.click(submit);
+  expect((await screen.findByRole("alert")).textContent).toContain("Evidence could not be saved");
+  expect((screen.getByLabelText("What did you correct? (optional)") as HTMLTextAreaElement).value)
+    .toBe("A prerequisite was missing; restored it with its example.");
+  expect(screen.getByText("pre-corrected.xlsx")).toBeDefined();
+  fireEvent.click(submit);
+  await screen.findByText("concept-report-1");
+  expect(apiMock.uploadCorrectedConceptInput).toHaveBeenLastCalledWith(
+    55, "pre", file, "A prerequisite was missing; restored it with its example.",
+  );
+  expect(screen.getByText(/Concept error log saved for scheduled maintenance/)).toBeDefined();
+  await waitFor(() => expect(screen.queryByLabelText("What did you correct? (optional)")).toBeNull());
+  expect(streamMock).not.toHaveBeenCalled();
+  expect(apiMock.uploadEditedWorkbook).not.toHaveBeenCalled();
+});
+
+test("shows the saved Concept error receipt after refresh even when the Master has its own log", () => {
+  const current = job();
+  current.review_workflow!.review_error_reports = [
+    { report_id: "concept-saved", status: "queued", review_kind: "concept", lane: "post" },
+    { report_id: "master-saved", status: "queued", review_kind: "master", lane: "post" },
+  ];
+  render(<RunConsoleProvider><ConceptReviewWorkflow job={current} onJob={vi.fn()} /></RunConsoleProvider>);
+  expect(screen.getByText("concept-saved")).toBeDefined();
+  expect(screen.queryByText("master-saved")).toBeNull();
 });
 
 test("only the explicit Generate Master action starts the second run", async () => {

@@ -236,9 +236,10 @@ test("uploading a reviewed Master posts to its lane and shows the accepted recei
   fireEvent.change(screen.getByTestId("reviewed-master-input-post"), {
     target: { files: [new File(["xlsx"], "post-master-reviewed.xlsx", { type: XLSX })] },
   });
+  fireEvent.click(screen.getByTestId("reviewed-master-input-55-post-submit"));
 
   await waitFor(() => expect(apiMock.uploadReviewedMaster).toHaveBeenCalledWith(
-    55, "post", expect.any(File),
+    55, "post", expect.any(File), undefined,
   ));
   expect(apiMock.uploadEditedWorkbook).not.toHaveBeenCalled();
   expect(apiMock.publishReviewedMaster).not.toHaveBeenCalled();
@@ -255,6 +256,41 @@ test("uploading a reviewed Master posts to its lane and shows the accepted recei
   expect(screen.getByText("Reviewed Master received")).toBeDefined();
   expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 55);
   expect(onJob).toHaveBeenCalledWith(expect.objectContaining({ id: 55 }));
+});
+
+test("records a separate Master error log before any publication, including when notes are left empty", async () => {
+  apiMock.uploadReviewedMaster.mockResolvedValueOnce({
+    lane: "post", filename: "corrected-master.xlsx",
+    review_error_report: { report_id: "master-report-1", status: "queued", review_kind: "master", lane: "post" },
+  });
+  renderWorkflow(job());
+  const file = new File(["xlsx"], "corrected-master.xlsx", { type: XLSX });
+  fireEvent.change(screen.getByTestId("reviewed-master-input-post"), { target: { files: [file] } });
+  expect(apiMock.uploadReviewedMaster).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Log errors for maintenance" }));
+  fireEvent.click(screen.getByTestId("reviewed-master-input-55-post-submit"));
+  await screen.findByText("master-report-1");
+  expect(apiMock.uploadReviewedMaster).toHaveBeenCalledWith(55, "post", file, "");
+  expect(screen.getByText(/Master error log saved for scheduled maintenance/)).toBeDefined();
+  expect(apiMock.publishReviewedMaster).not.toHaveBeenCalled();
+  expect(apiMock.uploadConceptRelease).not.toHaveBeenCalled();
+});
+
+test("a saved upload needing report attention displays the receipt warning", async () => {
+  apiMock.uploadReviewedMaster.mockResolvedValueOnce({
+    lane: "pre", filename: "pre-corrected.xlsx",
+    review_error_report: { report_id: "master-needs-attention", status: "attention_required", review_kind: "master", lane: "pre" },
+  });
+  renderWorkflow(job());
+  fireEvent.change(screen.getByTestId("reviewed-master-input-pre"), {
+    target: { files: [new File(["xlsx"], "pre-corrected.xlsx")] },
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Log errors for maintenance" }));
+  fireEvent.click(screen.getByTestId("reviewed-master-input-55-pre-submit"));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Your upload was accepted, but its error log needs attention");
+  expect(alert.textContent).toContain("master-needs-attention");
+  expect(screen.queryByText(/Master error log saved for scheduled maintenance/)).toBeNull();
 });
 
 test("the durable marker receipt is shown after a refresh without any local state", () => {
@@ -424,6 +460,7 @@ test("a failed reviewed-Master upload is shown without inventing a receipt", asy
   fireEvent.change(screen.getByTestId("reviewed-master-input-pre"), {
     target: { files: [new File(["xlsx"], "bad.xlsx", { type: XLSX })] },
   });
+  fireEvent.click(screen.getByTestId("reviewed-master-input-55-pre-submit"));
 
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("Pre-Learning reviewed Master file could not be uploaded");
@@ -517,6 +554,7 @@ test("the upload acknowledgement counts list-shaped records (finding 1)", async 
   fireEvent.change(screen.getByTestId("reviewed-master-input-post"), {
     target: { files: [new File(["xlsx"], "post-master-reviewed.xlsx", { type: XLSX })] },
   });
+  fireEvent.click(screen.getByTestId("reviewed-master-input-55-post-submit"));
 
   const receipt = await screen.findByTestId("master-receipt-post");
   expect(receipt.textContent).toContain("3 fields in 2 questions");

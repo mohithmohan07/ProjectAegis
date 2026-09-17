@@ -25,6 +25,7 @@ from . import (
     generation_recovery,
     openai_usage,
     progress,
+    review_error_reports,
     uploads,
 )
 from . import build_concepts as svc
@@ -175,6 +176,7 @@ async def _concept_review_upload_endpoint(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
+    review_error_notes: str | None = Depends(review_error_reports.requested_notes),
 ):
     """Receive an independent reviewed file; extraction belongs to Step 2."""
     try:
@@ -232,6 +234,7 @@ async def _concept_review_upload_endpoint(
             temp_path = Path(handle.name)
         def apply_review_round():
             worker_db = SessionLocal()
+            report_receipt = None
             try:
                 # This route is not wrapped by progress.stream because its API
                 # contract returns one JSON response. Start the same usage
@@ -239,6 +242,16 @@ async def _concept_review_upload_endpoint(
                 # including a provider failure, joins the upload's durable
                 # baseline and receives the persisted INR/cost receipt.
                 with progress.capture_history(), openai_usage.track():
+                    def capture_review_evidence():
+                        nonlocal report_receipt
+                        report_job = uploads.get_job(worker_db, job_id, owner_sub=owner_sub,
+                                                     module="build_concepts")
+                        report_receipt = review_error_reports.prepare(
+                            worker_db, report_job, review_kind="concept", lane=resolved,
+                            corrected_bytes=raw_bytes, filename=file.filename or "reviewed.xlsx",
+                            notes=review_error_notes, actor_sub=user.sub,
+                        )
+
                     def apply_and_pause():
                         uploads.update_run_stage(
                             worker_db,
@@ -298,6 +311,10 @@ async def _concept_review_upload_endpoint(
                         result["run_state"] = run_snapshot
                         result["review_required"] = workflow_state.get("status") != release_svc.CONCEPT_REVIEW_REVIEWED
                         result["job_id"] = int(job_id)
+                        if report_receipt is not None:
+                            result["review_error_report"] = review_error_reports.finish(
+                                worker_db, worker_job, report_receipt, result=dict(result))
+                            result["concept_review"] = release_svc.concept_review_state(worker_job)
                         drive_checkpoints.schedule_checkpoint_backup(job_id)
                         return result
 
@@ -307,10 +324,18 @@ async def _concept_review_upload_endpoint(
                             job_id,
                             apply_and_pause,
                             owner_sub=owner_sub,
+                            **({"before_run": capture_review_evidence}
+                               if isinstance(review_error_notes, str) else {}),
                         )
                     except uploads.JobAlreadyRunningError:
                         raise
-                    except Exception:
+                    except Exception as error:
+                        if isinstance(error, review_error_reports.ReviewEvidenceUnavailable):
+                            raise
+                        if report_receipt is not None:
+                            report_job = uploads.get_job(worker_db, job_id, owner_sub=owner_sub,
+                                                         module="build_concepts")
+                            review_error_reports.finish(worker_db, report_job, report_receipt, error=error)
                         # ``run_with_openai_usage`` closes a failed active
                         # segment so its provider receipt and diagnostic are
                         # durable. A review upload remains retryable while
@@ -353,6 +378,8 @@ async def _concept_review_upload_endpoint(
         # it off FastAPI's event loop while preserving the process-local job
         # lock and the same transactional review round.
         return await run_in_threadpool(apply_review_round)
+    except review_error_reports.ReviewEvidenceUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
     except uploads.JobAlreadyRunningError as exc:
         raise HTTPException(409, str(exc)) from exc
     except release_workbook_edits.WorkbookEditError as exc:

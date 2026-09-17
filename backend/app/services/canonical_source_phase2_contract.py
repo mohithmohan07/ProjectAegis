@@ -107,6 +107,7 @@ def install() -> None:
         fn,
         *,
         owner_sub: str | None = None,
+        before_run=None,
     ):
         job = uploads.get_job(db, job_id, owner_sub=owner_sub)
         if job.module != "build_concepts":
@@ -115,6 +116,7 @@ def install() -> None:
                 job_id,
                 fn,
                 owner_sub=owner_sub,
+                **({"before_run": before_run} if before_run is not None else {}),
             )
 
         def phase2_fn():
@@ -133,6 +135,7 @@ def install() -> None:
             job_id,
             phase2_fn,
             owner_sub=owner_sub,
+            **({"before_run": before_run} if before_run is not None else {}),
         )
 
     def _validate_canonical_inventory(inventory: dict) -> dict:
