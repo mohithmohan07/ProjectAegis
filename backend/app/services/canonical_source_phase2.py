@@ -908,6 +908,9 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                 and row_start < int(block.get("source_end") or 0)
                 and row_end > int(block.get("source_start") or 0)
             ]
+            from .pdf_source_adapter import is_canonical as is_pdf_source
+            if is_pdf_source(canonical):
+                source_block_ids = list(row.get("source_block_ids") or [])
             item: dict[str, Any] = {
                 "qid": qid,
                 "case_id": str(row.get("case_id") or ""),
@@ -994,6 +997,9 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                     row.get("membership_authority") or ""
                 ),
             }
+            if is_pdf_source(canonical):
+                for field in ("source_task_ids", "source_task_tree", "prompt_block_ids", "answer_block_ids"):
+                    item[field] = copy.deepcopy(row.get(field) or [])
             items.append(item)
 
     inventory = {

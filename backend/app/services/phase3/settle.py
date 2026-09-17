@@ -933,6 +933,7 @@ def settle(
                     for row in batch
                 ],
                 "source_blocks": topic_blocks,
+                **envelope_mod.source_structure_context(env["canonical"]),
             }
             return decide_with_visual_evidence(
                 kind="settle.topology",
@@ -1057,6 +1058,7 @@ def settle(
                     if other_topic_id != topic_id
                     for row in rows
                 ],
+                **envelope_mod.source_structure_context(env["canonical"]),
             }
             return decide_with_visual_evidence(
                 kind="settle.grounding",
@@ -1185,6 +1187,7 @@ def settle(
             )
             payload = {
                 "stage": "content_authoring",
+                **envelope_mod.source_structure_context(env["canonical"]),
                 "rules": (
                     "Author each concept's learner-facing content in ONE "
                     "pass, grounded on its source_blocks, using reference_blocks "

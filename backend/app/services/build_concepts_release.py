@@ -277,7 +277,7 @@ _UNIT_ID_RE = re.compile(
     r"\b(?:TOPOLOGY-CONCEPT|CONCEPT-GROUND)-\d{1,6}\b",
     re.IGNORECASE,
 )
-_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
+_BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b|(?<![\w-])p[0-9]{4,}-b[0-9]{4,}(?![\w-])")
 _QID_RE = re.compile(r"\bQINV-[A-Za-z0-9_.-]+\b")
 
 

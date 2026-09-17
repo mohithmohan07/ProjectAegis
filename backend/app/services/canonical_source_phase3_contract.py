@@ -71,6 +71,15 @@ def install(generation: ModuleType | None = None) -> None:
 
     @wraps(original_convert)
     def convert_job(*args, **kwargs):
+        from . import pdf_source_contract
+        db = args[0] if args else kwargs.get("db")
+        job_id = args[1] if len(args) > 1 else kwargs.get("job_id")
+        if str(kwargs.get("module") or "") == "build_concepts" and job_id:
+            staged = uploads.get_job(db, int(job_id), owner_sub=kwargs.get("owner_sub"), module="build_concepts")
+            if pdf_source_contract.should_dispatch(
+                staged, uploads.upload_file_path(staged), uploads.source_artifact_directory(int(job_id))
+            ):
+                return pdf_source_contract.convert_job(*args, **kwargs)
         result = original_convert(*args, **kwargs)
         db = args[0] if args else kwargs.get("db")
         job_id = args[1] if len(args) > 1 else kwargs.get("job_id")
@@ -387,7 +396,9 @@ def install(generation: ModuleType | None = None) -> None:
 
     @wraps(original_manifest)
     def artifact_manifest(directory: Path):
-        manifest = original_manifest(directory)
+        from . import pdf_source_contract
+        manifest = (pdf_source_contract.artifact_manifest(directory)
+                    if pdf_source_contract.selected(directory) else original_manifest(directory))
         phase3_manifest = phase3.artifact_manifest(directory)
         manifest["semantic_graph"] = {
             key: value
@@ -429,6 +440,13 @@ def install(generation: ModuleType | None = None) -> None:
 
     @wraps(original_download)
     def source_artifact_download(job: Any, kind: str):
+        from . import pdf_source_contract
+        directory = uploads.source_artifact_directory(int(job.id))
+        if pdf_source_contract.selected(directory):
+            try:
+                return pdf_source_contract.artifact_path(directory, kind)
+            except ValueError:
+                return phase3.artifact_path(directory, kind)
         try:
             return original_download(job, kind)
         except ValueError:

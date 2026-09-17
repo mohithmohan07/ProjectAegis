@@ -61,6 +61,18 @@ def seal_sha256(envelope: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(body).encode("utf-8")).hexdigest()
 
 
+def source_structure_context(canonical: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded PDF relationships into decisions, preserving old requests."""
+    from ..pdf_source_adapter import is_canonical
+
+    if not is_canonical(dict(canonical)):
+        return {}
+    return {
+        "source_structure": copy.deepcopy(canonical.get("source_structure") or {}),
+        "source_relations": copy.deepcopy(canonical.get("source_relations") or []),
+    }
+
+
 def build(
     *,
     graph: Mapping[str, Any],
@@ -73,6 +85,17 @@ def build(
 ) -> dict[str, Any]:
     """Assemble and seal an envelope from the 81% checkpoint material."""
 
+    from ..pdf_source_adapter import is_canonical
+
+    # Fresh PDF source includes model-owned relationships and original IR that
+    # cannot be reconstructed from a display crop. Freeze it all, including the
+    # recorded engine identity that gates its downstream evidence projection.
+    # Every earlier source retains its exact existing envelope and seal.
+    canonical_payload = (
+        copy.deepcopy(dict(canonical)) if is_canonical(dict(canonical)) else {
+            "blocks": copy.deepcopy(list(canonical.get("blocks") or [])),
+        }
+    )
     envelope: dict[str, Any] = {
         "envelope_version": ENVELOPE_VERSION,
         "source_contract_hash": str(
@@ -96,9 +119,7 @@ def build(
             "subtopics": copy.deepcopy(list(graph.get("subtopics") or [])),
             "blocks": copy.deepcopy(list(graph.get("blocks") or [])),
         },
-        "canonical": {
-            "blocks": copy.deepcopy(list(canonical.get("blocks") or [])),
-        },
+        "canonical": canonical_payload,
         "skeleton_rows": [
             copy.deepcopy(dict(row))
             for row in skeleton_rows

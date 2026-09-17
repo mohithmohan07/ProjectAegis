@@ -8,7 +8,8 @@ from typing import Any, Mapping
 def block_text(block: Mapping[str, Any]) -> str:
     """Keep the complete visual table rendering when the source provided one."""
     return str(
-        block.get("display_text_with_visuals")
+        block.get("source_evidence_text")
+        or block.get("display_text_with_visuals")
         or block.get("display_text")
         or block.get("text")
         or block.get("raw_text")
