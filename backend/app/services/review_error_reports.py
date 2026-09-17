@@ -23,12 +23,13 @@ from fastapi import HTTPException, Request
 from sqlalchemy import inspect
 
 from .. import config, models
-from . import failure_reports, failure_reports_public, uploads
+from . import failure_reports, failure_reports_public, storage_capacity, uploads
 
 log = logging.getLogger(__name__)
 MAX_NOTES_CHARS = 20000
 _REPORT_ID = re.compile(r"^[a-f0-9]{32}$")
 _ASSET = re.compile(r"/source-assets/[0-9]+/([a-f0-9]{64}\.jpg)")
+_WRITE_CHUNK_BYTES = 1024 * 1024
 
 
 class ReviewEvidenceUnavailable(RuntimeError):
@@ -68,15 +69,72 @@ def _sha(path):
     return value.hexdigest()
 
 
+class _EvidenceFile:
+    """A seekable, unbuffered sink guarded at each bounded physical write."""
+
+    def __init__(self, path):
+        self.path = path
+        with storage_capacity.reserve_review_evidence_write(0, required_inodes=1, path=path.parent):
+            self.file = path.open("x+b", buffering=0)
+            try:
+                os.chmod(path, 0o600)
+            except Exception:
+                self.file.close()
+                path.unlink(missing_ok=True)
+                raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.file.close()
+
+    def __getattr__(self, name):
+        return getattr(self.file, name)
+
+    def write(self, data):
+        view = memoryview(data)
+        written = 0
+        while written < len(view):
+            chunk = view[written:written + _WRITE_CHUNK_BYTES]
+            with storage_capacity.reserve_review_evidence_write(len(chunk), path=self.path.parent):
+                count = self.file.write(chunk)
+                if not count:
+                    raise OSError("review evidence write made no progress")
+                # FileIO is unbuffered: capacity consumption reaches the OS
+                # before the shared reservation is released, including short writes.
+            written += count
+        return written
+
+
+def _mkdir_private(path):
+    missing = 0
+    existing = path
+    while not existing.exists():
+        missing += 1
+        existing = existing.parent
+    if missing:
+        with storage_capacity.reserve_review_evidence_write(0, required_inodes=missing, path=existing):
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
 def _write_json(path, value):
     # Unique report directories and exclusive creation make every observation
     # immutable. Directory fsync below covers renaming the completed snapshot.
-    with path.open("xb") as output:
-        os.chmod(path, 0o600)
-        for chunk in _json_chunks(value):
-            output.write(chunk)
-        output.flush()
-        os.fsync(output.fileno())
+    created = False
+    try:
+        with _EvidenceFile(path) as output:
+            created = True
+            for chunk in _json_chunks(value):
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+    except Exception:
+        # In particular, do not leave a truncated upload outcome that would
+        # make later read-only reconciliation look like corrupt evidence.
+        if created:
+            path.unlink(missing_ok=True)
+        raise
     _sync_directory(path.parent)
 
 
@@ -119,14 +177,19 @@ def prepare(db, job, *, review_kind, lane, corrected_bytes, filename, notes, act
                "lane": lane, "occurred_at": now.isoformat().replace("+00:00", "Z"),
                "corrected_sha256": hashlib.sha256(corrected_bytes).hexdigest()}
     staging = None
+    destination = None
+    index_path = None
     try:
         base = root()
-        base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _mkdir_private(base)
         _safe_path(base, Path(config.DATA_DIR))
-        staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=base))
+        with storage_capacity.reserve_review_evidence_write(0, required_inodes=1, path=base):
+            staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=base))
         entries, missing, asset_names = [], [], set()
         archive = staging / "snapshot.zip"
-        with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as bundle:
+        with _EvidenceFile(archive) as sink, zipfile.ZipFile(
+            sink, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1,
+        ) as bundle:
             def add_chunks(name, chunks):
                 digest = hashlib.sha256()
                 size = 0
@@ -245,17 +308,31 @@ def prepare(db, job, *, review_kind, lane, corrected_bytes, filename, notes, act
         }
         failure_reports_public.project_public_report(private)
         destination = base / report_id
-        staging.rename(destination)
+        with storage_capacity.reserve_review_evidence_write(1, path=base):
+            staging.rename(destination)
         staging = None
         # Collector sees an explicit review submission, not a generation
         # failure. An outcome observation below distinguishes upload success.
         stamp = now.strftime("%Y%m%dT%H%M%S%fZ")
-        failure_reports._atomic(failure_reports.root() / now.strftime("%Y-%m-%d") / f"{stamp}_{report_id}.json", private)
+        index_path = failure_reports.root() / now.strftime("%Y-%m-%d") / f"{stamp}_{report_id}.json"
+        _mkdir_private(index_path.parent)
+        # Existing atomic publication flushes before returning. Reserve its
+        # complete, measured metadata bytes and one temporary file inode.
+        index_bytes = sum(len(chunk) for chunk in _json_chunks(private))
+        with storage_capacity.reserve_review_evidence_write(index_bytes, required_inodes=1, path=index_path.parent):
+            failure_reports._atomic(index_path, private)
         _sync_directory(base)
         return receipt
     except Exception as exc:
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
+        if destination is not None:
+            shutil.rmtree(destination, ignore_errors=True)
+        if index_path is not None:
+            try:
+                index_path.unlink(missing_ok=True)
+            except OSError:
+                log.warning("Incomplete review report index cleanup needs reconciliation", exc_info=False)
         raise ReviewEvidenceUnavailable(
             "The error report evidence could not be saved. The corrected file has not been applied. "
             "Retry the upload with error logging, or uncheck error logging to upload the file alone."

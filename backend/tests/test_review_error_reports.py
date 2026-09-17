@@ -4,7 +4,9 @@ import asyncio
 import hashlib
 import io
 import json
+import random
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi import Depends, FastAPI, File, UploadFile
@@ -19,6 +21,7 @@ from app.services import auth, failure_reports, failure_reports_public
 from app.services import build_concepts_release as release
 from app.services import build_concepts_release_files as files
 from app.services import review_error_reports as reports
+from app.services import storage_capacity
 
 
 @pytest.fixture()
@@ -288,3 +291,98 @@ def test_master_upload_logs_exact_original_and_corrected_without_new_generation(
                    if name.startswith(f"outputs/master/{original.id}/") and name.endswith(".xlsx"))
     assert (job.run_id, job.openai_usage, job.generation_checkpoint) == before
     assert job.concept_review["review_error_reports"] == [receipt]
+
+
+def test_low_space_mid_capture_preserves_running_reservations_and_job(evidence, monkeypatch):
+    db, job, _ = evidence
+    before = copy.deepcopy(reports._record(job))
+    competing = {"active-master-lane": (100 * 1024 * 1024, 256)}
+    monkeypatch.setattr(storage_capacity, "_RESERVATIONS", competing.copy())
+    floor = (competing["active-master-lane"][0] + storage_capacity.ledger_headroom_bytes()
+             + storage_capacity.publication_margin_bytes())
+    total = floor + 64 * 1024
+    observed = []
+
+    def remaining(_path):
+        paths = list(reports.root().rglob("*")) if reports.root().exists() else []
+        consumed = sum(item.stat().st_blocks * 512 for item in paths if item.is_file())
+        observed.append(total - consumed)
+        return SimpleNamespace(f_frsize=4096, f_bsize=4096,
+            f_bavail=(total - consumed) // 4096, f_files=10000, f_favail=10000)
+
+    monkeypatch.setattr(storage_capacity.os, "statvfs", remaining)
+    with pytest.raises(reports.ReviewEvidenceUnavailable) as caught:
+        capture(db, job, corrected_bytes=random.Random(0).randbytes(512 * 1024))
+    assert isinstance(caught.value.__cause__, storage_capacity.StorageCapacityError)
+    assert reports._record(job) == before
+    assert storage_capacity._RESERVATIONS == competing
+    assert not list(reports.root().glob("*/snapshot.zip"))
+    assert not list(reports.root().glob(".capture-*"))
+    assert min(observed) >= floor
+    assert failure_reports.export_public_page()["reports"] == []
+
+
+def test_evidence_write_reserves_atomically_and_accounts_unbuffered_bytes(evidence, monkeypatch, tmp_path):
+    db, job, _ = evidence
+    competing = {"active-master-lane": (4096, 2)}
+    monkeypatch.setattr(storage_capacity, "_RESERVATIONS", competing.copy())
+    margin = storage_capacity.ledger_headroom_bytes() + storage_capacity.publication_margin_bytes()
+    # One additional block fits; two simultaneous writes must not both take it.
+    monkeypatch.setattr(storage_capacity.os, "statvfs", lambda path: SimpleNamespace(
+        f_frsize=4096, f_bsize=4096, f_bavail=(margin + 8192) // 4096,
+        f_files=10000, f_favail=10000))
+    with storage_capacity.reserve_review_evidence_write(1, path=tmp_path):
+        assert sum(value[0] for value in storage_capacity._RESERVATIONS.values()) == 8192
+        with pytest.raises(storage_capacity.StorageCapacityError):
+            with storage_capacity.reserve_review_evidence_write(1, path=tmp_path):
+                pytest.fail("same remaining block admitted twice")
+    assert storage_capacity._RESERVATIONS == competing
+
+    # The reservation may be released as soon as write returns because the
+    # actual FileIO is unbuffered, including inputs larger than one chunk.
+    observed_sizes = []
+    from contextlib import contextmanager
+    path = tmp_path / "large-evidence.bin"
+    @contextmanager
+    def grant(amount, **kwargs):
+        assert amount <= reports._WRITE_CHUNK_BYTES
+        yield
+        observed_sizes.append((amount, path.stat().st_size if path.exists() else 0))
+    monkeypatch.setattr(storage_capacity, "reserve_review_evidence_write", grant)
+    data = b"evidence" * 300000
+    with reports._EvidenceFile(path) as output:
+        assert output.write(data) == len(data)
+        assert path.stat().st_size == len(data)  # before flush/close
+    running = 0
+    for amount, size in observed_sizes:
+        running += amount
+        assert size == running
+    assert path.read_bytes() == data
+
+
+def test_inode_floor_refuses_before_report_directory_creation(evidence, monkeypatch):
+    db, job, _ = evidence
+    competing = {"active-master-lane": (4096, 10)}
+    monkeypatch.setattr(storage_capacity, "_RESERVATIONS", competing.copy())
+    monkeypatch.setattr(storage_capacity.os, "statvfs", lambda path: SimpleNamespace(
+        f_frsize=4096, f_bsize=4096, f_bavail=10**8, f_files=10000,
+        f_favail=10 + storage_capacity.ledger_headroom_inodes()))
+    with pytest.raises(reports.ReviewEvidenceUnavailable):
+        capture(db, job)
+    assert not reports.root().exists()
+    assert storage_capacity._RESERVATIONS == competing
+
+
+def test_index_failure_removes_already_renamed_archive(evidence, monkeypatch):
+    db, job, _ = evidence
+    before = copy.deepcopy(reports._record(job))
+    def reject_index(*args, **kwargs):
+        assert list(reports.root().glob("*/snapshot.zip"))
+        raise storage_capacity.StorageCapacityError("no index capacity", phase="review_evidence_write")
+    monkeypatch.setattr(failure_reports, "_atomic", reject_index)
+    with pytest.raises(reports.ReviewEvidenceUnavailable):
+        capture(db, job)
+    assert not list(reports.root().glob("*/snapshot.zip"))
+    assert not list(reports.root().glob(".capture-*"))
+    assert failure_reports.export_public_page()["reports"] == []
+    assert reports._record(job) == before
