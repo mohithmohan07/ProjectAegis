@@ -120,17 +120,39 @@ def test_a_clean_block_is_never_touched():
 # The happy path
 # --------------------------------------------------------------------------- #
 
-def test_a_faithful_repair_is_accepted_and_hash_pinned():
+@pytest.mark.parametrize("author_confidence,critic_confidence", [
+    (0.90, 0.90), (0.90, 0.95), (0.95, 0.90), (0.95, 0.95), (0.99, 0.99),
+])
+def test_a_faithful_repair_is_accepted_and_hash_pinned(
+    tmp_path, author_confidence, critic_confidence,
+):
     graph = _graph()
-    assert _repair(graph, _canonical(_DEFECT), _author(), _critic()) == []
+    assert _repair(
+        graph, _canonical(_DEFECT),
+        _author(confidence=author_confidence), _critic(confidence=critic_confidence),
+        repair_cache_dir=tmp_path,
+    ) == []
     override = graph["blocks"][0]["source_override"]
     assert override["mode"] == phase3._REPAIR_MODE
     assert override["resolved_text"] == _CLEAN
     assert override["resolved_sha256"] == phase3._sha256_text(_CLEAN)
     assert override["suppressed"] is False
+    assert override["repair_confidence"] == author_confidence
+    assert override["verification_confidence"] == critic_confidence
+    assert override["repair_confidence_minimum"] == 0.90
     assert graph["rich_text_repairs"] == [
         {"block_id": "BLK-0001", "suppressed": False}
     ]
+
+    def no_paid_calls(*args):
+        pytest.fail("an accepted repair must replay without another paid decision")
+
+    resumed = _graph()
+    assert _repair(
+        resumed, _canonical(_DEFECT), no_paid_calls, no_paid_calls,
+        repair_cache_dir=tmp_path,
+    ) == []
+    assert resumed["blocks"][0]["source_override"] == override
 
 
 def test_the_repaired_text_is_what_the_renderer_then_reads():
@@ -208,7 +230,7 @@ def test_an_unfaithful_repair_is_refused(proposed, expected_gate):
     graph = _graph()
     unresolved = _repair(
         graph, _canonical(_DEFECT),
-        _author(canonical_text=proposed), _critic(),
+        _author(canonical_text=proposed, confidence=0.90), _critic(confidence=0.90),
     )
     assert unresolved == ["BLK-0001"]
     assert "source_override" not in graph["blocks"][0]
@@ -230,8 +252,8 @@ def test_a_changed_url_is_refused():
 def test_the_independent_critic_can_veto_a_repair_every_other_gate_passed():
     graph = _graph()
     unresolved = _repair(
-        graph, _canonical(_DEFECT), _author(),
-        _critic(verdict="rejected", reason="not what the page shows"),
+        graph, _canonical(_DEFECT), _author(confidence=0.90),
+        _critic(verdict="rejected", confidence=0.90, reason="not what the page shows"),
     )
     assert unresolved == ["BLK-0001"]
     assert "source_override" not in graph["blocks"][0]
@@ -240,17 +262,21 @@ def test_the_independent_critic_can_veto_a_repair_every_other_gate_passed():
 def test_a_critic_that_verifies_but_lists_an_issue_is_still_a_refusal():
     graph = _graph()
     assert _repair(
-        graph, _canonical(_DEFECT), _author(),
-        _critic(issues=["the second clause is invented"]),
+        graph, _canonical(_DEFECT), _author(confidence=0.90),
+        _critic(confidence=0.90, issues=["the second clause is invented"]),
     ) == ["BLK-0001"]
 
 
 @pytest.mark.parametrize("who", ["author", "critic"])
-def test_a_repair_below_the_source_critical_floor_is_refused(who):
+@pytest.mark.parametrize("confidence", [
+    0.899999, 0.5, float("nan"), float("inf"), float("-inf"), 1.001, None,
+])
+def test_invalid_or_below_floor_repair_confidence_is_refused(who, confidence):
     graph = _graph()
-    author = _author(confidence=0.5) if who == "author" else _author()
-    critic = _critic(confidence=0.5) if who == "critic" else _critic()
+    author = _author(confidence=confidence) if who == "author" else _author(confidence=0.90)
+    critic = _critic(confidence=confidence) if who == "critic" else _critic(confidence=0.90)
     assert _repair(graph, _canonical(_DEFECT), author, critic) == ["BLK-0001"]
+    assert "source_override" not in graph["blocks"][0]
 
 
 def test_an_author_asking_for_review_is_recorded_not_guessed():
@@ -565,6 +591,58 @@ def test_paid_author_draft_is_durable_before_critic_and_resumes_without_reauthor
     resumed = _graph()
     assert _repair(resumed, canonical, no_reauthor, _critic(), repair_cache_dir=tmp_path) == []
     assert resumed["blocks"][0]["source_override"]["resolved_text"] == _CLEAN
+
+
+@pytest.mark.parametrize("confidence", [0.90, 0.95])
+def test_paid_draft_refused_by_old_floor_gets_only_critic_after_floor_change(
+    tmp_path, monkeypatch, confidence,
+):
+    canonical = _canonical(_DEFECT)
+    original = copy.deepcopy(canonical)
+    authored = []
+    reviewed = []
+
+    def author(packet):
+        authored.append(copy.deepcopy(packet))
+        return _author(confidence=confidence)(packet)
+
+    def no_paid_calls(*args):
+        pytest.fail("saved paid work must be reused")
+
+    monkeypatch.setattr(phase3, "_RICH_TEXT_REPAIR_MIN_CONFIDENCE", 0.96)
+    refused = _graph()
+    assert _repair(
+        refused, canonical, author, no_paid_calls, repair_cache_dir=tmp_path,
+    ) == ["BLK-0001"]
+    assert refused["rich_text_repair_refusals"][0]["gate"] == "author_confidence"
+    assert len(authored) == 1
+    journal_path = next((tmp_path / "rich-text-repair-attempts").glob("*.json"))
+    saved = json.loads(journal_path.read_text())
+    assert len(saved["attempts"]) == 1
+    assert "verification" not in saved["attempts"][0]
+
+    monkeypatch.setattr(phase3, "_RICH_TEXT_REPAIR_MIN_CONFIDENCE", 0.90)
+
+    def critic(packet, proposal):
+        reviewed.append(copy.deepcopy(proposal))
+        assert proposal == saved["attempts"][0]["proposal"]
+        return _critic(confidence=0.90)(packet, proposal)
+
+    resumed = _graph()
+    assert _repair(
+        resumed, canonical, no_paid_calls, critic, repair_cache_dir=tmp_path,
+    ) == []
+    assert len(reviewed) == 1
+    assert len(authored) == 1
+    after = json.loads(journal_path.read_text())
+    assert len(after["attempts"]) == 1
+    assert after["attempts"][0]["request_sha256"] == saved["attempts"][0]["request_sha256"]
+    assert after["attempts"][0]["proposal"] == saved["attempts"][0]["proposal"]
+    assert after["attempts"][0]["verification"]["confidence"] == 0.90
+    override = resumed["blocks"][0]["source_override"]
+    assert override["resolved_text"] == _CLEAN
+    assert override["repair_confidence_minimum"] == 0.90
+    assert canonical == original
 
 
 def test_critic_refusal_and_feedback_survive_restart_without_reverification(tmp_path):

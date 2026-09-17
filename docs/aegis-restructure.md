@@ -5124,3 +5124,24 @@ The nightly task may prepare, test, merge and deploy scoped corrective PRs after
 the required checks; it cannot change semantic policy, reset sources/checkpoints,
 cancel/recreate batches or silently switch pricing. Full operational details:
 [nightly maintenance](nightly-maintenance.md).
+
+## Q77 — decided — rich-text repair acceptance at 0.90
+
+**Owner, 17 September 2026:** “Need to lower down the acceptance parameter a
+little”, followed by “Keep it 0.9”. This follows the rich-text repair refusal
+where an author's 0.95 confidence did not clear the previous 0.96 floor.
+
+The rich-text repair lane now accepts author and independent-verifier confidence
+at **0.90 or above**, within the schema's finite 0–1 range. A verifier must still
+return `verified` with no issues. Source text, number, URL, suppression and
+canonical-markup checks remain mandatory. This does not relax PDF extraction,
+source identity or other confidence gates, and does not approve a rejected
+verifier verdict merely because its confidence is high.
+
+This is an acceptance change, not a new model request. Keep the repair prompts,
+request policy and global semantic-policy fingerprint unchanged so recorded
+drafts and open Batch requests retain their identities. When the repair lane is
+entered again, it rechecks saved drafts under the new floor and still obtains
+any missing independent verification. Accepted overrides record the repair
+minimum used. Previously blocked jobs are not automatically restarted or marked
+recovered; this change alone does not clear their recovery disposition.
