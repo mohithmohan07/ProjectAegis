@@ -22,8 +22,8 @@ _ENTITY = re.compile(r"^(?:(?:QINV|BLK|PRE|POST|CONCEPT|TYPE|CASE|HOST|TOPIC|TOP
 _PROVIDER_ID = re.compile(r"^(?:req|resp|batch|chatcmpl|wave|attempt)[_-][A-Za-z0-9_-]{1,100}$")
 _MODEL = re.compile(r"^(?:gpt|gemini|claude|o1|o3|o4)[-a-zA-Z0-9._]{0,100}$")
 _FRAME = re.compile(r"^(?:app|scripts)/[A-Za-z0-9_/-]+\.py$")
-ORIGINS = {"upload", "master_lane", "queue", "stream", "historical", "unknown"}
-DISPOSITIONS = {"failed", "retry", "blocked"}
+ORIGINS = {"upload", "master_lane", "queue", "stream", "historical", "unknown", "review_concept", "review_master"}
+DISPOSITIONS = {"failed", "retry", "blocked", "reported"}
 POLICIES = {"model_routing_policy", "generation_quality_policy", "generation_repair_policy", "reviewed_file_workflow_policy", "_column_spec_policy"}
 EVIDENCE_HASHES = {"expected_pdf_sha256", "actual_pdf_sha256", "expected_source_contract_hash", "actual_source_contract_hash", "expected_semantic_context_hash", "actual_semantic_context_hash"}
 EVIDENCE_REASONS = {"original_pdf_changed", "original_pdf_missing", "saved_page_evidence_missing", "source_contract_changed", "semantic_context_changed", "saved_review_seal_invalid"}
@@ -184,6 +184,15 @@ def project_public_report(private: dict) -> dict:
             "input_tokens": _integer(frozen_cost.get("input_tokens")),
             "output_tokens": _integer(frozen_cost.get("output_tokens")),
         })
+    if report["origin"] in {"review_concept", "review_master"}:
+        review = _mapping(private.get("review"))
+        report["review"] = {
+            "kind": "concept" if report["origin"] == "review_concept" else "master",
+            **{key: _matching(review.get(key), _HEX) for key in (
+                "corrected_sha256", "notes_sha256", "evidence_sha256")},
+            **{key: _integer(review.get(key)) for key in (
+                "evidence_file_count", "evidence_bytes", "unavailable_count")},
+        }
     validate_public_report(report)
     return report
 
@@ -200,12 +209,27 @@ def _nullable(value, checker):
 
 def validate_public_report(report: dict) -> None:
     """Reject unknown keys, malformed IDs or text-bearing fields in CI."""
-    _keys(report, {"schema_version", "report_id", "related_report_id", "occurred_at", "fingerprint", "origin", "disposition", "failure_code", "failure_code_sha256", "exception", "run", "source", "source_evidence", "queue", "policies", "validation", "usage", "capture"})
+    expected = {"schema_version", "report_id", "related_report_id", "occurred_at", "fingerprint", "origin", "disposition", "failure_code", "failure_code_sha256", "exception", "run", "source", "source_evidence", "queue", "policies", "validation", "usage", "capture"}
+    if report.get("origin") in {"review_concept", "review_master"}:
+        expected.add("review")
+    _keys(report, expected)
     if report["schema_version"] != 1 or not _matching(report["report_id"], _UUID) or not _timestamp(report["occurred_at"]):
         raise ValueError("invalid incident identity")
     _nullable(report["related_report_id"], lambda value: _matching(value, _UUID))
     if report["origin"] not in ORIGINS or report["disposition"] not in DISPOSITIONS:
         raise ValueError("invalid incident lifecycle")
+    if "review" in report:
+        review = report["review"]
+        _keys(review, {"kind", "corrected_sha256", "notes_sha256", "evidence_sha256",
+                       "evidence_file_count", "evidence_bytes", "unavailable_count"})
+        if report["origin"] != "review_" + str(review["kind"]) or report["disposition"] != "reported":
+            raise ValueError("invalid review report classification")
+        for key in ("corrected_sha256", "notes_sha256", "evidence_sha256"):
+            if not _matching(review[key], _HEX):
+                raise ValueError("invalid review evidence hash")
+        for key in ("evidence_file_count", "evidence_bytes", "unavailable_count"):
+            if _integer(review[key]) is None:
+                raise ValueError("invalid review evidence count")
     for key in ("fingerprint", "failure_code_sha256"):
         if not _matching(report[key], _HEX):
             raise ValueError("invalid incident hash")

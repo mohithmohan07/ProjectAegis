@@ -569,6 +569,16 @@ export type ConceptReviewStatus =
   | "master_failed"
   | "published";
 
+export interface ReviewErrorReportReceipt {
+  report_id: string;
+  status: string;
+  review_kind: "concept" | "master";
+  lane: "post" | "pre";
+  occurred_at?: string;
+  corrected_sha256?: string;
+  message?: string;
+}
+
 export interface CorrectedConceptInput {
   lane: "post" | "pre";
   filename?: string;
@@ -651,6 +661,7 @@ export interface MasterReviewLaneState {
 }
 
 export interface ReviewWorkflow {
+  review_error_reports?: ReviewErrorReportReceipt[];
   status?: ConceptReviewStatus;
   concepts_ready?: boolean;
   masters_ready?: boolean;
@@ -667,6 +678,7 @@ export interface ReviewWorkflow {
 
 /** Acknowledgement for a reviewed Master file (Step 03 upload). */
 export interface MasterReviewSubmitResult {
+  review_error_report?: ReviewErrorReportReceipt;
   lane: "post" | "pre";
   filename?: string;
   input_sha256?: string;
@@ -1064,6 +1076,7 @@ export interface ChapterBatchCan {
 }
 
 export interface ChapterBatchRow {
+  review_error_report?: ReviewErrorReportReceipt;
   chapter_id: number;
   catalogue_active?: boolean;
   catalogue_revision?: string;

@@ -504,6 +504,50 @@ def require_publication_capacity(
     return effective
 
 
+@contextmanager
+def reserve_review_evidence_write(
+    payload_bytes: int,
+    *,
+    required_inodes: int = 0,
+    path: Path | None = None,
+) -> Iterator[None]:
+    """Reserve only the next physical evidence write, never an archive estimate.
+
+    Review capture shares the volume with running Master lanes. Admission is
+    atomic with their existing reservations and keeps the configured ledger
+    headroom/publication margin. The caller must use unbuffered writes (or
+    flush within this context): after release statvfs must see consumption.
+    No generation reservation or its current-lane binding is changed here.
+    """
+    target = Path(path or config.DATA_DIR)
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    token = "review-evidence:" + uuid.uuid4().hex
+    inodes = max(0, int(required_inodes))
+    with _RESERVATION_LOCK:
+        snapshot = _effective_snapshot_locked(target)
+        stat = os.statvfs(target)
+        fragment = int(stat.f_frsize or stat.f_bsize or 1)
+        # A short write can allocate a whole filesystem block. Creating a
+        # directory/file can also grow its parent directory by one block.
+        amount = max(0, int(payload_bytes))
+        reserved_bytes = ((amount + fragment - 1) // fragment + inodes) * fragment
+        required_bytes = reserved_bytes + publication_margin_bytes() + ledger_headroom_bytes()
+        required_inode_count = inodes + ledger_headroom_inodes()
+        if _insufficient(snapshot, required_bytes=required_bytes, required_inodes=required_inode_count):
+            raise StorageCapacityError(
+                "Insufficient server storage to save review error evidence while preserving active runs.",
+                phase="review_evidence_write", snapshot=snapshot,
+                required_bytes=required_bytes, required_inodes=required_inode_count,
+            )
+        _RESERVATIONS[token] = (reserved_bytes, inodes)
+    try:
+        yield
+    finally:
+        with _RESERVATION_LOCK:
+            _RESERVATIONS.pop(token, None)
+
+
 def capacity_error_from(
     error: BaseException,
     *,

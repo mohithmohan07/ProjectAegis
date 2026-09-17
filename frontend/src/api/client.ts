@@ -473,9 +473,10 @@ export const api = {
    * released jobs and publishes immediately; this operation only records the
    * corrected input used by the later, explicit Master-generation action.
    */
-  uploadCorrectedConceptInput: (jobId: number, lane: "post" | "pre", file: File) => {
+  uploadCorrectedConceptInput: (jobId: number, lane: "post" | "pre", file: File, reviewErrorNotes?: string) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (reviewErrorNotes !== undefined) fd.append("review_error_notes", reviewErrorNotes);
     return http<Record<string, unknown>>(
       `/build-concepts/uploads/${jobId}/concept-review/submit?lane=${lane}`,
       { method: "POST", body: fd },
@@ -490,9 +491,10 @@ export const api = {
    * records a review round on the lane's release and publishes nothing; the
    * database/CMS write is the separate ``publishReviewedMaster`` act.
    */
-  uploadReviewedMaster: (jobId: number, lane: "post" | "pre", file: File) => {
+  uploadReviewedMaster: (jobId: number, lane: "post" | "pre", file: File, reviewErrorNotes?: string) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (reviewErrorNotes !== undefined) fd.append("review_error_notes", reviewErrorNotes);
     return http<MasterReviewSubmitResult>(
       `/build-concepts/uploads/${jobId}/master-review/submit?lane=${lane}`,
       { method: "POST", body: fd },
@@ -791,9 +793,11 @@ export const api = {
     chapterId: number,
     lane: string,
     file: File,
+    reviewErrorNotes?: string,
   ) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (reviewErrorNotes !== undefined) fd.append("review_error_notes", reviewErrorNotes);
     return http<ChapterBatchRow>(
       `/chapter-batches/${chapterId}/concept-review?lane=${encodeURIComponent(lane)}`,
       { method: "POST", body: fd },
@@ -805,9 +809,11 @@ export const api = {
     chapterId: number,
     lane: string,
     file: File,
+    reviewErrorNotes?: string,
   ) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (reviewErrorNotes !== undefined) fd.append("review_error_notes", reviewErrorNotes);
     return http<ChapterBatchRow>(
       `/chapter-batches/${chapterId}/master-review?lane=${encodeURIComponent(lane)}`,
       { method: "POST", body: fd },

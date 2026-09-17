@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReviewedFileUpload, { ReviewErrorReceipt, reviewErrorReceipt } from "./ReviewedFileUpload";
 import { api } from "../api/client";
 import { useRunConsole } from "../RunConsole";
 import type {
   CorrectedConceptInput,
   ReviewWorkflow,
+  ReviewErrorReportReceipt,
   SourceArtifactFile,
   UploadJob,
 } from "../types";
@@ -113,6 +115,7 @@ export default function ConceptReviewWorkflow({
   const [busyLane, setBusyLane] = useState<Lane | null>(null);
   const [continuing, setContinuing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reports, setReports] = useState<Partial<Record<Lane, ReviewErrorReportReceipt>>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [localInputs, setLocalInputs] = useState<Partial<Record<Lane, {
     filename: string;
@@ -126,6 +129,7 @@ export default function ConceptReviewWorkflow({
     setError(null);
     setNotice(null);
     setLocalInputs({});
+    setReports({});
   }, [job.id]);
 
   useEffect(() => { restore(job); }, [job, restore]);
@@ -152,8 +156,8 @@ export default function ConceptReviewWorkflow({
     pre: inputMetaFor(inputForLane(job, "pre")) || localInputs.pre,
   }), [job, localInputs]);
 
-  async function uploadCorrection(lane: Lane, file: File) {
-    if (disabled || continuing || busyLane) return;
+  async function uploadCorrection(lane: Lane, file: File, reviewErrorNotes?: string): Promise<boolean> {
+    if (disabled || continuing || busyLane) return false;
     setBusyLane(lane);
     setError(null);
     setNotice(null);
@@ -162,7 +166,9 @@ export default function ConceptReviewWorkflow({
       // This route stages the corrected input only. In particular, do not
       // call the legacy uploadEditedWorkbook route here: that route performs
       // an authenticated CMS publication for historical releases.
-      const response = await api.uploadCorrectedConceptInput(job.id, lane, file);
+      const response = await api.uploadCorrectedConceptInput(job.id, lane, file, reviewErrorNotes);
+      const report = reviewErrorReceipt(response?.review_error_report);
+      if (report) setReports((current) => ({ ...current, [lane]: report }));
       record(job, `${laneLabel(lane)} file received. Questions will be extracted when you generate Master files.`, "success");
       const responseRecord = response && typeof response === "object"
         && !Array.isArray(response) ? response as Record<string, unknown> : null;
@@ -207,6 +213,7 @@ export default function ConceptReviewWorkflow({
       if (refreshError) {
         setError(`${laneLabel(lane)} upload was accepted, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
       }
+      return true;
     } catch (uploadError) {
       record(job, `${laneLabel(lane)} upload failed: ${readableError(uploadError)}`, "error");
       // A provider or proxy can report an error after the review round has
@@ -224,6 +231,7 @@ export default function ConceptReviewWorkflow({
         // Keep the original upload error visible when recovery also fails.
       }
       setError(`${laneLabel(lane)} corrected input could not be uploaded: ${readableError(uploadError)}`);
+      return false;
     } finally {
       setBusyLane(null);
     }
@@ -337,31 +345,21 @@ export default function ConceptReviewWorkflow({
                 >
                   Download {label} Concept File
                 </a>
-                <input
-                  id={inputId}
-                  type="file"
+                <ReviewedFileUpload
+                  key={inputId}
+                  inputId={inputId}
                   accept=".xlsx,.csv,.tsv,.docx,.pdf,.txt,.md"
                   disabled={disabled || masterRunning || Boolean(busyLane)}
-                  data-testid={`corrected-input-${lane}`}
-                  onChange={(event) => {
-                    const selected = event.target.files?.[0];
-                    event.target.value = "";
-                    if (selected) void uploadCorrection(lane, selected);
-                  }}
-                  style={{ display: "none" }}
+                  busy={busyLane === lane}
+                  inputTestId={`corrected-input-${lane}`}
+                  buttonTestId={`upload-corrected-${lane}`}
+                  label={`Upload reviewed ${label} file`}
+                  onUpload={(file, notes) => uploadCorrection(lane, file, notes)}
                 />
-                <button
-                  className="ghost"
-                  type="button"
-                  disabled={disabled || masterRunning || Boolean(busyLane)}
-                  onClick={() => document.getElementById(inputId)?.click()}
-                  data-testid={`upload-corrected-${lane}`}
-                >
-                  {busyLane === lane
-                    ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-                    : `Upload reviewed ${label} file`}
-                </button>
               </div>
+              <ReviewErrorReceipt receipt={reports[lane] ?? job.review_workflow?.review_error_reports?.filter(
+                (report) => report.review_kind === "concept" && report.lane === lane,
+              ).slice(-1)[0]} />
               {input ? (
                 <div className="hint mt-8">
                   <span data-testid={`accepted-input-${lane}`}>

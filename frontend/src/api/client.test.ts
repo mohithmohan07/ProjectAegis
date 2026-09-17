@@ -203,6 +203,26 @@ test("stores a reviewed Master file on its lane's master-review route without pu
   expect(fetchMock.mock.calls[0][0]).not.toContain("upload-edited-workbook");
 });
 
+test.each([
+  ["Concept", api.uploadCorrectedConceptInput],
+  ["Master", api.uploadReviewedMaster],
+  ["chapter Concept", api.chapterBatchUploadConceptReview],
+  ["chapter Master", api.chapterBatchUploadMasterReview],
+] as const)("%s upload preserves the opt-in notes field, including empty notes", async (_label, upload) => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  vi.stubGlobal("fetch", fetchMock);
+  const file = new File(["xlsx"], "reviewed.xlsx");
+  await upload(42, "pre", file);
+  await upload(42, "pre", file, "");
+  await upload(42, "pre", file, "A missing table was restored.\nThe diagram was corrected.");
+  const forms = fetchMock.mock.calls.map((call) => call[1].body as FormData);
+  expect(forms[0].has("review_error_notes")).toBe(false);
+  expect(forms[1].has("review_error_notes")).toBe(true);
+  expect(forms[1].get("review_error_notes")).toBe("");
+  expect(forms[2].get("review_error_notes")).toBe("A missing table was restored.\nThe diagram was corrected.");
+  expect((forms[2].get("file") as File).name).toBe("reviewed.xlsx");
+});
+
 test("publishes a reviewed Master on its lane's master-review publish route", async () => {
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,

@@ -609,6 +609,7 @@ def run_with_openai_usage(
     fn: Callable[[], Any],
     *,
     owner_sub: str | None = None,
+    before_run: Callable[[], Any] | None = None,
 ) -> dict:
     """Run uploaded-file generation and persist usage on success or failure."""
     # Verify ownership before acquiring or exposing another job's run state.
@@ -620,6 +621,10 @@ def run_with_openai_usage(
         if job.status == "generated":
             raise ValueError(
                 "this upload has already been generated; start a new upload")
+        if before_run is not None:
+            # Explicit reviewed-file evidence must be durable under this job
+            # lock before either the upload or its processing clock changes.
+            before_run()
         # Bind the stable run before the first provider call. If the previous
         # request paused at Concept review, this reopens processing while
         # preserving every receipt, stage and progress sample.

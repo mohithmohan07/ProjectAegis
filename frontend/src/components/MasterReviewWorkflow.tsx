@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import ReviewedFileUpload, { ReviewErrorReceipt, reviewErrorReceipt } from "./ReviewedFileUpload";
 import { api } from "../api/client";
 import { useRunConsole } from "../RunConsole";
 import {
@@ -8,6 +9,7 @@ import {
 } from "../lib/workflowSteps";
 import type {
   MasterReviewLaneState,
+  ReviewErrorReportReceipt,
   MasterReviewPublication,
   MasterReviewPublishResult,
   MasterReviewSubmitResult,
@@ -265,6 +267,7 @@ export default function MasterReviewWorkflow({
   const { restore, record } = useRunConsole();
   const [busy, setBusy] = useState<Busy | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reports, setReports] = useState<Partial<Record<Lane, ReviewErrorReportReceipt>>>({});
   const [notice, setNotice] = useState<string | null>(null);
   // Short-lived fallbacks for an acknowledgement whose follow-up job read
   // failed; the durable marker wins as soon as a refresh delivers it.
@@ -280,6 +283,7 @@ export default function MasterReviewWorkflow({
     setError(null);
     setNotice(null);
     setLocalReceipts({});
+    setReports({});
     setLocalPublications({});
     setLocalConceptPublished({});
   }, [job.id]);
@@ -318,15 +322,17 @@ export default function MasterReviewWorkflow({
     }
   }
 
-  async function uploadReviewedMaster(lane: Lane, file: File) {
-    if (locked) return;
+  async function uploadReviewedMaster(lane: Lane, file: File, reviewErrorNotes?: string): Promise<boolean> {
+    if (locked) return false;
     const { label } = laneConfig(lane);
     setBusy({ kind: "upload", lane });
     setError(null);
     setNotice(null);
     record(job, `Receiving reviewed ${label} Master file: ${file.name}`);
     try {
-      const response = await api.uploadReviewedMaster(job.id, lane, file);
+      const response = await api.uploadReviewedMaster(job.id, lane, file, reviewErrorNotes);
+      const report = reviewErrorReceipt(response?.review_error_report);
+      if (report) setReports((current) => ({ ...current, [lane]: report }));
       const receipt = receiptFromSubmit(response ?? { lane }, file.name);
       const issues = receipt.issues ?? [];
       record(
@@ -344,10 +350,12 @@ export default function MasterReviewWorkflow({
       if (refreshError) {
         setError(`${label} Master upload was accepted, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
       }
+      return true;
     } catch (uploadError) {
       record(job, `${label} Master upload failed: ${readableError(uploadError)}`, "error");
       await refreshJob();
       setError(`${label} reviewed Master file could not be uploaded: ${readableError(uploadError)}`);
+      return false;
     } finally {
       setBusy(null);
     }
@@ -533,31 +541,21 @@ export default function MasterReviewWorkflow({
               )}
 
               <div className="row mt-8">
-                <input
-                  id={inputId}
-                  type="file"
+                <ReviewedFileUpload
+                  key={inputId}
+                  inputId={inputId}
                   accept=".xlsx"
                   disabled={locked}
-                  data-testid={`reviewed-master-input-${lane}`}
-                  onChange={(event) => {
-                    const selected = event.target.files?.[0];
-                    event.target.value = "";
-                    if (selected) void uploadReviewedMaster(lane, selected);
-                  }}
-                  style={{ display: "none" }}
+                  busy={laneBusy === "upload"}
+                  inputTestId={`reviewed-master-input-${lane}`}
+                  buttonTestId={`upload-reviewed-master-${lane}`}
+                  label={`Upload reviewed ${label} Master file`}
+                  onUpload={(file, notes) => uploadReviewedMaster(lane, file, notes)}
                 />
-                <button
-                  className="ghost"
-                  type="button"
-                  disabled={locked}
-                  onClick={() => document.getElementById(inputId)?.click()}
-                  data-testid={`upload-reviewed-master-${lane}`}
-                >
-                  {laneBusy === "upload"
-                    ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-                    : `Upload reviewed ${label} Master file`}
-                </button>
               </div>
+              <ReviewErrorReceipt receipt={reports[lane] ?? job.review_workflow?.review_error_reports?.filter(
+                (report) => report.review_kind === "master" && report.lane === lane,
+              ).slice(-1)[0]} />
               {receipt ? (
                 <div className="hint mt-8 master-review-receipt" data-testid={`master-receipt-${lane}`}>
                   <span>

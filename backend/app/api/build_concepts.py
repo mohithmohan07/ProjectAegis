@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -17,6 +17,7 @@ from ..services import (
     drive_checkpoints,
     generation_recovery,
     progress,
+    review_error_reports,
     uploads,
 )
 from .upload_limits import read_limited_upload
@@ -745,6 +746,9 @@ def _master_review_http_error(exc: Exception) -> HTTPException:
 
     from ..services import master_review
 
+    if isinstance(exc, review_error_reports.ReviewEvidenceUnavailable):
+        return HTTPException(503, str(exc))
+
     if isinstance(exc, (uploads.UploadJobNotFound, release_svc.ReleaseUnavailableError,
                         master_review.MasterReviewNotFound)):
         return HTTPException(404, str(exc))
@@ -770,6 +774,7 @@ async def submit_reviewed_master_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
+    review_error_notes: str | None = Depends(review_error_reports.requested_notes),
 ):
     """Apply the team's edited Master workbook as a new release version.
 
@@ -816,6 +821,7 @@ async def submit_reviewed_master_file(
                     workbook_bytes=raw_bytes,
                     filename=str(file.filename or ""),
                     owner_sub=user.sub,
+                    review_error_notes=review_error_notes,
                 )
             finally:
                 worker_db.close()
@@ -838,6 +844,38 @@ async def submit_reviewed_master_file(
                 level="error",
             )
         raise error from exc
+
+
+@router.get("/uploads/{job_id}/review-error-reports")
+def list_review_error_reports(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    try:
+        uploads.get_job_for_reader(db, job_id, owner_sub=user.sub, module="build_concepts")
+        return {"job_id": job_id, "reports": review_error_reports.list_for_job(job_id)}
+    except uploads.UploadJobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/uploads/{job_id}/review-error-reports/{report_id}/evidence.zip")
+def download_review_error_evidence(
+    job_id: int,
+    report_id: str,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    try:
+        uploads.get_job_for_reader(db, job_id, owner_sub=user.sub, module="build_concepts")
+        receipt, path = review_error_reports.evidence_for_job(job_id, report_id)
+    except (uploads.UploadJobNotFound, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "review error report not found") from exc
+    return FileResponse(
+        path, media_type="application/zip", filename=f"review_errors_{report_id}.zip",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+                 "X-Evidence-SHA256": receipt["archive_sha256"]},
+    )
 
 
 @router.post("/uploads/{job_id}/master-review/publish")

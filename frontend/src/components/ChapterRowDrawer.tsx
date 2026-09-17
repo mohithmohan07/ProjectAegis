@@ -11,6 +11,7 @@ import type {
 import { chapterLabel, stateLabel } from "../lib/chapterBatchState";
 import ApiUsageSummary from "./ApiUsageSummary";
 import ChapterRowUpload from "./ChapterRowUpload";
+import { ReviewErrorReceipt } from "./ReviewedFileUpload";
 
 /** The run manifest's artifact kinds per lane, as the release writes them. */
 const LANE_ARTIFACTS: Record<string, { concept: string; master: string }> = {
@@ -275,6 +276,18 @@ export default function ChapterRowDrawer({
               </div>
             );
           })}
+
+          {(job?.review_workflow?.review_error_reports?.length ?? 0) > 0 && (
+            <details className="mt-12">
+              <summary>Review error logs</summary>
+              {job?.review_workflow?.review_error_reports?.map((report) => (
+                <div key={report.report_id} className="mt-8">
+                  <strong>{laneLabel(report.lane)}</strong>
+                  <ReviewErrorReceipt receipt={report} />
+                </div>
+              ))}
+            </details>
+          )}
 
           {row.pending_decision && (
             <div

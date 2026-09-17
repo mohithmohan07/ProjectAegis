@@ -118,10 +118,12 @@ def install(generation: ModuleType | None = None) -> None:
         fn,
         *,
         owner_sub: str | None = None,
+        before_run=None,
     ):
         job = uploads.get_job(db, job_id, owner_sub=owner_sub)
         if job.module != "build_concepts":
-            return original_run(db, job_id, fn, owner_sub=owner_sub)
+            return original_run(db, job_id, fn, owner_sub=owner_sub,
+                                **({"before_run": before_run} if before_run is not None else {}))
 
         def phase3_fn():
             current = uploads.get_job(
@@ -149,7 +151,8 @@ def install(generation: ModuleType | None = None) -> None:
             with phase3.activate_session(session):
                 return fn()
 
-        return original_run(db, job_id, phase3_fn, owner_sub=owner_sub)
+        return original_run(db, job_id, phase3_fn, owner_sub=owner_sub,
+                            **({"before_run": before_run} if before_run is not None else {}))
 
     @wraps(original_concepts_wrapper)
     def concepts_from_mmd(mmd_text: str, *args, **kwargs):
