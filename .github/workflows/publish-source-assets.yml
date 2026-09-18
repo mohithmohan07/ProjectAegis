@@ -1,0 +1,56 @@
+name: Publish reviewed source images
+
+# Image-only operation. No main, pull_request, schedule, deployment, model
+# call, database write or generation trigger. The narrow branch trigger lets
+# reviewed images be published without merging (which would deploy Aegis).
+on:
+  push:
+    branches: [codex/manual-source-asset-publisher]
+    paths: [ops/reviewed-source-assets/current/**]
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Repository-relative path to a reviewed JPEG manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegis-reviewed-source-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/codex/manual-source-asset-publisher'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate reviewed bundle before using Fly credentials
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path || 'ops/reviewed-source-assets/current/manifest.json' }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess
+          root = pathlib.Path.cwd().resolve()
+          manifest = (root / os.environ['MANIFEST_PATH']).resolve(strict=True)
+          if not manifest.is_relative_to(root / 'ops' / 'reviewed-source-assets') or manifest.suffix != '.json':
+              raise SystemExit('Manifest must be JSON under ops/reviewed-source-assets/')
+          subprocess.run(['python', 'backend/scripts/publish_source_assets.py', '--manifest', str(manifest), '--validate-only'], check=True)
+          PY
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Publish assets and verify anonymous delivery
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MANIFEST_PATH: ${{ inputs.manifest_path || 'ops/reviewed-source-assets/current/manifest.json' }}
+        run: python backend/scripts/publish_source_assets.py --manifest "$MANIFEST_PATH" --receipt "$RUNNER_TEMP/asset-publication-receipt.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-source-image-urls
+          path: ${{ runner.temp }}/asset-publication-receipt.json
+          if-no-files-found: error
+          retention-days: 30
