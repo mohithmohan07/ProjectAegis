@@ -1,10 +1,10 @@
 {
-  "collected_at": "2026-09-17T22:50:00.684634+00:00",
+  "collected_at": "2026-09-18T22:32:50.529504+00:00",
   "collection_status": "complete",
   "content_policy": "strict-allowlist-no-source-text",
   "page_count": 1,
-  "report_count": 16,
+  "report_count": 24,
   "repository_visibility": "public",
   "schema_version": 1,
-  "started_at": "2026-09-17T22:49:53.575490+00:00"
+  "started_at": "2026-09-18T22:32:42.939280+00:00"
 }
