@@ -1,0 +1,771 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "86bf5bed30180eaaf94ad61ef1f7e78bb37045534f1b28d2e5b45992c096b29c.jpg",
+      "sha256": "86bf5bed30180eaaf94ad61ef1f7e78bb37045534f1b28d2e5b45992c096b29c",
+      "bytes": 382671,
+      "width": 1485,
+      "height": 693,
+      "alt": "Opening slide illustration",
+      "url": "https://projectaegis.fly.dev/source-assets/0/86bf5bed30180eaaf94ad61ef1f7e78bb37045534f1b28d2e5b45992c096b29c.jpg"
+    },
+    {
+      "filename": "cdff1f57b0be9421d0dd709f4df5dee474b1ac37d0d5dfa9a38ba85773864034.jpg",
+      "sha256": "cdff1f57b0be9421d0dd709f4df5dee474b1ac37d0d5dfa9a38ba85773864034",
+      "bytes": 73560,
+      "width": 683,
+      "height": 518,
+      "alt": "Fig. 7.2: Lifting bags to a height",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cdff1f57b0be9421d0dd709f4df5dee474b1ac37d0d5dfa9a38ba85773864034.jpg"
+    },
+    {
+      "filename": "d99295ff3f135f4fe5ddf44d6575296d6534a17b3b5c362fa6e0ddd4e8d84c87.jpg",
+      "sha256": "d99295ff3f135f4fe5ddf44d6575296d6534a17b3b5c362fa6e0ddd4e8d84c87",
+      "bytes": 42017,
+      "width": 593,
+      "height": 430,
+      "alt": "Fig. 7.3: Work done in horizontal and vertical directions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d99295ff3f135f4fe5ddf44d6575296d6534a17b3b5c362fa6e0ddd4e8d84c87.jpg"
+    },
+    {
+      "filename": "a5cdfce5dcc995c2b30c367a9ea44a926598c36c53c2266c6c0276f613b4ae3f.jpg",
+      "sha256": "a5cdfce5dcc995c2b30c367a9ea44a926598c36c53c2266c6c0276f613b4ae3f",
+      "bytes": 89102,
+      "width": 410,
+      "height": 416,
+      "alt": "Fig. 7.4: Force-displacement graph",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a5cdfce5dcc995c2b30c367a9ea44a926598c36c53c2266c6c0276f613b4ae3f.jpg"
+    },
+    {
+      "filename": "4e4fa485dcbe3d97ed38679617177ee168fa1f7bcff1278e7c0c8b5059d8cd46.jpg",
+      "sha256": "4e4fa485dcbe3d97ed38679617177ee168fa1f7bcff1278e7c0c8b5059d8cd46",
+      "bytes": 120799,
+      "width": 985,
+      "height": 413,
+      "alt": "Fig. 7.7: Positive and negative work",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4e4fa485dcbe3d97ed38679617177ee168fa1f7bcff1278e7c0c8b5059d8cd46.jpg"
+    },
+    {
+      "filename": "27c2eb7e9f077f2985248461abc52522c6e76618b009d1418d41828c034188de.jpg",
+      "sha256": "27c2eb7e9f077f2985248461abc52522c6e76618b009d1418d41828c034188de",
+      "bytes": 32763,
+      "width": 250,
+      "height": 261,
+      "alt": "Fig. 7.9: A carrom shot",
+      "url": "https://projectaegis.fly.dev/source-assets/0/27c2eb7e9f077f2985248461abc52522c6e76618b009d1418d41828c034188de.jpg"
+    },
+    {
+      "filename": "c6a3d8fb99e841e696deb66a6d41d3d1aa93db0a2cefcd49cfa392df7046923e.jpg",
+      "sha256": "c6a3d8fb99e841e696deb66a6d41d3d1aa93db0a2cefcd49cfa392df7046923e",
+      "bytes": 138852,
+      "width": 408,
+      "height": 1078,
+      "alt": "Fig. 7.10: Different forms of energy",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c6a3d8fb99e841e696deb66a6d41d3d1aa93db0a2cefcd49cfa392df7046923e.jpg"
+    },
+    {
+      "filename": "60bd621c7e21fa268c475ad3b865848d4bf65eedc01e2daad3d78eafceefa883.jpg",
+      "sha256": "60bd621c7e21fa268c475ad3b865848d4bf65eedc01e2daad3d78eafceefa883",
+      "bytes": 80306,
+      "width": 1098,
+      "height": 281,
+      "alt": "Fig. 7.11: Calculating change in kinetic energy",
+      "url": "https://projectaegis.fly.dev/source-assets/0/60bd621c7e21fa268c475ad3b865848d4bf65eedc01e2daad3d78eafceefa883.jpg"
+    },
+    {
+      "filename": "7caffde430197626d19e09c048b8ab518adcd922374936b95b563d61913d8cdb.jpg",
+      "sha256": "7caffde430197626d19e09c048b8ab518adcd922374936b95b563d61913d8cdb",
+      "bytes": 46288,
+      "width": 273,
+      "height": 496,
+      "alt": "Fig. 7.14: A spring in three configurations",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7caffde430197626d19e09c048b8ab518adcd922374936b95b563d61913d8cdb.jpg"
+    },
+    {
+      "filename": "1f4590ed3be1b08d30bfc66b4f5229ff90589ae1edf1059cc0910cef2e3c887e.jpg",
+      "sha256": "1f4590ed3be1b08d30bfc66b4f5229ff90589ae1edf1059cc0910cef2e3c887e",
+      "bytes": 61488,
+      "width": 996,
+      "height": 230,
+      "alt": "Fig. 7.15: Systems of magnets and electric charges",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1f4590ed3be1b08d30bfc66b4f5229ff90589ae1edf1059cc0910cef2e3c887e.jpg"
+    },
+    {
+      "filename": "760382744e632061dc66f5b15490456539b84a7a087955dee6cfa0395eee0fe7.jpg",
+      "sha256": "760382744e632061dc66f5b15490456539b84a7a087955dee6cfa0395eee0fe7",
+      "bytes": 39502,
+      "width": 413,
+      "height": 233,
+      "alt": "Fig. 7.17: Depressions created in sand",
+      "url": "https://projectaegis.fly.dev/source-assets/0/760382744e632061dc66f5b15490456539b84a7a087955dee6cfa0395eee0fe7.jpg"
+    },
+    {
+      "filename": "e63476e78e8c373cec4c3faddd5b01501ea01c7c69e1f904cb8796326e6bd6fc.jpg",
+      "sha256": "e63476e78e8c373cec4c3faddd5b01501ea01c7c69e1f904cb8796326e6bd6fc",
+      "bytes": 21235,
+      "width": 283,
+      "height": 583,
+      "alt": "Fig. 7.18: Raising an object to a height",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e63476e78e8c373cec4c3faddd5b01501ea01c7c69e1f904cb8796326e6bd6fc.jpg"
+    },
+    {
+      "filename": "256f60b0cba150a036df6a197e8941762d72e9e8f62246a6d787e1c3a2519bc8.jpg",
+      "sha256": "256f60b0cba150a036df6a197e8941762d72e9e8f62246a6d787e1c3a2519bc8",
+      "bytes": 28442,
+      "width": 266,
+      "height": 593,
+      "alt": "Fig. 7.19: An object falling freely",
+      "url": "https://projectaegis.fly.dev/source-assets/0/256f60b0cba150a036df6a197e8941762d72e9e8f62246a6d787e1c3a2519bc8.jpg"
+    },
+    {
+      "filename": "24c11ba076abebbb32c11b4854ac7330c5a2fbbacbbced57190cfff949c42f92.jpg",
+      "sha256": "24c11ba076abebbb32c11b4854ac7330c5a2fbbacbbced57190cfff949c42f92",
+      "bytes": 56289,
+      "width": 735,
+      "height": 408,
+      "alt": "Fig. 7.20: A pendulum",
+      "url": "https://projectaegis.fly.dev/source-assets/0/24c11ba076abebbb32c11b4854ac7330c5a2fbbacbbced57190cfff949c42f92.jpg"
+    },
+    {
+      "filename": "8a402e03369c85d76751a8a4d799ef58f46e48c67c7956d30c7484ff5b47f484.jpg",
+      "sha256": "8a402e03369c85d76751a8a4d799ef58f46e48c67c7956d30c7484ff5b47f484",
+      "bytes": 61758,
+      "width": 488,
+      "height": 421,
+      "alt": "Fig. 7.22: Ball roller coaster in a science park",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8a402e03369c85d76751a8a4d799ef58f46e48c67c7956d30c7484ff5b47f484.jpg"
+    },
+    {
+      "filename": "b51e207c0a80114c8a45de11b47997fdf3ea043c7c6e87e86c103f76654f7ebc.jpg",
+      "sha256": "b51e207c0a80114c8a45de11b47997fdf3ea043c7c6e87e86c103f76654f7ebc",
+      "bytes": 51550,
+      "width": 486,
+      "height": 483,
+      "alt": "Fig. 7.24: Pulling up a load directly and using a pulley",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b51e207c0a80114c8a45de11b47997fdf3ea043c7c6e87e86c103f76654f7ebc.jpg"
+    },
+    {
+      "filename": "48f231f4c76bbfe63f3ddb36211b89b1f760bf198004ba63056bbe144f73ea05.jpg",
+      "sha256": "48f231f4c76bbfe63f3ddb36211b89b1f760bf198004ba63056bbe144f73ea05",
+      "bytes": 27111,
+      "width": 318,
+      "height": 265,
+      "alt": "Fig. 7.25: A system of pulleys",
+      "url": "https://projectaegis.fly.dev/source-assets/0/48f231f4c76bbfe63f3ddb36211b89b1f760bf198004ba63056bbe144f73ea05.jpg"
+    },
+    {
+      "filename": "0ce9c6c33835c874562e13634704316a94428440fb1d5bbc5567e0c6b9cf4b25.jpg",
+      "sha256": "0ce9c6c33835c874562e13634704316a94428440fb1d5bbc5567e0c6b9cf4b25",
+      "bytes": 102212,
+      "width": 520,
+      "height": 636,
+      "alt": "Fig. 7.27: Measuring effort along inclined planks",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0ce9c6c33835c874562e13634704316a94428440fb1d5bbc5567e0c6b9cf4b25.jpg"
+    },
+    {
+      "filename": "a8e97f3811165b738bb2307d0ec94e8b9f81fee68b7b4d1e8ba128c700233035.jpg",
+      "sha256": "a8e97f3811165b738bb2307d0ec94e8b9f81fee68b7b4d1e8ba128c700233035",
+      "bytes": 89525,
+      "width": 1163,
+      "height": 326,
+      "alt": "Fig. 7.28: Lifting vertically and along inclined planes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a8e97f3811165b738bb2307d0ec94e8b9f81fee68b7b4d1e8ba128c700233035.jpg"
+    },
+    {
+      "filename": "ef1053939aecf9f44a260d92e9cb74c6301d5c15bc159a4380cd23b5701780cd.jpg",
+      "sha256": "ef1053939aecf9f44a260d92e9cb74c6301d5c15bc159a4380cd23b5701780cd",
+      "bytes": 48405,
+      "width": 421,
+      "height": 305,
+      "alt": "Fig. 7.31: Lifting a heavier object with a lighter object",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ef1053939aecf9f44a260d92e9cb74c6301d5c15bc159a4380cd23b5701780cd.jpg"
+    },
+    {
+      "filename": "69ab70b0bda7f10de0626513e3acd6ce0ff298d2519613453f867e4bb6c8188a.jpg",
+      "sha256": "69ab70b0bda7f10de0626513e3acd6ce0ff298d2519613453f867e4bb6c8188a",
+      "bytes": 55362,
+      "width": 441,
+      "height": 368,
+      "alt": "Fig. 7.32: A lever used to lift a heavy rock",
+      "url": "https://projectaegis.fly.dev/source-assets/0/69ab70b0bda7f10de0626513e3acd6ce0ff298d2519613453f867e4bb6c8188a.jpg"
+    },
+    {
+      "filename": "8c0137616bbe1f7f885d88599571eb284382c33aac8bb7211d0a26b03f422e6e.jpg",
+      "sha256": "8c0137616bbe1f7f885d88599571eb284382c33aac8bb7211d0a26b03f422e6e",
+      "bytes": 44604,
+      "width": 423,
+      "height": 378,
+      "alt": "Fig. 7.33: Balancing cups hung on a scale",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c0137616bbe1f7f885d88599571eb284382c33aac8bb7211d0a26b03f422e6e.jpg"
+    },
+    {
+      "filename": "9cfd3d46a599db27880a61e38259ca2861741318517f105ec036af40cb254d55.jpg",
+      "sha256": "9cfd3d46a599db27880a61e38259ca2861741318517f105ec036af40cb254d55",
+      "bytes": 43766,
+      "width": 356,
+      "height": 345,
+      "alt": "Fig. 7.34: A seesaw",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9cfd3d46a599db27880a61e38259ca2861741318517f105ec036af40cb254d55.jpg"
+    },
+    {
+      "filename": "a3179e62f5d29901b24b8d36b14da41a0cdb07fbecc7718ababe8df051cbe087.jpg",
+      "sha256": "a3179e62f5d29901b24b8d36b14da41a0cdb07fbecc7718ababe8df051cbe087",
+      "bytes": 24690,
+      "width": 273,
+      "height": 258,
+      "alt": "Fig. 7.35: Opening a lid using a spoon",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3179e62f5d29901b24b8d36b14da41a0cdb07fbecc7718ababe8df051cbe087.jpg"
+    },
+    {
+      "filename": "da2681d1602c4ff6241a86d7f91b4ebd3f4d628c7eb69b1a95e1e03727378749.jpg",
+      "sha256": "da2681d1602c4ff6241a86d7f91b4ebd3f4d628c7eb69b1a95e1e03727378749",
+      "bytes": 63625,
+      "width": 370,
+      "height": 405,
+      "alt": "Fig. 7.36: A watermill",
+      "url": "https://projectaegis.fly.dev/source-assets/0/da2681d1602c4ff6241a86d7f91b4ebd3f4d628c7eb69b1a95e1e03727378749.jpg"
+    },
+    {
+      "filename": "0bf9613a9305a9ea1564aa81a90513bc82bc01b83ce62a65e5d6c5a5266d0f71.jpg",
+      "sha256": "0bf9613a9305a9ea1564aa81a90513bc82bc01b83ce62a65e5d6c5a5266d0f71",
+      "bytes": 60120,
+      "width": 391,
+      "height": 321,
+      "alt": "Fig. 7.37: Force and displacement",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0bf9613a9305a9ea1564aa81a90513bc82bc01b83ce62a65e5d6c5a5266d0f71.jpg"
+    },
+    {
+      "filename": "4457c2b5db866e132cb6de9f4c29d9cb8298272c0f12e7234425aee8b3c88dd5.jpg",
+      "sha256": "4457c2b5db866e132cb6de9f4c29d9cb8298272c0f12e7234425aee8b3c88dd5",
+      "bytes": 52676,
+      "width": 356,
+      "height": 318,
+      "alt": "Fig. 7.38: Speed and time",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4457c2b5db866e132cb6de9f4c29d9cb8298272c0f12e7234425aee8b3c88dd5.jpg"
+    },
+    {
+      "filename": "abf596caf85da6cab4f0f8ea499e16127327228dceb18e764772c9ee6900db84.jpg",
+      "sha256": "abf596caf85da6cab4f0f8ea499e16127327228dceb18e764772c9ee6900db84",
+      "bytes": 80271,
+      "width": 381,
+      "height": 320,
+      "alt": "Fig. 7.39: Potential energy and displacement",
+      "url": "https://projectaegis.fly.dev/source-assets/0/abf596caf85da6cab4f0f8ea499e16127327228dceb18e764772c9ee6900db84.jpg"
+    },
+    {
+      "filename": "b2648c51423c6af29a64a134ad672628d2358d87e28098b3927a0bcc5d3791c0.jpg",
+      "sha256": "b2648c51423c6af29a64a134ad672628d2358d87e28098b3927a0bcc5d3791c0",
+      "bytes": 31935,
+      "width": 160,
+      "height": 660,
+      "alt": "Fig. 7.40: Rubber-band and pen model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b2648c51423c6af29a64a134ad672628d2358d87e28098b3927a0bcc5d3791c0.jpg"
+    },
+    {
+      "filename": "1cee1876f12ba023d7f5439755c410615627f4b2f067b8ea322dbd3d54e3a413.jpg",
+      "sha256": "1cee1876f12ba023d7f5439755c410615627f4b2f067b8ea322dbd3d54e3a413",
+      "bytes": 63975,
+      "width": 770,
+      "height": 263,
+      "alt": "Fig. 7.1: Food, electricity and fuel provide energy",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1cee1876f12ba023d7f5439755c410615627f4b2f067b8ea322dbd3d54e3a413.jpg"
+    },
+    {
+      "filename": "cebdf29973e518e3486e92ce65b7bbe7c36be77ec79e574d3c476776d987769c.jpg",
+      "sha256": "cebdf29973e518e3486e92ce65b7bbe7c36be77ec79e574d3c476776d987769c",
+      "bytes": 20622,
+      "width": 205,
+      "height": 293,
+      "alt": "Fig. 7.5: Pushing a stationary wall",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cebdf29973e518e3486e92ce65b7bbe7c36be77ec79e574d3c476776d987769c.jpg"
+    },
+    {
+      "filename": "9b2f3ce65c3a1fcb2888937869eac225a89d026eeb74991a64009b5ffffbfe95.jpg",
+      "sha256": "9b2f3ce65c3a1fcb2888937869eac225a89d026eeb74991a64009b5ffffbfe95",
+      "bytes": 28612,
+      "width": 305,
+      "height": 248,
+      "alt": "Fig. 7.6: Carrying a box horizontally",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9b2f3ce65c3a1fcb2888937869eac225a89d026eeb74991a64009b5ffffbfe95.jpg"
+    },
+    {
+      "filename": "569cb77d021d9dd9a517c40b3c3d77d4b92325432dcc60c31b8279174c87052b.jpg",
+      "sha256": "569cb77d021d9dd9a517c40b3c3d77d4b92325432dcc60c31b8279174c87052b",
+      "bytes": 103986,
+      "width": 260,
+      "height": 885,
+      "alt": "Fig. 7.8: Throwing a ball, hitting wickets and a falling pot",
+      "url": "https://projectaegis.fly.dev/source-assets/0/569cb77d021d9dd9a517c40b3c3d77d4b92325432dcc60c31b8279174c87052b.jpg"
+    },
+    {
+      "filename": "7241541a67a7e4d1226ba888414079436a5eaf82f310eaf51e5e6f8cd4c3f2ef.jpg",
+      "sha256": "7241541a67a7e4d1226ba888414079436a5eaf82f310eaf51e5e6f8cd4c3f2ef",
+      "bytes": 59155,
+      "width": 438,
+      "height": 353,
+      "alt": "Fig. 7.12: Aircraft landing on a carrier",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7241541a67a7e4d1226ba888414079436a5eaf82f310eaf51e5e6f8cd4c3f2ef.jpg"
+    },
+    {
+      "filename": "2f193318aab3bc96a46cec15d3f8aa08905f4032e7bd8b6869f3b0c4c13c759d.jpg",
+      "sha256": "2f193318aab3bc96a46cec15d3f8aa08905f4032e7bd8b6869f3b0c4c13c759d",
+      "bytes": 24479,
+      "width": 268,
+      "height": 286,
+      "alt": "Fig. 7.13(a): A slingshot",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2f193318aab3bc96a46cec15d3f8aa08905f4032e7bd8b6869f3b0c4c13c759d.jpg"
+    },
+    {
+      "filename": "dc8eeadf684f278553ff636d1af5ff3fd7cc218958210d47ac0a3d76b4e3e512.jpg",
+      "sha256": "dc8eeadf684f278553ff636d1af5ff3fd7cc218958210d47ac0a3d76b4e3e512",
+      "bytes": 28542,
+      "width": 295,
+      "height": 270,
+      "alt": "Fig. 7.13(b): Shooting an arrow using a bow",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dc8eeadf684f278553ff636d1af5ff3fd7cc218958210d47ac0a3d76b4e3e512.jpg"
+    },
+    {
+      "filename": "de2f64c685e59e6dd7b714395de51a587714be1205203b2fbbf0c40e09c25f02.jpg",
+      "sha256": "de2f64c685e59e6dd7b714395de51a587714be1205203b2fbbf0c40e09c25f02",
+      "bytes": 28340,
+      "width": 310,
+      "height": 513,
+      "alt": "Fig. 7.16: Earth-ball system",
+      "url": "https://projectaegis.fly.dev/source-assets/0/de2f64c685e59e6dd7b714395de51a587714be1205203b2fbbf0c40e09c25f02.jpg"
+    },
+    {
+      "filename": "4f8617b26069d161985ebe4d0728b851ab1b1c386a0ef803a5c593fdbaf9d82b.jpg",
+      "sha256": "4f8617b26069d161985ebe4d0728b851ab1b1c386a0ef803a5c593fdbaf9d82b",
+      "bytes": 50512,
+      "width": 358,
+      "height": 278,
+      "alt": "Fig. 7.21: Escape ramp",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4f8617b26069d161985ebe4d0728b851ab1b1c386a0ef803a5c593fdbaf9d82b.jpg"
+    },
+    {
+      "filename": "a456c80f01279eadfd454b181a27cb123c72fc860b94a44f3d7b4a6aa6a13f03.jpg",
+      "sha256": "a456c80f01279eadfd454b181a27cb123c72fc860b94a44f3d7b4a6aa6a13f03",
+      "bytes": 9132,
+      "width": 173,
+      "height": 235,
+      "alt": "Fig. 7.23: Pulley",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a456c80f01279eadfd454b181a27cb123c72fc860b94a44f3d7b4a6aa6a13f03.jpg"
+    },
+    {
+      "filename": "18d0c740a4a28f8f1147b6f0b67969f01cb922ec9461c3de4a4b7fa084abd4aa.jpg",
+      "sha256": "18d0c740a4a28f8f1147b6f0b67969f01cb922ec9461c3de4a4b7fa084abd4aa",
+      "bytes": 150346,
+      "width": 993,
+      "height": 413,
+      "alt": "Fig. 7.26: Lifting a box and moving it up a ramp",
+      "url": "https://projectaegis.fly.dev/source-assets/0/18d0c740a4a28f8f1147b6f0b67969f01cb922ec9461c3de4a4b7fa084abd4aa.jpg"
+    },
+    {
+      "filename": "77075c9d2564edd760e0e874ebd11fdeff32801e683314660ab041801cfab635.jpg",
+      "sha256": "77075c9d2564edd760e0e874ebd11fdeff32801e683314660ab041801cfab635",
+      "bytes": 10481,
+      "width": 248,
+      "height": 208,
+      "alt": "Fig. 7.29: Ramp dimensions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/77075c9d2564edd760e0e874ebd11fdeff32801e683314660ab041801cfab635.jpg"
+    },
+    {
+      "filename": "cb8ae4a226e7dea7d982e792a0116584804e47a32c9dc8b9dcca5d52a561a7f6.jpg",
+      "sha256": "cb8ae4a226e7dea7d982e792a0116584804e47a32c9dc8b9dcca5d52a561a7f6",
+      "bytes": 20471,
+      "width": 211,
+      "height": 216,
+      "alt": "Fig. 7.30: Inclined and vertical ladders",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cb8ae4a226e7dea7d982e792a0116584804e47a32c9dc8b9dcca5d52a561a7f6.jpg"
+    },
+    {
+      "filename": "13b117a49bd2139fbdf82fb6242cb01bcce17366fda547e5b1f489eb33e4d30e.jpg",
+      "sha256": "13b117a49bd2139fbdf82fb6242cb01bcce17366fda547e5b1f489eb33e4d30e",
+      "bytes": 211492,
+      "width": 1128,
+      "height": 671,
+      "alt": "Table 7.2: Classes of levers with arrangements and examples",
+      "url": "https://projectaegis.fly.dev/source-assets/0/13b117a49bd2139fbdf82fb6242cb01bcce17366fda547e5b1f489eb33e4d30e.jpg"
+    },
+    {
+      "filename": "381f616a333aaddbfef33a440fb4a4b52d3d750acd877aed220a9a24103810c1.jpg",
+      "sha256": "381f616a333aaddbfef33a440fb4a4b52d3d750acd877aed220a9a24103810c1",
+      "bytes": 61474,
+      "width": 673,
+      "height": 470,
+      "alt": "Fig. 8.1: A line diagram of a cathode ray tube",
+      "url": "https://projectaegis.fly.dev/source-assets/0/381f616a333aaddbfef33a440fb4a4b52d3d750acd877aed220a9a24103810c1.jpg"
+    },
+    {
+      "filename": "e303f0bef93092e152570183c3d51b700f2196b6beb2caf7aefaedc6b566efcb.jpg",
+      "sha256": "e303f0bef93092e152570183c3d51b700f2196b6beb2caf7aefaedc6b566efcb",
+      "bytes": 39726,
+      "width": 413,
+      "height": 391,
+      "alt": "Fig. 8.2: Thomson\u2019s model of an atom",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e303f0bef93092e152570183c3d51b700f2196b6beb2caf7aefaedc6b566efcb.jpg"
+    },
+    {
+      "filename": "9de6348ca6c2dd22af169b98920b1a029a12c1aacaa50e3079d63163798acba7.jpg",
+      "sha256": "9de6348ca6c2dd22af169b98920b1a029a12c1aacaa50e3079d63163798acba7",
+      "bytes": 122030,
+      "width": 1033,
+      "height": 533,
+      "alt": "Fig. 8.4: Schematic view of the gold foil experiment",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9de6348ca6c2dd22af169b98920b1a029a12c1aacaa50e3079d63163798acba7.jpg"
+    },
+    {
+      "filename": "872c7aaaf7f6b4ccd8394c2a847d5d1e6eca842470042cabac3e58e1f98efbd2.jpg",
+      "sha256": "872c7aaaf7f6b4ccd8394c2a847d5d1e6eca842470042cabac3e58e1f98efbd2",
+      "bytes": 31111,
+      "width": 285,
+      "height": 373,
+      "alt": "Fig. 8.5: Rutherford\u2019s planetary model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/872c7aaaf7f6b4ccd8394c2a847d5d1e6eca842470042cabac3e58e1f98efbd2.jpg"
+    },
+    {
+      "filename": "3c611e5abfa8df95eaeb738a0af945465e3b6f1c1180eb4c75c34b110c6b66d3.jpg",
+      "sha256": "3c611e5abfa8df95eaeb738a0af945465e3b6f1c1180eb4c75c34b110c6b66d3",
+      "bytes": 45642,
+      "width": 386,
+      "height": 398,
+      "alt": "Fig. 8.6: Spiral path of a charged particle losing energy",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c611e5abfa8df95eaeb738a0af945465e3b6f1c1180eb4c75c34b110c6b66d3.jpg"
+    },
+    {
+      "filename": "aa407480f59d40b5bbac9afb827f6c1359ccf5a9d9f33aea78df2f54bbf6f474.jpg",
+      "sha256": "aa407480f59d40b5bbac9afb827f6c1359ccf5a9d9f33aea78df2f54bbf6f474",
+      "bytes": 51165,
+      "width": 543,
+      "height": 416,
+      "alt": "Fig. 8.7: Energy levels in an atom",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aa407480f59d40b5bbac9afb827f6c1359ccf5a9d9f33aea78df2f54bbf6f474.jpg"
+    },
+    {
+      "filename": "f63c0569920e0e74ceea70b274a00f6a5cfa57ffb40f5abd1bb4c4b76f7b57a6.jpg",
+      "sha256": "f63c0569920e0e74ceea70b274a00f6a5cfa57ffb40f5abd1bb4c4b76f7b57a6",
+      "bytes": 68703,
+      "width": 1013,
+      "height": 305,
+      "alt": "Fig. 8.9: Dalton\u2019s symbols of elements",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f63c0569920e0e74ceea70b274a00f6a5cfa57ffb40f5abd1bb4c4b76f7b57a6.jpg"
+    },
+    {
+      "filename": "1259b2905348c928b120afcbdaf4433dca6a1499166552dc03a06a56bfc1e32c.jpg",
+      "sha256": "1259b2905348c928b120afcbdaf4433dca6a1499166552dc03a06a56bfc1e32c",
+      "bytes": 82341,
+      "width": 460,
+      "height": 780,
+      "alt": "Fig. 8.10: Neutrons and protons in the nucleus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1259b2905348c928b120afcbdaf4433dca6a1499166552dc03a06a56bfc1e32c.jpg"
+    },
+    {
+      "filename": "be4bdda1059a9f30d2c2dd1e62c49a744237dc63eb444885f57140a250c2a9e7.jpg",
+      "sha256": "be4bdda1059a9f30d2c2dd1e62c49a744237dc63eb444885f57140a250c2a9e7",
+      "bytes": 168228,
+      "width": 1201,
+      "height": 635,
+      "alt": "Fig. 8.11: Structures of the first eighteen elements",
+      "url": "https://projectaegis.fly.dev/source-assets/0/be4bdda1059a9f30d2c2dd1e62c49a744237dc63eb444885f57140a250c2a9e7.jpg"
+    },
+    {
+      "filename": "6f66111ee4670bd5824681eaa658881ac4d00f36df00f569776e9caa793b35cc.jpg",
+      "sha256": "6f66111ee4670bd5824681eaa658881ac4d00f36df00f569776e9caa793b35cc",
+      "bytes": 54332,
+      "width": 958,
+      "height": 283,
+      "alt": "Fig. 8.12: Isotopes of hydrogen",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6f66111ee4670bd5824681eaa658881ac4d00f36df00f569776e9caa793b35cc.jpg"
+    },
+    {
+      "filename": "0b120b1d5e4b37456096065353a50a770dcf0d0e41ed1f224acf5633937c7c64.jpg",
+      "sha256": "0b120b1d5e4b37456096065353a50a770dcf0d0e41ed1f224acf5633937c7c64",
+      "bytes": 72522,
+      "width": 848,
+      "height": 316,
+      "alt": "Fig. 8.13: Isotopes of carbon",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0b120b1d5e4b37456096065353a50a770dcf0d0e41ed1f224acf5633937c7c64.jpg"
+    },
+    {
+      "filename": "e465971ff3b9901823d0561407d3e05507f18e71884d02bcfcf17e56c5a1aabd.jpg",
+      "sha256": "e465971ff3b9901823d0561407d3e05507f18e71884d02bcfcf17e56c5a1aabd",
+      "bytes": 141659,
+      "width": 1208,
+      "height": 381,
+      "alt": "Fig. 8.16: Development of atomic models",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e465971ff3b9901823d0561407d3e05507f18e71884d02bcfcf17e56c5a1aabd.jpg"
+    },
+    {
+      "filename": "6549404a793670c4a57bb95c8ff412d714e2ea3865fdb7738b4d0bf0c5857089.jpg",
+      "sha256": "6549404a793670c4a57bb95c8ff412d714e2ea3865fdb7738b4d0bf0c5857089",
+      "bytes": 44887,
+      "width": 875,
+      "height": 246,
+      "alt": "Fig. 8.17: Four atomic structures labelled a to d",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6549404a793670c4a57bb95c8ff412d714e2ea3865fdb7738b4d0bf0c5857089.jpg"
+    },
+    {
+      "filename": "1eb0c867ae7346716be5551a0d6c80f469efe118b13b36cf8338e9714a09cfb9.jpg",
+      "sha256": "1eb0c867ae7346716be5551a0d6c80f469efe118b13b36cf8338e9714a09cfb9",
+      "bytes": 56327,
+      "width": 331,
+      "height": 271,
+      "alt": "Fig. 8.3: Watermelon analogy",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1eb0c867ae7346716be5551a0d6c80f469efe118b13b36cf8338e9714a09cfb9.jpg"
+    },
+    {
+      "filename": "f845ade18702b89b9cdd59d77430256f1012d150ee5cd011f332e8edea883b71.jpg",
+      "sha256": "f845ade18702b89b9cdd59d77430256f1012d150ee5cd011f332e8edea883b71",
+      "bytes": 79596,
+      "width": 475,
+      "height": 328,
+      "alt": "Fig. 8.8: Bhabha Atomic Research Centre",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f845ade18702b89b9cdd59d77430256f1012d150ee5cd011f332e8edea883b71.jpg"
+    },
+    {
+      "filename": "8d30923d23ee012704d786a7d7e35ea8961d8e71c73fe49b56cc2709fd7574c2.jpg",
+      "sha256": "8d30923d23ee012704d786a7d7e35ea8961d8e71c73fe49b56cc2709fd7574c2",
+      "bytes": 75941,
+      "width": 433,
+      "height": 346,
+      "alt": "Fig. 8.14: A nuclear power plant",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8d30923d23ee012704d786a7d7e35ea8961d8e71c73fe49b56cc2709fd7574c2.jpg"
+    },
+    {
+      "filename": "9d48097f34c727189173c8cc174b277d74a0c688d77e2f71fef55f9a51c6d693.jpg",
+      "sha256": "9d48097f34c727189173c8cc174b277d74a0c688d77e2f71fef55f9a51c6d693",
+      "bytes": 45328,
+      "width": 338,
+      "height": 301,
+      "alt": "Fig. 8.15: Individual atoms on a surface viewed using STM",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9d48097f34c727189173c8cc174b277d74a0c688d77e2f71fef55f9a51c6d693.jpg"
+    },
+    {
+      "filename": "6b0f8911e3374d4e83470b8c603b0ddc8374f889b1a1a10fa988df270d80eef2.jpg",
+      "sha256": "6b0f8911e3374d4e83470b8c603b0ddc8374f889b1a1a10fa988df270d80eef2",
+      "bytes": 37425,
+      "width": 496,
+      "height": 320,
+      "alt": "Fig. 4.1: A molecule of hydrogen",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6b0f8911e3374d4e83470b8c603b0ddc8374f889b1a1a10fa988df270d80eef2.jpg"
+    },
+    {
+      "filename": "c083f7122093c52baf08253e808ea53027657050124564e17ee2d93b6e19ca5f.jpg",
+      "sha256": "c083f7122093c52baf08253e808ea53027657050124564e17ee2d93b6e19ca5f",
+      "bytes": 42954,
+      "width": 421,
+      "height": 413,
+      "alt": "Fig. 4.3: Double bond between oxygen atoms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c083f7122093c52baf08253e808ea53027657050124564e17ee2d93b6e19ca5f.jpg"
+    },
+    {
+      "filename": "283a405bba31c436411f9f777e6865e70c848cff09a08297845fe0f961729e7c.jpg",
+      "sha256": "283a405bba31c436411f9f777e6865e70c848cff09a08297845fe0f961729e7c",
+      "bytes": 45799,
+      "width": 421,
+      "height": 398,
+      "alt": "Fig. 4.4: Triple bond between nitrogen atoms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/283a405bba31c436411f9f777e6865e70c848cff09a08297845fe0f961729e7c.jpg"
+    },
+    {
+      "filename": "e94b6fd2625248211f1fcc24b9334873bf1f0dd3d980b3c9b759b0ea62631cdc.jpg",
+      "sha256": "e94b6fd2625248211f1fcc24b9334873bf1f0dd3d980b3c9b759b0ea62631cdc",
+      "bytes": 39971,
+      "width": 303,
+      "height": 411,
+      "alt": "Fig. 4.5: Electron dot structure for methane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e94b6fd2625248211f1fcc24b9334873bf1f0dd3d980b3c9b759b0ea62631cdc.jpg"
+    },
+    {
+      "filename": "7d85f2e89b1fea7109e51ed4f93d66446b84a80e40d1819ad2460db842621edb.jpg",
+      "sha256": "7d85f2e89b1fea7109e51ed4f93d66446b84a80e40d1819ad2460db842621edb",
+      "bytes": 135684,
+      "width": 1083,
+      "height": 308,
+      "alt": "Structures of diamond, graphite and fullerene",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d85f2e89b1fea7109e51ed4f93d66446b84a80e40d1819ad2460db842621edb.jpg"
+    },
+    {
+      "filename": "b0ab5461cd0e9a17d005eed2d0e0b70cedaeb79d7fd030233901dc17ad1a1811.jpg",
+      "sha256": "b0ab5461cd0e9a17d005eed2d0e0b70cedaeb79d7fd030233901dc17ad1a1811",
+      "bytes": 63537,
+      "width": 480,
+      "height": 416,
+      "alt": "Fig. 4.6(c): Electron dot structure of ethane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b0ab5461cd0e9a17d005eed2d0e0b70cedaeb79d7fd030233901dc17ad1a1811.jpg"
+    },
+    {
+      "filename": "850ec69564739e6be1e71a631ee49d220f34a8c43c5dac2542029973b11192d6.jpg",
+      "sha256": "850ec69564739e6be1e71a631ee49d220f34a8c43c5dac2542029973b11192d6",
+      "bytes": 47379,
+      "width": 388,
+      "height": 356,
+      "alt": "Fig. 4.7: Structure of ethene",
+      "url": "https://projectaegis.fly.dev/source-assets/0/850ec69564739e6be1e71a631ee49d220f34a8c43c5dac2542029973b11192d6.jpg"
+    },
+    {
+      "filename": "824269c3e02a80136ee1b3716eaaa3f1b992ffe7fdee731abb59184239c1e19a.jpg",
+      "sha256": "824269c3e02a80136ee1b3716eaaa3f1b992ffe7fdee731abb59184239c1e19a",
+      "bytes": 45200,
+      "width": 885,
+      "height": 193,
+      "alt": "Fig. 4.8(b): Two structures with the formula C4H10",
+      "url": "https://projectaegis.fly.dev/source-assets/0/824269c3e02a80136ee1b3716eaaa3f1b992ffe7fdee731abb59184239c1e19a.jpg"
+    },
+    {
+      "filename": "34af219c66923c5b74690f4731b96e60d3942c2ac41725aa229199b12d3c57d0.jpg",
+      "sha256": "34af219c66923c5b74690f4731b96e60d3942c2ac41725aa229199b12d3c57d0",
+      "bytes": 56444,
+      "width": 918,
+      "height": 273,
+      "alt": "Fig. 4.9: Structure of cyclohexane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/34af219c66923c5b74690f4731b96e60d3942c2ac41725aa229199b12d3c57d0.jpg"
+    },
+    {
+      "filename": "3615517397546faae4436d8ae4ef5ab06b6b854dc03d268e921fd5ee78d4d1d6.jpg",
+      "sha256": "3615517397546faae4436d8ae4ef5ab06b6b854dc03d268e921fd5ee78d4d1d6",
+      "bytes": 34522,
+      "width": 723,
+      "height": 261,
+      "alt": "Fig. 4.10: Structure of benzene",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3615517397546faae4436d8ae4ef5ab06b6b854dc03d268e921fd5ee78d4d1d6.jpg"
+    },
+    {
+      "filename": "a0daa283c6f9e083f6c56de9e7e13bb5f6b2419bfa8ad8b3975ba401f0264466.jpg",
+      "sha256": "a0daa283c6f9e083f6c56de9e7e13bb5f6b2419bfa8ad8b3975ba401f0264466",
+      "bytes": 32275,
+      "width": 733,
+      "height": 206,
+      "alt": "Three structures labelled i, ii and iii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0daa283c6f9e083f6c56de9e7e13bb5f6b2419bfa8ad8b3975ba401f0264466.jpg"
+    },
+    {
+      "filename": "3bfa7cd403613598d2247957abdfe77ec0a07bda7f1bfe7dd090ba1905d9c1b0.jpg",
+      "sha256": "3bfa7cd403613598d2247957abdfe77ec0a07bda7f1bfe7dd090ba1905d9c1b0",
+      "bytes": 54470,
+      "width": 555,
+      "height": 563,
+      "alt": "Fig. 4.11: Formation of ester",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3bfa7cd403613598d2247957abdfe77ec0a07bda7f1bfe7dd090ba1905d9c1b0.jpg"
+    },
+    {
+      "filename": "fcbdfc56d55b2f0597b41ab4d68d75baab700abbd1bca670055a301b53f0232e.jpg",
+      "sha256": "fcbdfc56d55b2f0597b41ab4d68d75baab700abbd1bca670055a301b53f0232e",
+      "bytes": 55697,
+      "width": 513,
+      "height": 478,
+      "alt": "Fig. 4.12: Formation of micelles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fcbdfc56d55b2f0597b41ab4d68d75baab700abbd1bca670055a301b53f0232e.jpg"
+    },
+    {
+      "filename": "1e38db2149780412e5c6d0b5b522134f2d50b1ef909af6193328c59713b511ac.jpg",
+      "sha256": "1e38db2149780412e5c6d0b5b522134f2d50b1ef909af6193328c59713b511ac",
+      "bytes": 618780,
+      "width": 1153,
+      "height": 1223,
+      "alt": "Stages of cleaning in Fig. 4.13",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1e38db2149780412e5c6d0b5b522134f2d50b1ef909af6193328c59713b511ac.jpg"
+    },
+    {
+      "filename": "d57185a510f5088e6663704960270f3c18727e6c404df78e6946efb8354dcbb4.jpg",
+      "sha256": "d57185a510f5088e6663704960270f3c18727e6c404df78e6946efb8354dcbb4",
+      "bytes": 23157,
+      "width": 276,
+      "height": 221,
+      "alt": "Fig. 4.2: Single bond between two hydrogen atoms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d57185a510f5088e6663704960270f3c18727e6c404df78e6946efb8354dcbb4.jpg"
+    },
+    {
+      "filename": "676d014c5daa79e3f15496ec1bcf838b61ceb5048b02ebb5630013dfb50fd62f.jpg",
+      "sha256": "676d014c5daa79e3f15496ec1bcf838b61ceb5048b02ebb5630013dfb50fd62f",
+      "bytes": 52471,
+      "width": 516,
+      "height": 346,
+      "alt": "Fig. 8.1: Variation over succeeding generations",
+      "url": "https://projectaegis.fly.dev/source-assets/0/676d014c5daa79e3f15496ec1bcf838b61ceb5048b02ebb5630013dfb50fd62f.jpg"
+    },
+    {
+      "filename": "623c51a20369583987defbe60b78ac0524280d21626e5cbc73f35c6b4e64c440.jpg",
+      "sha256": "623c51a20369583987defbe60b78ac0524280d21626e5cbc73f35c6b4e64c440",
+      "bytes": 34775,
+      "width": 271,
+      "height": 448,
+      "alt": "Fig. 8.2: Free and attached earlobes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/623c51a20369583987defbe60b78ac0524280d21626e5cbc73f35c6b4e64c440.jpg"
+    },
+    {
+      "filename": "5cc2e474e20ee01d2a46dd864177031a67856be6d4075fd35bd030d31b2b6e74.jpg",
+      "sha256": "5cc2e474e20ee01d2a46dd864177031a67856be6d4075fd35bd030d31b2b6e74",
+      "bytes": 117187,
+      "width": 538,
+      "height": 523,
+      "alt": "Fig. 8.3: Inheritance over two generations",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5cc2e474e20ee01d2a46dd864177031a67856be6d4075fd35bd030d31b2b6e74.jpg"
+    },
+    {
+      "filename": "b40f3e7a70d87b62ac5dd35da3b9368d4446dd579f66b6a4339c6f2b1df093ee.jpg",
+      "sha256": "b40f3e7a70d87b62ac5dd35da3b9368d4446dd579f66b6a4339c6f2b1df093ee",
+      "bytes": 34638,
+      "width": 375,
+      "height": 405,
+      "alt": "Fig. 8.4: Flower-colour inheritance",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b40f3e7a70d87b62ac5dd35da3b9368d4446dd579f66b6a4339c6f2b1df093ee.jpg"
+    },
+    {
+      "filename": "8ccf25bf2025e0b3bd3bf9b03b1baaa8180732adb681503dbd7df36d6986c933.jpg",
+      "sha256": "8ccf25bf2025e0b3bd3bf9b03b1baaa8180732adb681503dbd7df36d6986c933",
+      "bytes": 134718,
+      "width": 403,
+      "height": 1093,
+      "alt": "Fig. 8.5: Independent inheritance of seed shape and colour",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8ccf25bf2025e0b3bd3bf9b03b1baaa8180732adb681503dbd7df36d6986c933.jpg"
+    },
+    {
+      "filename": "4f14d31519cefe94084c66a51838725850a78f0d3c9bcc8ddf515c5c8c7dd5f7.jpg",
+      "sha256": "4f14d31519cefe94084c66a51838725850a78f0d3c9bcc8ddf515c5c8c7dd5f7",
+      "bytes": 86497,
+      "width": 463,
+      "height": 1006,
+      "alt": "Fig. 8.6: Sex determination in human beings",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4f14d31519cefe94084c66a51838725850a78f0d3c9bcc8ddf515c5c8c7dd5f7.jpg"
+    },
+    {
+      "filename": "c823b712520a826a1f35a731709ff7d47316506a5ccf613edc1a27a7da2152ea.jpg",
+      "sha256": "c823b712520a826a1f35a731709ff7d47316506a5ccf613edc1a27a7da2152ea",
+      "bytes": 93629,
+      "width": 435,
+      "height": 726,
+      "alt": "Fig. 13.1: Food chains in forest, grassland and pond",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c823b712520a826a1f35a731709ff7d47316506a5ccf613edc1a27a7da2152ea.jpg"
+    },
+    {
+      "filename": "aa9ba0ee69dc6cf0360dd8213c2b4415822ca5d6bac4d4ce6eced96c92a1a4ef.jpg",
+      "sha256": "aa9ba0ee69dc6cf0360dd8213c2b4415822ca5d6bac4d4ce6eced96c92a1a4ef",
+      "bytes": 35074,
+      "width": 348,
+      "height": 420,
+      "alt": "Fig. 13.2: Trophic levels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aa9ba0ee69dc6cf0360dd8213c2b4415822ca5d6bac4d4ce6eced96c92a1a4ef.jpg"
+    },
+    {
+      "filename": "c56af161e96722f8d46a218fe240e8959fe31f3027ef77aba467af5a4a7693da.jpg",
+      "sha256": "c56af161e96722f8d46a218fe240e8959fe31f3027ef77aba467af5a4a7693da",
+      "bytes": 230531,
+      "width": 616,
+      "height": 938,
+      "alt": "Fig. 13.3: A food web",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c56af161e96722f8d46a218fe240e8959fe31f3027ef77aba467af5a4a7693da.jpg"
+    },
+    {
+      "filename": "68314dbf2e7e620a018ff16edcc639685d4d1d6723edff1b11fb93d581955956.jpg",
+      "sha256": "68314dbf2e7e620a018ff16edcc639685d4d1d6723edff1b11fb93d581955956",
+      "bytes": 72728,
+      "width": 846,
+      "height": 691,
+      "alt": "Fig. 13.4: Flow of energy in an ecosystem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/68314dbf2e7e620a018ff16edcc639685d4d1d6723edff1b11fb93d581955956.jpg"
+    }
+  ]
+}

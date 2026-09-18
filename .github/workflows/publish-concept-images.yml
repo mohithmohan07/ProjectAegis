@@ -1,12 +1,12 @@
-name: Publish reviewed concept images only
+name: Publish reviewed Science concept images only
 
 on:
   push:
-    branches: [codex/social-english-image-assets]
+    branches: [codex/science-concept-image-assets]
     paths:
       - '.github/workflows/publish-concept-images.yml'
       - 'backend/scripts/publish_concept_images.py'
-      - 'ops/concept-image-assets/2026-09-18/**'
+      - 'ops/science-concept-image-assets/2026-09-18/**'
 
 permissions:
   contents: read
@@ -25,10 +25,15 @@ jobs:
       - name: Publish content-addressed crops and verify public URLs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: python backend/scripts/publish_concept_images.py
+        run: |
+          python backend/scripts/publish_concept_images.py --assets ops/science-concept-image-assets/2026-09-18
+          python backend/scripts/verify_science_image_dimensions.py ops/science-concept-image-assets/2026-09-18
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
           name: concept-image-url-verification
-          path: image-url-verification.json
+          path: |
+            image-url-verification.json
+            science-image-verification.json
           if-no-files-found: error
+
