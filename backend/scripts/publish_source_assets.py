@@ -9,12 +9,12 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -205,8 +205,14 @@ def publish(manifest_path: Path, receipt_path: Path) -> None:
             # Delete only the two exact temporary paths created by this run.
             code = "from pathlib import Path;" + ";".join(
                 f"Path({p!r}).unlink(missing_ok=True)" for p in (remote_package, remote_script))
-            run_fly("ssh", "console", "-a", APP, "--machine", machine,
-                    "-C", shlex.join(["python", "-c", code]))
+            original_failure = sys.exc_info()[0] is not None
+            try:
+                run_fly("ssh", "console", "-a", APP, "--machine", machine,
+                        "-C", shlex.join(["python", "-c", code]))
+            except (subprocess.SubprocessError, OSError):
+                if not original_failure:
+                    raise
+                print("Temporary transfer cleanup failed; original publication failure retained.", file=sys.stderr)
 
 
 def main() -> None:

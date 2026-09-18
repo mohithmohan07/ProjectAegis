@@ -1,8 +1,12 @@
 name: Publish reviewed source images
 
-# Image-only operation. Deliberately no push/main, pull_request, schedule,
-# deployment, model call, database write or generation trigger.
+# Image-only operation. No main, pull_request, schedule, deployment, model
+# call, database write or generation trigger. The narrow branch trigger lets
+# reviewed images be published without merging (which would deploy Aegis).
 on:
+  push:
+    branches: [codex/manual-source-asset-publisher]
+    paths: [ops/reviewed-source-assets/current/**]
   workflow_dispatch:
     inputs:
       manifest_path:
@@ -19,6 +23,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/codex/manual-source-asset-publisher'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,7 +32,7 @@ jobs:
           persist-credentials: false
       - name: Validate reviewed bundle before using Fly credentials
         env:
-          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          MANIFEST_PATH: ${{ inputs.manifest_path || 'ops/reviewed-source-assets/current/manifest.json' }}
         run: |
           python - <<'PY'
           import os, pathlib, subprocess
@@ -41,7 +46,7 @@ jobs:
       - name: Publish assets and verify anonymous delivery
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          MANIFEST_PATH: ${{ inputs.manifest_path || 'ops/reviewed-source-assets/current/manifest.json' }}
         run: python backend/scripts/publish_source_assets.py --manifest "$MANIFEST_PATH" --receipt "$RUNNER_TEMP/asset-publication-receipt.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

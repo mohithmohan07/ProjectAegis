@@ -1,9 +1,12 @@
 """Offline tests: publishing must not need or inspect any live credentials."""
 import base64
+from email.message import Message
 import importlib.util
+import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import fitz
 
@@ -88,6 +91,51 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             publisher.install_package(package, self.root)
         self.assertFalse(list(self.root.iterdir()))
+
+    def test_late_invalid_asset_prevents_all_writes(self):
+        package, _ = bundle()
+        invalid = dict(package["assets"][0])
+        raw = b"\xff\xd8\xffinvalid-second-image\xff\xd9"
+        sha = publisher.digest(raw)
+        invalid.update(sha256=sha, filename=sha + ".jpg", bytes=len(raw),
+                       data_base64=base64.b64encode(raw).decode("ascii"))
+        package["assets"].append(invalid)
+        with self.assertRaises(Exception):
+            publisher.install_package(package, self.root)
+        self.assertFalse(list(self.root.iterdir()))
+
+    def test_anonymous_get_verifies_identity_and_headers(self):
+        package, raw = bundle()
+        row = package["assets"][0]
+        url = f"{publisher.ORIGIN}/source-assets/0/{row['filename']}"
+
+        def response(mime="image/jpeg", length=None, location=url, body=raw):
+            result = io.BytesIO(body)
+            result.status = 200
+            result.geturl = lambda: location
+            result.headers = Message()
+            result.headers["Content-Type"] = mime
+            result.headers["Content-Length"] = str(len(raw) if length is None else length)
+            return result
+
+        with patch.object(publisher.urllib.request, "urlopen", return_value=response()) as get:
+            receipt = publisher.verify_public_assets([row])
+            get.assert_called_once_with(url, timeout=30)
+            self.assertEqual(receipt["assets"][0]["http_status"], 200)
+        for changes in [{"mime": "text/html"}, {"length": 0},
+                        {"location": url + "?redirected=1"}, {"body": b"wrong"}]:
+            with self.subTest(changes=list(changes)), patch.object(
+                    publisher.urllib.request, "urlopen", return_value=response(**changes)):
+                with self.assertRaises(ValueError):
+                    publisher.verify_public_assets([row])
+
+    def test_ambiguous_topology_never_uploads(self):
+        package, _ = bundle()
+        with patch.object(publisher, "pack_manifest", return_value=package), patch.object(
+                publisher, "run_fly", return_value="[]") as fly:
+            with self.assertRaisesRegex(ValueError, "exactly one started"):
+                publisher.publish(Path("unused.json"), self.root / "receipt.json")
+            fly.assert_called_once_with("machine", "list", "-a", "projectaegis", "--json", capture=True)
 
 
 if __name__ == "__main__":

@@ -20,9 +20,18 @@ The manifest has `schema_version: 1` and an `assets` array. Every asset carries
 
 Run `python backend/scripts/publish_source_assets.py --manifest PATH --validate-only`
 for local byte checks. The remote installation also decodes every image before
-writing any asset. Select **Publish reviewed source images** in Actions and
-provide the repository-relative manifest path. The workflow accepts no URL or
-shell-command input. Its manually dispatched operation is not an auto-deploy.
+writing any asset. To publish without merging to the auto-deploying `main`,
+commit the reviewed bundle to `ops/reviewed-source-assets/current/` on the exact
+branch `codex/manual-source-asset-publisher`. Only changes in that folder on
+that branch trigger publication; its manifest is `current/manifest.json`.
+Other branches, PR events and code-only changes cannot trigger publication.
+Once registered, the workflow also supports manual dispatch with a
+repository-relative manifest path, restricted to the same branch. It accepts
+no URL or shell-command input. Do not merge this PR as a publication step.
+
+GitHub documents branch-local push workflows and the default-branch constraint
+on first manual dispatch at
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows.
 
 ## Storage and verification
 
