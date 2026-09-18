@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -23,6 +24,27 @@ import zipfile
 BASE = "https://projectaegis.fly.dev"
 NAME = re.compile(r"[0-9a-f]{64}\.jpg")
 RESERVE = 1024 ** 3
+
+
+def jpeg_dimensions(data):
+    """Read JPEG frame dimensions without adding a runtime dependency."""
+    assert data[:2] == b'\xff\xd8', 'Not JPEG'
+    pos = 2
+    while pos < len(data):
+        assert data[pos] == 255, 'Malformed JPEG marker'
+        while data[pos] == 255:
+            pos += 1
+        marker = data[pos]
+        pos += 1
+        if marker in (0xD8, 0xD9, 0x01) or 0xD0 <= marker <= 0xD7:
+            continue
+        size = struct.unpack('>H', data[pos:pos+2])[0]
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            height, width = struct.unpack('>HH', data[pos+3:pos+7])
+            return width, height
+        assert size >= 2 and marker != 0xDA, 'Missing frame dimensions'
+        pos += size
+    raise ValueError('Missing frame dimensions')
 
 
 def validated(z):
@@ -40,6 +62,7 @@ def validated(z):
         assert len(data) == a["bytes"]
         assert hashlib.sha256(data).hexdigest() == a["sha256"] == name[:-4]
         assert data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9")
+        assert jpeg_dimensions(data) == (a['width'], a['height'])
         assert a["url"] == f"{BASE}/source-assets/0/{name}"
         result.append((a, data))
     return result
@@ -105,7 +128,10 @@ def verify(directory):
         status, media, data = get(a["url"])
         assert status == 200 and media == "image/jpeg"
         assert len(data) == a["bytes"] and hashlib.sha256(data).hexdigest() == a["sha256"]
-        report.append({"url": a["url"], "status": status, "sha256": a["sha256"], "bytes": len(data)})
+        width, height = jpeg_dimensions(data)
+        assert (width, height) == (a['width'], a['height'])
+        report.append({"url": a["url"], "status": status, "content_type": media,
+                       "sha256": a["sha256"], "bytes": len(data), 'width': width, 'height': height})
     Path("image-url-verification.json").write_text(json.dumps(report, indent=2))
     print(f"Verified {len(report)} public image URLs anonymously.")
 

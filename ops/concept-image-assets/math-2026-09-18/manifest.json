@@ -1,0 +1,531 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "asset_id": "g9-f81",
+      "filename": "d403cb2359c1aa2cb4188ad2c7496b51f8d5f282a9a6831b199e28b3d5e6130d.jpg",
+      "sha256": "d403cb2359c1aa2cb4188ad2c7496b51f8d5f282a9a6831b199e28b3d5e6130d",
+      "bytes": 103708,
+      "width": 984,
+      "height": 459,
+      "alt": "Triangular dot arrays for the first five triangular numbers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d403cb2359c1aa2cb4188ad2c7496b51f8d5f282a9a6831b199e28b3d5e6130d.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 2,
+      "printed_page": 175,
+      "crop_pdf_points": [
+        80,
+        248,
+        408,
+        401
+      ],
+      "owning_concept": "g9-visual"
+    },
+    {
+      "asset_id": "g9-f82",
+      "filename": "2d011fe4f0d6d18944b440565e55000d281a912910a69c1cbd76795374203579.jpg",
+      "sha256": "2d011fe4f0d6d18944b440565e55000d281a912910a69c1cbd76795374203579",
+      "bytes": 88637,
+      "width": 405,
+      "height": 468,
+      "alt": "Square dot array with differently coloured odd-number layers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2d011fe4f0d6d18944b440565e55000d281a912910a69c1cbd76795374203579.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 2,
+      "printed_page": 175,
+      "crop_pdf_points": [
+        289,
+        482,
+        424,
+        638
+      ],
+      "owning_concept": "g9-visual"
+    },
+    {
+      "asset_id": "g9-f83",
+      "filename": "2b468e13458baff4f1084051389f1bc8187f1728971604bea82b05f5c059f2a4.jpg",
+      "sha256": "2b468e13458baff4f1084051389f1bc8187f1728971604bea82b05f5c059f2a4",
+      "bytes": 93563,
+      "width": 1062,
+      "height": 504,
+      "alt": "Stages one to four of the growing cross-shaped square pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2b468e13458baff4f1084051389f1bc8187f1728971604bea82b05f5c059f2a4.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 7,
+      "printed_page": 180,
+      "crop_pdf_points": [
+        67,
+        258,
+        421,
+        426
+      ],
+      "owning_concept": "g9-aprule"
+    },
+    {
+      "asset_id": "g9-ap-table",
+      "filename": "4bc8a2565f64253d48be0cb1faf2be5ef444f243edb255d931f82ebff403c894.jpg",
+      "sha256": "4bc8a2565f64253d48be0cb1faf2be5ef444f243edb255d931f82ebff403c894",
+      "bytes": 33762,
+      "width": 1134,
+      "height": 144,
+      "alt": "Stage numbers and square counts for the additive square pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4bc8a2565f64253d48be0cb1faf2be5ef444f243edb255d931f82ebff403c894.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 8,
+      "printed_page": 181,
+      "crop_pdf_points": [
+        56,
+        557,
+        434,
+        605
+      ],
+      "owning_concept": "g9-apgraph"
+    },
+    {
+      "asset_id": "g9-f84",
+      "filename": "8f19a824ffcf41994d326a67780f3cf2d8a1a4005640137508a41d5f3d843933.jpg",
+      "sha256": "8f19a824ffcf41994d326a67780f3cf2d8a1a4005640137508a41d5f3d843933",
+      "bytes": 368909,
+      "width": 906,
+      "height": 912,
+      "alt": "Coordinate plot of stage number against square count for the additive pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8f19a824ffcf41994d326a67780f3cf2d8a1a4005640137508a41d5f3d843933.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 9,
+      "printed_page": 182,
+      "crop_pdf_points": [
+        100,
+        143,
+        402,
+        447
+      ],
+      "owning_concept": "g9-apgraph"
+    },
+    {
+      "asset_id": "g9-f85",
+      "filename": "635a8ce8e66d33d8d860b601d817f5c393184df6462aa7fb7b97bc6a21e4f998.jpg",
+      "sha256": "635a8ce8e66d33d8d860b601d817f5c393184df6462aa7fb7b97bc6a21e4f998",
+      "bytes": 73088,
+      "width": 450,
+      "height": 516,
+      "alt": "Two triangular dot arrays forming a rectangle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/635a8ce8e66d33d8d860b601d817f5c393184df6462aa7fb7b97bc6a21e4f998.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 11,
+      "printed_page": 184,
+      "crop_pdf_points": [
+        284,
+        272,
+        434,
+        444
+      ],
+      "owning_concept": "g9-sum"
+    },
+    {
+      "asset_id": "g9-f86",
+      "filename": "a3a65f793137e627bb7153c6aec31f2667243168ec067bd639794da34b9a0150.jpg",
+      "sha256": "a3a65f793137e627bb7153c6aec31f2667243168ec067bd639794da34b9a0150",
+      "bytes": 82620,
+      "width": 723,
+      "height": 522,
+      "alt": "Stages one to four of the doubling pattern of green squares",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3a65f793137e627bb7153c6aec31f2667243168ec067bd639794da34b9a0150.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 13,
+      "printed_page": 186,
+      "crop_pdf_points": [
+        123,
+        274,
+        364,
+        448
+      ],
+      "owning_concept": "g9-gprule"
+    },
+    {
+      "asset_id": "g9-f87",
+      "filename": "d270af6350d7c5fa8df64a62a18fe3606ef4dfeab69fe8e4c0e278ddb37fd0da.jpg",
+      "sha256": "d270af6350d7c5fa8df64a62a18fe3606ef4dfeab69fe8e4c0e278ddb37fd0da",
+      "bytes": 46941,
+      "width": 807,
+      "height": 288,
+      "alt": "Stages zero to three of the Sierpiński triangle with stage labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d270af6350d7c5fa8df64a62a18fe3606ef4dfeab69fe8e4c0e278ddb37fd0da.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 15,
+      "printed_page": 188,
+      "crop_pdf_points": [
+        110,
+        451,
+        379,
+        547
+      ],
+      "owning_concept": "g9-fractalcount"
+    },
+    {
+      "asset_id": "g9-fractal-table",
+      "filename": "3d60497351f203ff7876bb0a646c0ecc2a53408062fb7abdea64122fde76afbc.jpg",
+      "sha256": "3d60497351f203ff7876bb0a646c0ecc2a53408062fb7abdea64122fde76afbc",
+      "bytes": 88229,
+      "width": 1134,
+      "height": 402,
+      "alt": "Table of stage number, black-triangle count and shaded area",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3d60497351f203ff7876bb0a646c0ecc2a53408062fb7abdea64122fde76afbc.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 17,
+      "printed_page": 190,
+      "crop_pdf_points": [
+        56,
+        124,
+        434,
+        258
+      ],
+      "owning_concept": "g9-fractalcount"
+    },
+    {
+      "asset_id": "g9-f88",
+      "filename": "c657536720cd0511be7c72f67f393c6202a36d11251bf6038d77f53282881c2a.jpg",
+      "sha256": "c657536720cd0511be7c72f67f393c6202a36d11251bf6038d77f53282881c2a",
+      "bytes": 56816,
+      "width": 438,
+      "height": 471,
+      "alt": "Natural forms illustrating repeated branching and shapes at different scales",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c657536720cd0511be7c72f67f393c6202a36d11251bf6038d77f53282881c2a.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 17,
+      "printed_page": 190,
+      "crop_pdf_points": [
+        288,
+        376,
+        434,
+        533
+      ],
+      "owning_concept": "g9-fractalbuild"
+    },
+    {
+      "asset_id": "g9-gp-table",
+      "filename": "bfea5756bcff39d4d1daf3c5c38d2bf5cd747d8355c89e3af4db303ce14da7f1.jpg",
+      "sha256": "bfea5756bcff39d4d1daf3c5c38d2bf5cd747d8355c89e3af4db303ce14da7f1",
+      "bytes": 35948,
+      "width": 1134,
+      "height": 156,
+      "alt": "Stage numbers and square counts for the doubling square pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bfea5756bcff39d4d1daf3c5c38d2bf5cd747d8355c89e3af4db303ce14da7f1.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 18,
+      "printed_page": 191,
+      "crop_pdf_points": [
+        56,
+        61,
+        434,
+        113
+      ],
+      "owning_concept": "g9-gpgraph"
+    },
+    {
+      "asset_id": "g9-f89",
+      "filename": "75a4ed61be5e791c7b3a0b1f0b21fe45cab3e9ad72bd6f902655e52812117a87.jpg",
+      "sha256": "75a4ed61be5e791c7b3a0b1f0b21fe45cab3e9ad72bd6f902655e52812117a87",
+      "bytes": 505769,
+      "width": 861,
+      "height": 969,
+      "alt": "Coordinate plot of square counts in the doubling pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/75a4ed61be5e791c7b3a0b1f0b21fe45cab3e9ad72bd6f902655e52812117a87.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 18,
+      "printed_page": 191,
+      "crop_pdf_points": [
+        108,
+        299,
+        395,
+        622
+      ],
+      "owning_concept": "g9-gpgraph"
+    },
+    {
+      "asset_id": "g9-f810",
+      "filename": "61a0004dd66eb08bed500a032ac9b0f4b28a2d84617df4101dcab103eb0497d8.jpg",
+      "sha256": "61a0004dd66eb08bed500a032ac9b0f4b28a2d84617df4101dcab103eb0497d8",
+      "bytes": 555783,
+      "width": 1146,
+      "height": 789,
+      "alt": "Paired graphs of black-triangle counts and shaded areas by stage",
+      "url": "https://projectaegis.fly.dev/source-assets/0/61a0004dd66eb08bed500a032ac9b0f4b28a2d84617df4101dcab103eb0497d8.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 19,
+      "printed_page": 192,
+      "crop_pdf_points": [
+        54,
+        70,
+        436,
+        333
+      ],
+      "owning_concept": "g9-gpgraph"
+    },
+    {
+      "asset_id": "g9-f811",
+      "filename": "6a7af844acecb9ac3ebf777552e85458adb732e29dae985c7f15a69febb9470e.jpg",
+      "sha256": "6a7af844acecb9ac3ebf777552e85458adb732e29dae985c7f15a69febb9470e",
+      "bytes": 322089,
+      "width": 969,
+      "height": 603,
+      "alt": "Printed graph of bouncing-ball heights by bounce number",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6a7af844acecb9ac3ebf777552e85458adb732e29dae985c7f15a69febb9470e.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 20,
+      "printed_page": 193,
+      "crop_pdf_points": [
+        108,
+        73,
+        431,
+        274
+      ],
+      "owning_concept": "g9-growth"
+    },
+    {
+      "asset_id": "g9-f812",
+      "filename": "8bca89b7b60c10d132df5c2f210d39d6c30955a68563f6a8bf07f293962ee811.jpg",
+      "sha256": "8bca89b7b60c10d132df5c2f210d39d6c30955a68563f6a8bf07f293962ee811",
+      "bytes": 73802,
+      "width": 828,
+      "height": 282,
+      "alt": "Stages zero to three of the Sierpiński square carpet",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8bca89b7b60c10d132df5c2f210d39d6c30955a68563f6a8bf07f293962ee811.jpg",
+      "source_file": "NCERT_Grade09_Mathematics_Predicting What Comes Next- Exploring Sequences.pdf",
+      "source_sha256": "71fa97928a2aeff91b97f5ac3bc9b8efea2a31b186dffcc9a62029932b355d92",
+      "pdf_page": 21,
+      "printed_page": 194,
+      "crop_pdf_points": [
+        106,
+        207,
+        382,
+        301
+      ],
+      "owning_concept": "g9-fractalcount"
+    },
+    {
+      "asset_id": "g10-f51",
+      "filename": "5b2972b47e9de1933b204366f3062002270da5f94679c5460a96a956929baaeb.jpg",
+      "sha256": "5b2972b47e9de1933b204366f3062002270da5f94679c5460a96a956929baaeb",
+      "bytes": 24047,
+      "width": 276,
+      "height": 525,
+      "alt": "Ladder with rungs decreasing in length from bottom to top",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5b2972b47e9de1933b204366f3062002270da5f94679c5460a96a956929baaeb.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 1,
+      "printed_page": 49,
+      "crop_pdf_points": [
+        298,
+        352,
+        390,
+        527
+      ],
+      "owning_concept": "g10-recognise"
+    },
+    {
+      "asset_id": "g10-f52",
+      "filename": "bbb6dd2a88eb5deaf652d9f7df25252a8a99b2b6c55d76f822e7567cbee3ba82.jpg",
+      "sha256": "bbb6dd2a88eb5deaf652d9f7df25252a8a99b2b6c55d76f822e7567cbee3ba82",
+      "bytes": 25130,
+      "width": 918,
+      "height": 351,
+      "alt": "Unit-square arrays with side lengths one, two and three units",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bbb6dd2a88eb5deaf652d9f7df25252a8a99b2b6c55d76f822e7567cbee3ba82.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 2,
+      "printed_page": 50,
+      "crop_pdf_points": [
+        85,
+        151,
+        391,
+        268
+      ],
+      "owning_concept": "g10-recognise"
+    },
+    {
+      "asset_id": "g10-f53",
+      "filename": "b7b752e676c4e9e23923df4c2e5816e2bae510adeca3a6e00bab73e7075afc4a.jpg",
+      "sha256": "b7b752e676c4e9e23923df4c2e5816e2bae510adeca3a6e00bab73e7075afc4a",
+      "bytes": 95512,
+      "width": 939,
+      "height": 528,
+      "alt": "Rabbit-pair diagram for successive months",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b7b752e676c4e9e23923df4c2e5816e2bae510adeca3a6e00bab73e7075afc4a.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 2,
+      "printed_page": 50,
+      "crop_pdf_points": [
+        94,
+        436,
+        407,
+        612
+      ],
+      "owning_concept": "g10-recognise"
+    },
+    {
+      "asset_id": "g10-table521",
+      "filename": "b5bb68f614e4764e7cbf52c135c3ae10ccf407594327853800df116d508b2f34.jpg",
+      "sha256": "b5bb68f614e4764e7cbf52c135c3ae10ccf407594327853800df116d508b2f34",
+      "bytes": 50136,
+      "width": 966,
+      "height": 468,
+      "alt": "Incomplete table of first term, common difference, position and term value",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b5bb68f614e4764e7cbf52c135c3ae10ccf407594327853800df116d508b2f34.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 13,
+      "printed_page": 61,
+      "crop_pdf_points": [
+        75,
+        457,
+        397,
+        613
+      ],
+      "owning_concept": "g10-term"
+    },
+    {
+      "asset_id": "g10-boxes523",
+      "filename": "2acf81bc12b6cbf16f4fcb7c8ded4968de0ea04b43b31027514d74825dd16d6c.jpg",
+      "sha256": "2acf81bc12b6cbf16f4fcb7c8ded4968de0ea04b43b31027514d74825dd16d6c",
+      "bytes": 26695,
+      "width": 594,
+      "height": 423,
+      "alt": "Five arithmetic progressions with boxed missing terms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2acf81bc12b6cbf16f4fcb7c8ded4968de0ea04b43b31027514d74825dd16d6c.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 14,
+      "printed_page": 62,
+      "crop_pdf_points": [
+        78,
+        198,
+        276,
+        339
+      ],
+      "owning_concept": "g10-recover"
+    },
+    {
+      "asset_id": "g10-f54",
+      "filename": "2bb597b1f61002b775ce4dc490b24b86cb25f5f0aa73dfbd3c531eda1de051c4.jpg",
+      "sha256": "2bb597b1f61002b775ce4dc490b24b86cb25f5f0aa73dfbd3c531eda1de051c4",
+      "bytes": 25316,
+      "width": 717,
+      "height": 441,
+      "alt": "Spiral of successive semicircles with alternating centres A and B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2bb597b1f61002b775ce4dc490b24b86cb25f5f0aa73dfbd3c531eda1de051c4.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 22,
+      "printed_page": 70,
+      "crop_pdf_points": [
+        111,
+        96,
+        350,
+        243
+      ],
+      "owning_concept": "g10-geometry"
+    },
+    {
+      "asset_id": "g10-f55",
+      "filename": "4734ccf5b886aa29e0bc2242e35c763130fc46182da72f3f682ccd17b998c55f.jpg",
+      "sha256": "4734ccf5b886aa29e0bc2242e35c763130fc46182da72f3f682ccd17b998c55f",
+      "bytes": 139076,
+      "width": 759,
+      "height": 258,
+      "alt": "Timber logs stacked in successively shorter rows",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4734ccf5b886aa29e0bc2242e35c763130fc46182da72f3f682ccd17b998c55f.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 22,
+      "printed_page": 70,
+      "crop_pdf_points": [
+        105,
+        316,
+        358,
+        402
+      ],
+      "owning_concept": "g10-sumcontext"
+    },
+    {
+      "asset_id": "g10-f56",
+      "filename": "91067ab435b49f2e128e88965e4320eaa169c049823ae724251d877e0f47e91f.jpg",
+      "sha256": "91067ab435b49f2e128e88965e4320eaa169c049823ae724251d877e0f47e91f",
+      "bytes": 44129,
+      "width": 1083,
+      "height": 261,
+      "alt": "Bucket and potatoes along a straight line with distance labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/91067ab435b49f2e128e88965e4320eaa169c049823ae724251d877e0f47e91f.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 22,
+      "printed_page": 70,
+      "crop_pdf_points": [
+        60,
+        443,
+        421,
+        530
+      ],
+      "owning_concept": "g10-geometry"
+    },
+    {
+      "asset_id": "g10-f57",
+      "filename": "8a59302c13608c1e1277ed088c299e37742512c910dc9d6d4e5755e9ae9f7a4a.jpg",
+      "sha256": "8a59302c13608c1e1277ed088c299e37742512c910dc9d6d4e5755e9ae9f7a4a",
+      "bytes": 37032,
+      "width": 357,
+      "height": 603,
+      "alt": "Ladder with rung spacing and top and bottom rung lengths labelled",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8a59302c13608c1e1277ed088c299e37742512c910dc9d6d4e5755e9ae9f7a4a.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 23,
+      "printed_page": 71,
+      "crop_pdf_points": [
+        274,
+        127,
+        393,
+        328
+      ],
+      "owning_concept": "g10-geometry"
+    },
+    {
+      "asset_id": "g10-f58",
+      "filename": "c2f5cb2ea24f1d9eee7f4e898a34217a5e6e1448dfc47756ce591f087d34dc25.jpg",
+      "sha256": "c2f5cb2ea24f1d9eee7f4e898a34217a5e6e1448dfc47756ce591f087d34dc25",
+      "bytes": 49913,
+      "width": 591,
+      "height": 327,
+      "alt": "Stepped concrete terrace with rise, tread and length labelled",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c2f5cb2ea24f1d9eee7f4e898a34217a5e6e1448dfc47756ce591f087d34dc25.jpg",
+      "source_file": "NCERT_Grade10_Mathematics_Arithmetic Progressions.pdf",
+      "source_sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pdf_page": 23,
+      "printed_page": 71,
+      "crop_pdf_points": [
+        129,
+        488,
+        326,
+        597
+      ],
+      "owning_concept": "g10-geometry"
+    }
+  ]
+}
