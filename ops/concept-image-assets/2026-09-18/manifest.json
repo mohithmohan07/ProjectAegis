@@ -1,0 +1,475 @@
+{
+  "schema": 1,
+  "offline_authoring": true,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "cd229dd1cadf3e44b7bb7c78cbd5f8049dc805ec284789fb409c64649a97d3ed.jpg",
+      "sha256": "cd229dd1cadf3e44b7bb7c78cbd5f8049dc805ec284789fb409c64649a97d3ed",
+      "bytes": 232989,
+      "width": 1403,
+      "height": 924,
+      "alt": "Veena illustration accompanying the music invitation task",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cd229dd1cadf3e44b7bb7c78cbd5f8049dc805ec284789fb409c64649a97d3ed.jpg"
+    },
+    {
+      "filename": "bf94e55091bd4832336e922cf73ca4893ef80c4c6882ebae44048fc12b03d780.jpg",
+      "sha256": "bf94e55091bd4832336e922cf73ca4893ef80c4c6882ebae44048fc12b03d780",
+      "bytes": 90684,
+      "width": 817,
+      "height": 792,
+      "alt": "A person facing a steep series of steps",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf94e55091bd4832336e922cf73ca4893ef80c4c6882ebae44048fc12b03d780.jpg"
+    },
+    {
+      "filename": "dce113a603831adbe172b86ed3533af6b5d73e1f357fa7438c63289ca3526e48.jpg",
+      "sha256": "dce113a603831adbe172b86ed3533af6b5d73e1f357fa7438c63289ca3526e48",
+      "bytes": 115816,
+      "width": 1352,
+      "height": 396,
+      "alt": "Four historical depictions of postal carriers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dce113a603831adbe172b86ed3533af6b5d73e1f357fa7438c63289ca3526e48.jpg"
+    },
+    {
+      "filename": "53e0ab7ccfafd4dabf5bc685c825eb5cd695a620e6388cc45595109a88ed5bab.jpg",
+      "sha256": "53e0ab7ccfafd4dabf5bc685c825eb5cd695a620e6388cc45595109a88ed5bab",
+      "bytes": 318680,
+      "width": 2346,
+      "height": 1205,
+      "alt": "Postal carrier walking across the desert",
+      "url": "https://projectaegis.fly.dev/source-assets/0/53e0ab7ccfafd4dabf5bc685c825eb5cd695a620e6388cc45595109a88ed5bab.jpg"
+    },
+    {
+      "filename": "0e6a112fbbfe54020386a365429216914eb2e73cd6938dadb99dc49969f6fd9c.jpg",
+      "sha256": "0e6a112fbbfe54020386a365429216914eb2e73cd6938dadb99dc49969f6fd9c",
+      "bytes": 350346,
+      "width": 2359,
+      "height": 1386,
+      "alt": "Postal carrier approaching people in a desert settlement",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0e6a112fbbfe54020386a365429216914eb2e73cd6938dadb99dc49969f6fd9c.jpg"
+    },
+    {
+      "filename": "dce8a1590aa5e00a9f05d4dc95a3150cf7f9e32b10ca7e0b8fdcb9d99e493711.jpg",
+      "sha256": "dce8a1590aa5e00a9f05d4dc95a3150cf7f9e32b10ca7e0b8fdcb9d99e493711",
+      "bytes": 285655,
+      "width": 1403,
+      "height": 1056,
+      "alt": "Villagers listening to a letter read by the postal carrier",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dce8a1590aa5e00a9f05d4dc95a3150cf7f9e32b10ca7e0b8fdcb9d99e493711.jpg"
+    },
+    {
+      "filename": "d8f7f835fc53cbfdad570ee5ad368cb446bb0b4a60563b31b57f50e742f4033b.jpg",
+      "sha256": "d8f7f835fc53cbfdad570ee5ad368cb446bb0b4a60563b31b57f50e742f4033b",
+      "bytes": 92431,
+      "width": 587,
+      "height": 1040,
+      "alt": "Camel caravan in a desert landscape",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8f7f835fc53cbfdad570ee5ad368cb446bb0b4a60563b31b57f50e742f4033b.jpg"
+    },
+    {
+      "filename": "8433aa692360ebedf242091d31e86e4a91645b548fe3c92d483f6df0a3facd52.jpg",
+      "sha256": "8433aa692360ebedf242091d31e86e4a91645b548fe3c92d483f6df0a3facd52",
+      "bytes": 103427,
+      "width": 1709,
+      "height": 585,
+      "alt": "Postcard, inland letter, envelope and money-order form",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8433aa692360ebedf242091d31e86e4a91645b548fe3c92d483f6df0a3facd52.jpg"
+    },
+    {
+      "filename": "38ef1bb2ff874dfe2df3fa8fdd55669b23962aaa1045bc4179027217e8742703.jpg",
+      "sha256": "38ef1bb2ff874dfe2df3fa8fdd55669b23962aaa1045bc4179027217e8742703",
+      "bytes": 280186,
+      "width": 1620,
+      "height": 660,
+      "alt": "Source example of a condolence postcard, front and back",
+      "url": "https://projectaegis.fly.dev/source-assets/0/38ef1bb2ff874dfe2df3fa8fdd55669b23962aaa1045bc4179027217e8742703.jpg"
+    },
+    {
+      "filename": "b74b876fb0c40e7d6eedf9dcffee08f10f69147f92f433d60090a4b85bb19f74.jpg",
+      "sha256": "b74b876fb0c40e7d6eedf9dcffee08f10f69147f92f433d60090a4b85bb19f74",
+      "bytes": 356346,
+      "width": 1352,
+      "height": 891,
+      "alt": "Photograph of a postal heritage display",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b74b876fb0c40e7d6eedf9dcffee08f10f69147f92f433d60090a4b85bb19f74.jpg"
+    },
+    {
+      "filename": "8eba864361becfef19494a9afb01340333ec9379d4564760a43a4d3638c6db08.jpg",
+      "sha256": "8eba864361becfef19494a9afb01340333ec9379d4564760a43a4d3638c6db08",
+      "bytes": 149273,
+      "width": 1569,
+      "height": 297,
+      "alt": "Five postage stamps used in the observation activity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8eba864361becfef19494a9afb01340333ec9379d4564760a43a4d3638c6db08.jpg"
+    },
+    {
+      "filename": "e2dad2a1e79428579850642ded00bf28acd93778130d69b6549f0527c6c1e4c8.jpg",
+      "sha256": "e2dad2a1e79428579850642ded00bf28acd93778130d69b6549f0527c6c1e4c8",
+      "bytes": 131346,
+      "width": 1263,
+      "height": 792,
+      "alt": "Blank Indian telegram form",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e2dad2a1e79428579850642ded00bf28acd93778130d69b6549f0527c6c1e4c8.jpg"
+    },
+    {
+      "filename": "83d9f5644917b5b94b8633816a2e369318054469c8d629e1b69901560bb3c7c7.jpg",
+      "sha256": "83d9f5644917b5b94b8633816a2e369318054469c8d629e1b69901560bb3c7c7",
+      "bytes": 74768,
+      "width": 1301,
+      "height": 858,
+      "alt": "Blank chart asking why following a dream is important",
+      "url": "https://projectaegis.fly.dev/source-assets/0/83d9f5644917b5b94b8633816a2e369318054469c8d629e1b69901560bb3c7c7.jpg"
+    },
+    {
+      "filename": "75132e01b309b541a5ad04f34efaddeb7983d18bd8314a10f5f576aabd34c5b5.jpg",
+      "sha256": "75132e01b309b541a5ad04f34efaddeb7983d18bd8314a10f5f576aabd34c5b5",
+      "bytes": 106837,
+      "width": 766,
+      "height": 627,
+      "alt": "Illustration of a mother writing a letter",
+      "url": "https://projectaegis.fly.dev/source-assets/0/75132e01b309b541a5ad04f34efaddeb7983d18bd8314a10f5f576aabd34c5b5.jpg"
+    },
+    {
+      "filename": "4dc52f32ac472a9ca69781616d4ae54dc1915fff4e0640039f25222872271137.jpg",
+      "sha256": "4dc52f32ac472a9ca69781616d4ae54dc1915fff4e0640039f25222872271137",
+      "bytes": 98777,
+      "width": 843,
+      "height": 528,
+      "alt": "Illustration of a young woman reading a letter",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4dc52f32ac472a9ca69781616d4ae54dc1915fff4e0640039f25222872271137.jpg"
+    },
+    {
+      "filename": "177604a7cfe444609cc4cec10c9050b43ff9e078dba5455c2305f14c00edd4bd.jpg",
+      "sha256": "177604a7cfe444609cc4cec10c9050b43ff9e078dba5455c2305f14c00edd4bd",
+      "bytes": 183403,
+      "width": 723,
+      "height": 1122,
+      "alt": "Illustration of a young woman reflecting beside a window",
+      "url": "https://projectaegis.fly.dev/source-assets/0/177604a7cfe444609cc4cec10c9050b43ff9e078dba5455c2305f14c00edd4bd.jpg"
+    },
+    {
+      "filename": "544bba45b30fb4179e7090445f698f649fae4caf9d3b74e75e137cc64ddb56e2.jpg",
+      "sha256": "544bba45b30fb4179e7090445f698f649fae4caf9d3b74e75e137cc64ddb56e2",
+      "bytes": 105539,
+      "width": 689,
+      "height": 660,
+      "alt": "Students discussing their plans together",
+      "url": "https://projectaegis.fly.dev/source-assets/0/544bba45b30fb4179e7090445f698f649fae4caf9d3b74e75e137cc64ddb56e2.jpg"
+    },
+    {
+      "filename": "56d79255cc43f918641f22854a6c5d6d4889ad6586cbba44ec07f0aa20bf48b0.jpg",
+      "sha256": "56d79255cc43f918641f22854a6c5d6d4889ad6586cbba44ec07f0aa20bf48b0",
+      "bytes": 72733,
+      "width": 1288,
+      "height": 627,
+      "alt": "Email template with From, To, Cc, Bcc, Subject and Message fields",
+      "url": "https://projectaegis.fly.dev/source-assets/0/56d79255cc43f918641f22854a6c5d6d4889ad6586cbba44ec07f0aa20bf48b0.jpg"
+    },
+    {
+      "filename": "b3e333ce27bdc26bcf7fb8b0f05d46e4b62ee8f1e76c07171adaf921052fb06a.jpg",
+      "sha256": "b3e333ce27bdc26bcf7fb8b0f05d46e4b62ee8f1e76c07171adaf921052fb06a",
+      "bytes": 224472,
+      "width": 1429,
+      "height": 1090,
+      "alt": "Vision-board template showing dreams, skills, goals and places",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b3e333ce27bdc26bcf7fb8b0f05d46e4b62ee8f1e76c07171adaf921052fb06a.jpg"
+    },
+    {
+      "filename": "b443474b0fa328b73ae0170747fd1de5f228e2a0a1079dd81536cf3a4d04d6c4.jpg",
+      "sha256": "b443474b0fa328b73ae0170747fd1de5f228e2a0a1079dd81536cf3a4d04d6c4",
+      "bytes": 162986,
+      "width": 1046,
+      "height": 710,
+      "alt": "Illustration of a mother telling a story to her child",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b443474b0fa328b73ae0170747fd1de5f228e2a0a1079dd81536cf3a4d04d6c4.jpg"
+    },
+    {
+      "filename": "d7fed1b423ace8d7fcd777c5d86aa8569e36944f0547951046ba7fd9a17432aa.jpg",
+      "sha256": "d7fed1b423ace8d7fcd777c5d86aa8569e36944f0547951046ba7fd9a17432aa",
+      "bytes": 204485,
+      "width": 1340,
+      "height": 974,
+      "alt": "Eight stringed-instrument pictures with initial-letter prompts",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d7fed1b423ace8d7fcd777c5d86aa8569e36944f0547951046ba7fd9a17432aa.jpg"
+    },
+    {
+      "filename": "a24f6ba47a0ac9ace4f7195fca6b57445bdd09648bb9ae47da0e82e29c5e90e3.jpg",
+      "sha256": "a24f6ba47a0ac9ace4f7195fca6b57445bdd09648bb9ae47da0e82e29c5e90e3",
+      "bytes": 295906,
+      "width": 1531,
+      "height": 1024,
+      "alt": "Four young musicians rehearsing as an ensemble",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a24f6ba47a0ac9ace4f7195fca6b57445bdd09648bb9ae47da0e82e29c5e90e3.jpg"
+    },
+    {
+      "filename": "3ace4cb582ed724ea1c6e2bde48297c08ddb3c9a9c588bd7d399327a2aa598bf.jpg",
+      "sha256": "3ace4cb582ed724ea1c6e2bde48297c08ddb3c9a9c588bd7d399327a2aa598bf",
+      "bytes": 378590,
+      "width": 1607,
+      "height": 1057,
+      "alt": "The ensemble talking after its rehearsal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3ace4cb582ed724ea1c6e2bde48297c08ddb3c9a9c588bd7d399327a2aa598bf.jpg"
+    },
+    {
+      "filename": "11bcd5d35d095915fdce9803b14e531e01a9606a28117112fbda1c769044f306.jpg",
+      "sha256": "11bcd5d35d095915fdce9803b14e531e01a9606a28117112fbda1c769044f306",
+      "bytes": 330583,
+      "width": 1428,
+      "height": 1047,
+      "alt": "Shruti's parents at the dinner table",
+      "url": "https://projectaegis.fly.dev/source-assets/0/11bcd5d35d095915fdce9803b14e531e01a9606a28117112fbda1c769044f306.jpg"
+    },
+    {
+      "filename": "b72a4c3c89f68a0aa880cbe4debff0df754fd6dadf2a6908da3e27456f2c8fa6.jpg",
+      "sha256": "b72a4c3c89f68a0aa880cbe4debff0df754fd6dadf2a6908da3e27456f2c8fa6",
+      "bytes": 267862,
+      "width": 1454,
+      "height": 908,
+      "alt": "Shruti's parents watching the ensemble perform",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b72a4c3c89f68a0aa880cbe4debff0df754fd6dadf2a6908da3e27456f2c8fa6.jpg"
+    },
+    {
+      "filename": "e29e636793c28b3fcac4e03ef925d1e3f5ecd09f18202be63333915a27baa688.jpg",
+      "sha256": "e29e636793c28b3fcac4e03ef925d1e3f5ecd09f18202be63333915a27baa688",
+      "bytes": 107848,
+      "width": 1391,
+      "height": 495,
+      "alt": "Four numbered facial expressions for matching non-lexical fillers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e29e636793c28b3fcac4e03ef925d1e3f5ecd09f18202be63333915a27baa688.jpg"
+    },
+    {
+      "filename": "13787bf0b1bd7547a15e977e969527bb8db47e39a9b4c797e34f1b601fc22b44.jpg",
+      "sha256": "13787bf0b1bd7547a15e977e969527bb8db47e39a9b4c797e34f1b601fc22b44",
+      "bytes": 138146,
+      "width": 1391,
+      "height": 446,
+      "alt": "Four numbered musical-instrument pictures for the listening task",
+      "url": "https://projectaegis.fly.dev/source-assets/0/13787bf0b1bd7547a15e977e969527bb8db47e39a9b4c797e34f1b601fc22b44.jpg"
+    },
+    {
+      "filename": "f90ce911d1aa0d0bfa83065b19e8705dd241b7376dcc9f2a98318b881948f005.jpg",
+      "sha256": "f90ce911d1aa0d0bfa83065b19e8705dd241b7376dcc9f2a98318b881948f005",
+      "bytes": 205042,
+      "width": 1148,
+      "height": 875,
+      "alt": "Children making a musical instrument from reused materials",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f90ce911d1aa0d0bfa83065b19e8705dd241b7376dcc9f2a98318b881948f005.jpg"
+    },
+    {
+      "filename": "9ed45883270f31abb84b32e651b02086461d986aafa1e9e3e67942e8e431f14d.jpg",
+      "sha256": "9ed45883270f31abb84b32e651b02086461d986aafa1e9e3e67942e8e431f14d",
+      "bytes": 14138,
+      "width": 166,
+      "height": 413,
+      "alt": "A small indigenous stringed-instrument illustration",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9ed45883270f31abb84b32e651b02086461d986aafa1e9e3e67942e8e431f14d.jpg"
+    },
+    {
+      "filename": "49d9645ce6c50a0ce22cc6abf07a14921531401b4d9458ac2d98b05915e425f1.jpg",
+      "sha256": "49d9645ce6c50a0ce22cc6abf07a14921531401b4d9458ac2d98b05915e425f1",
+      "bytes": 235923,
+      "width": 919,
+      "height": 1304,
+      "alt": "Cover of the suggested play collection Rigmarole and Other Plays",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49d9645ce6c50a0ce22cc6abf07a14921531401b4d9458ac2d98b05915e425f1.jpg"
+    },
+    {
+      "filename": "6ec507bdf0b8aee3b211d527be45ac4f62bc0ebb5920d132cadfad1dbc8d62fc.jpg",
+      "sha256": "6ec507bdf0b8aee3b211d527be45ac4f62bc0ebb5920d132cadfad1dbc8d62fc",
+      "bytes": 194413,
+      "width": 1288,
+      "height": 958,
+      "alt": "Letter grid used in the opening word-search activity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6ec507bdf0b8aee3b211d527be45ac4f62bc0ebb5920d132cadfad1dbc8d62fc.jpg"
+    },
+    {
+      "filename": "b34ebe233f7d62b094525cac995be77f3dd3a3c65d46737cf6b26d2420658883.jpg",
+      "sha256": "b34ebe233f7d62b094525cac995be77f3dd3a3c65d46737cf6b26d2420658883",
+      "bytes": 85661,
+      "width": 498,
+      "height": 644,
+      "alt": "Smiling flower sketch in the sample word map for cheer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b34ebe233f7d62b094525cac995be77f3dd3a3c65d46737cf6b26d2420658883.jpg"
+    },
+    {
+      "filename": "9424276dac7519f7d77f4b1cbc6044d5ad730172db435e60b25cb0f214e868bd.jpg",
+      "sha256": "9424276dac7519f7d77f4b1cbc6044d5ad730172db435e60b25cb0f214e868bd",
+      "bytes": 397910,
+      "width": 1646,
+      "height": 991,
+      "alt": "Quotation map used in the speaking and essay activities",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9424276dac7519f7d77f4b1cbc6044d5ad730172db435e60b25cb0f214e868bd.jpg"
+    },
+    {
+      "filename": "e41cb2e8e5de67b02d8caaa9272d23e4f0add03cf411caf16058b6d96d856015.jpg",
+      "sha256": "e41cb2e8e5de67b02d8caaa9272d23e4f0add03cf411caf16058b6d96d856015",
+      "bytes": 7796,
+      "width": 141,
+      "height": 272,
+      "alt": "Two facial-expression examples in the non-verbal communication activity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e41cb2e8e5de67b02d8caaa9272d23e4f0add03cf411caf16058b6d96d856015.jpg"
+    },
+    {
+      "filename": "89270874e0986f6595bc1d02f7eb351b0895bb32735b0aa676642b854642e975.jpg",
+      "sha256": "89270874e0986f6595bc1d02f7eb351b0895bb32735b0aa676642b854642e975",
+      "bytes": 168835,
+      "width": 1992,
+      "height": 606,
+      "alt": "Figure 5.1 classification of minerals",
+      "url": "https://projectaegis.fly.dev/source-assets/0/89270874e0986f6595bc1d02f7eb351b0895bb32735b0aa676642b854642e975.jpg"
+    },
+    {
+      "filename": "c21061ed556b8f5e2976b3fed6aabcb2b45c589182e3bbfc0f39f1ad6b1e3c3b.jpg",
+      "sha256": "c21061ed556b8f5e2976b3fed6aabcb2b45c589182e3bbfc0f39f1ad6b1e3c3b",
+      "bytes": 238288,
+      "width": 984,
+      "height": 884,
+      "alt": "Figure 5.2 iron-ore mine",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c21061ed556b8f5e2976b3fed6aabcb2b45c589182e3bbfc0f39f1ad6b1e3c3b.jpg"
+    },
+    {
+      "filename": "dcfafef3ac922487f70eb942969ef148a5a1f3b0e1e2299fe64b5a7f93141bf0.jpg",
+      "sha256": "dcfafef3ac922487f70eb942969ef148a5a1f3b0e1e2299fe64b5a7f93141bf0",
+      "bytes": 114544,
+      "width": 996,
+      "height": 950,
+      "alt": "Figure 5.3 state shares of manganese production, 2018-19",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dcfafef3ac922487f70eb942969ef148a5a1f3b0e1e2299fe64b5a7f93141bf0.jpg"
+    },
+    {
+      "filename": "cf8d95cdaa274e0f67cf31b98019268306c7b26a027c18aa597593e828b91e36.jpg",
+      "sha256": "cf8d95cdaa274e0f67cf31b98019268306c7b26a027c18aa597593e828b91e36",
+      "bytes": 775593,
+      "width": 1980,
+      "height": 2584,
+      "alt": "India map showing distribution of iron ore, manganese, bauxite and mica",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cf8d95cdaa274e0f67cf31b98019268306c7b26a027c18aa597593e828b91e36.jpg"
+    },
+    {
+      "filename": "4f2084376a1148b2e2623e0acb2ea9e67e82cc639f8519d5d104dcf31b27c9b0.jpg",
+      "sha256": "4f2084376a1148b2e2623e0acb2ea9e67e82cc639f8519d5d104dcf31b27c9b0",
+      "bytes": 122485,
+      "width": 996,
+      "height": 606,
+      "alt": "Figure 5.4 copper mines at Malanjkhand",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4f2084376a1148b2e2623e0acb2ea9e67e82cc639f8519d5d104dcf31b27c9b0.jpg"
+    },
+    {
+      "filename": "5a742c888d42fbe9e6f2f8ee95827d2529c0b9fb81115edc661953602dfaf536.jpg",
+      "sha256": "5a742c888d42fbe9e6f2f8ee95827d2529c0b9fb81115edc661953602dfaf536",
+      "bytes": 106742,
+      "width": 1068,
+      "height": 927,
+      "alt": "Figure 5.5 state shares of bauxite production, 2018-19",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5a742c888d42fbe9e6f2f8ee95827d2529c0b9fb81115edc661953602dfaf536.jpg"
+    },
+    {
+      "filename": "3a5f5c9ab753142b19d69fdc5bea21d3d137a39853b7ffe6dc209900d0676d51.jpg",
+      "sha256": "3a5f5c9ab753142b19d69fdc5bea21d3d137a39853b7ffe6dc209900d0676d51",
+      "bytes": 423475,
+      "width": 1536,
+      "height": 1208,
+      "alt": "Figure 5.6 bauxite mine",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3a5f5c9ab753142b19d69fdc5bea21d3d137a39853b7ffe6dc209900d0676d51.jpg"
+    },
+    {
+      "filename": "882d74b8e809dd84132a7cd06b858bdb1c7bd87782ef4771f89b8477dab812e6.jpg",
+      "sha256": "882d74b8e809dd84132a7cd06b858bdb1c7bd87782ef4771f89b8477dab812e6",
+      "bytes": 127102,
+      "width": 1008,
+      "height": 916,
+      "alt": "Figure 5.7 state shares of limestone production, 2018-19",
+      "url": "https://projectaegis.fly.dev/source-assets/0/882d74b8e809dd84132a7cd06b858bdb1c7bd87782ef4771f89b8477dab812e6.jpg"
+    },
+    {
+      "filename": "8a7fca771423e67688986c6fa670051f339b94657cfbe2eb793fbc8e981a828c.jpg",
+      "sha256": "8a7fca771423e67688986c6fa670051f339b94657cfbe2eb793fbc8e981a828c",
+      "bytes": 73509,
+      "width": 708,
+      "height": 485,
+      "alt": "Figure 5.8 air pollution from generation of dust in mining",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8a7fca771423e67688986c6fa670051f339b94657cfbe2eb793fbc8e981a828c.jpg"
+    },
+    {
+      "filename": "49da30aed289c8205b6bab6588e1ee584e5813a15e2cf54107339ee52d7425c7.jpg",
+      "sha256": "49da30aed289c8205b6bab6588e1ee584e5813a15e2cf54107339ee52d7425c7",
+      "bytes": 817396,
+      "width": 1524,
+      "height": 1816,
+      "alt": "Source newspaper collage about coal mining and safety",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49da30aed289c8205b6bab6588e1ee584e5813a15e2cf54107339ee52d7425c7.jpg"
+    },
+    {
+      "filename": "ad7ea690765c345af030231545aa77a69ec841bcb88198f27adb63bac16b8c23.jpg",
+      "sha256": "ad7ea690765c345af030231545aa77a69ec841bcb88198f27adb63bac16b8c23",
+      "bytes": 209771,
+      "width": 984,
+      "height": 769,
+      "alt": "Figure 5.9a inside a coal mine",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ad7ea690765c345af030231545aa77a69ec841bcb88198f27adb63bac16b8c23.jpg"
+    },
+    {
+      "filename": "6772f50bbdd65a75ecd6715d5dcf1c055975fbc6c6c44d3865492214aadf1b0d.jpg",
+      "sha256": "6772f50bbdd65a75ecd6715d5dcf1c055975fbc6c6c44d3865492214aadf1b0d",
+      "bytes": 160824,
+      "width": 984,
+      "height": 639,
+      "alt": "Figure 5.9b outside a coal mine",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6772f50bbdd65a75ecd6715d5dcf1c055975fbc6c6c44d3865492214aadf1b0d.jpg"
+    },
+    {
+      "filename": "7815e8efe91b742e12716300376c648eed91e74d0d3b77719ff7863f3d6e527a.jpg",
+      "sha256": "7815e8efe91b742e12716300376c648eed91e74d0d3b77719ff7863f3d6e527a",
+      "bytes": 727828,
+      "width": 1920,
+      "height": 2454,
+      "alt": "India map showing coal, oil and natural-gas resources",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7815e8efe91b742e12716300376c648eed91e74d0d3b77719ff7863f3d6e527a.jpg"
+    },
+    {
+      "filename": "6bb2383b50c1bb5673ed5636408990adc61d2ac5cbdce19839684a71747dfc00.jpg",
+      "sha256": "6bb2383b50c1bb5673ed5636408990adc61d2ac5cbdce19839684a71747dfc00",
+      "bytes": 776068,
+      "width": 1980,
+      "height": 2568,
+      "alt": "India map showing nuclear and thermal power plants",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6bb2383b50c1bb5673ed5636408990adc61d2ac5cbdce19839684a71747dfc00.jpg"
+    },
+    {
+      "filename": "5aa458ed683f1d74d326bf93ec59516fc6f376b51cbd34579ec70e9efd651fe1.jpg",
+      "sha256": "5aa458ed683f1d74d326bf93ec59516fc6f376b51cbd34579ec70e9efd651fe1",
+      "bytes": 114088,
+      "width": 864,
+      "height": 655,
+      "alt": "Figure 5.10 solar-powered milk booth",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5aa458ed683f1d74d326bf93ec59516fc6f376b51cbd34579ec70e9efd651fe1.jpg"
+    },
+    {
+      "filename": "3a38f2e9d112e196d23841a50000dcc548e3210b5d7232f8fb57b7305017a096.jpg",
+      "sha256": "3a38f2e9d112e196d23841a50000dcc548e3210b5d7232f8fb57b7305017a096",
+      "bytes": 120959,
+      "width": 852,
+      "height": 622,
+      "alt": "Figure 5.11 windmills at Nagercoil",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3a38f2e9d112e196d23841a50000dcc548e3210b5d7232f8fb57b7305017a096.jpg"
+    },
+    {
+      "filename": "bbdf8ef0468bf70fd9f163d59464f094257e23188e79633761676db3d3c16132.jpg",
+      "sha256": "bbdf8ef0468bf70fd9f163d59464f094257e23188e79633761676db3d3c16132",
+      "bytes": 147286,
+      "width": 756,
+      "height": 659,
+      "alt": "Figure 5.12 biogas plant",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bbdf8ef0468bf70fd9f163d59464f094257e23188e79633761676db3d3c16132.jpg"
+    },
+    {
+      "filename": "e644e242cb070332ee3b4db5d3e1f71015426dc4cf291972d85b9d6e4775eb5f.jpg",
+      "sha256": "e644e242cb070332ee3b4db5d3e1f71015426dc4cf291972d85b9d6e4775eb5f",
+      "bytes": 163869,
+      "width": 1632,
+      "height": 1194,
+      "alt": "Minerals crossword grid with its given letters",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e644e242cb070332ee3b4db5d3e1f71015426dc4cf291972d85b9d6e4775eb5f.jpg"
+    }
+  ]
+}
