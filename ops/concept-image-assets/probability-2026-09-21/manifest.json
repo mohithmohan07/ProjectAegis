@@ -1,0 +1,207 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "source_sha256": "1093d94c576a695b1fbc6c04d7e2b98001d67340b54ec5ca5c993df4b5698444",
+  "assets": [
+    {
+      "asset_id": "f71",
+      "filename": "c3fef7cb41c7b67c51dfad83aad4df8915464c9e40f7853017bdf34f8f463584.jpg",
+      "sha256": "c3fef7cb41c7b67c51dfad83aad4df8915464c9e40f7853017bdf34f8f463584",
+      "bytes": 212576,
+      "width": 936,
+      "height": 663,
+      "alt": "Six-card collections place the chance of selecting purple from impossible through even chance to certain.",
+      "caption": "Fig. 7.1",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c3fef7cb41c7b67c51dfad83aad4df8915464c9e40f7853017bdf34f8f463584.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 4,
+      "printed_page": 158,
+      "crop_pdf_points": [
+        88,
+        145,
+        400,
+        366
+      ]
+    },
+    {
+      "asset_id": "f72",
+      "filename": "b94ca2bb635b3343bdda423c73ff180c578dd4af2b93fb5625c72dfcde8428e4.jpg",
+      "sha256": "b94ca2bb635b3343bdda423c73ff180c578dd4af2b93fb5625c72dfcde8428e4",
+      "bytes": 16493,
+      "width": 234,
+      "height": 330,
+      "alt": "Heads and tails labelled H and T on a tossed coin.",
+      "caption": "Fig. 7.2",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b94ca2bb635b3343bdda423c73ff180c578dd4af2b93fb5625c72dfcde8428e4.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 6,
+      "printed_page": 160,
+      "crop_pdf_points": [
+        146,
+        290,
+        224,
+        400
+      ]
+    },
+    {
+      "asset_id": "f73",
+      "filename": "36e26957e09ed9859b851577857ee1890e31731b8dea16cf1677bb3cb1126062.jpg",
+      "sha256": "36e26957e09ed9859b851577857ee1890e31731b8dea16cf1677bb3cb1126062",
+      "bytes": 14789,
+      "width": 234,
+      "height": 264,
+      "alt": "A six-sided die with numbered dot faces.",
+      "caption": "Fig. 7.3",
+      "url": "https://projectaegis.fly.dev/source-assets/0/36e26957e09ed9859b851577857ee1890e31731b8dea16cf1677bb3cb1126062.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 6,
+      "printed_page": 160,
+      "crop_pdf_points": [
+        332,
+        312,
+        410,
+        400
+      ]
+    },
+    {
+      "asset_id": "f74",
+      "filename": "1e697fb15c3ddfeeab13954cd675a57dd4f20bdf43c6e2e34aa06695d85ad6ea.jpg",
+      "sha256": "1e697fb15c3ddfeeab13954cd675a57dd4f20bdf43c6e2e34aa06695d85ad6ea",
+      "bytes": 118663,
+      "width": 396,
+      "height": 588,
+      "alt": "A Jain Jnan-Chaupad game on cloth from nineteenth-century India, held by the National Museum.",
+      "caption": "Fig. 7.4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1e697fb15c3ddfeeab13954cd675a57dd4f20bdf43c6e2e34aa06695d85ad6ea.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 7,
+      "printed_page": 161,
+      "crop_pdf_points": [
+        286,
+        70,
+        418,
+        266
+      ]
+    },
+    {
+      "asset_id": "f75",
+      "filename": "6c19b66a8dec215427af38f544e320d93f3ba85f3f5779b7c62a8a8965e348de.jpg",
+      "sha256": "6c19b66a8dec215427af38f544e320d93f3ba85f3f5779b7c62a8a8965e348de",
+      "bytes": 58114,
+      "width": 528,
+      "height": 414,
+      "alt": "Paper cups resting on their bottom, top and side, from left to right.",
+      "caption": "Fig. 7.5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6c19b66a8dec215427af38f544e320d93f3ba85f3f5779b7c62a8a8965e348de.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 11,
+      "printed_page": 165,
+      "crop_pdf_points": [
+        265,
+        472,
+        441,
+        610
+      ]
+    },
+    {
+      "asset_id": "f76",
+      "filename": "65b1dfd7169b8946f7c0a1cfeb66e36113d4a29ba308600018eb179a22297fa9.jpg",
+      "sha256": "65b1dfd7169b8946f7c0a1cfeb66e36113d4a29ba308600018eb179a22297fa9",
+      "bytes": 52007,
+      "width": 525,
+      "height": 432,
+      "alt": "A two-toss coin tree with one-half branch probabilities and outcomes HH, HT, TH and TT.",
+      "caption": "Fig. 7.6",
+      "url": "https://projectaegis.fly.dev/source-assets/0/65b1dfd7169b8946f7c0a1cfeb66e36113d4a29ba308600018eb179a22297fa9.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 14,
+      "printed_page": 168,
+      "crop_pdf_points": [
+        239,
+        470,
+        414,
+        614
+      ]
+    },
+    {
+      "asset_id": "f77",
+      "filename": "c579aacd276189a8adef55fa58ff8843086efc5bf574e44dca0754cb091b8718.jpg",
+      "sha256": "c579aacd276189a8adef55fa58ff8843086efc5bf574e44dca0754cb091b8718",
+      "bytes": 43522,
+      "width": 318,
+      "height": 462,
+      "alt": "A spinner labelled with the numbers one through eight.",
+      "caption": "Fig. 7.7",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c579aacd276189a8adef55fa58ff8843086efc5bf574e44dca0754cb091b8718.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 17,
+      "printed_page": 171,
+      "crop_pdf_points": [
+        329,
+        402,
+        435,
+        556
+      ]
+    },
+    {
+      "asset_id": "f78",
+      "filename": "7c619cf151173c5a27f0ef42f4d799fd43597d07b29744e95f360f1bb6384ff2.jpg",
+      "sha256": "7c619cf151173c5a27f0ef42f4d799fd43597d07b29744e95f360f1bb6384ff2",
+      "bytes": 25004,
+      "width": 384,
+      "height": 315,
+      "alt": "A rectangular region labelled three metres by two metres with a circle inside it.",
+      "caption": "Fig. 7.8",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7c619cf151173c5a27f0ef42f4d799fd43597d07b29744e95f360f1bb6384ff2.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 19,
+      "printed_page": 173,
+      "crop_pdf_points": [
+        307,
+        112,
+        435,
+        217
+      ]
+    },
+    {
+      "asset_id": "tyres",
+      "filename": "61ba7793ebb8d6e229a245ddef2967e360ab8e94883561a10811187ce5210a57.jpg",
+      "sha256": "61ba7793ebb8d6e229a245ddef2967e360ab8e94883561a10811187ce5210a57",
+      "bytes": 51491,
+      "width": 966,
+      "height": 216,
+      "alt": "Tyre replacement distances and counts: less than 4000 km, 20; 4001 to 9000 km, 210; 9001 to 14000 km, 325; more than 14000 km, 445.",
+      "caption": "",
+      "url": "https://projectaegis.fly.dev/source-assets/0/61ba7793ebb8d6e229a245ddef2967e360ab8e94883561a10811187ce5210a57.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 17,
+      "printed_page": 171,
+      "crop_pdf_points": [
+        85,
+        151,
+        407,
+        223
+      ]
+    },
+    {
+      "asset_id": "peace",
+      "filename": "caee46bfd0d7abdf3f204d29fe41ef2a844c4adf0612bdd7c381b706097e453a.jpg",
+      "sha256": "caee46bfd0d7abdf3f204d29fe41ef2a844c4adf0612bdd7c381b706097e453a",
+      "bytes": 6616,
+      "width": 327,
+      "height": 75,
+      "alt": "Five separate cards spelling PEACE, including two cards marked E.",
+      "caption": "",
+      "url": "https://projectaegis.fly.dev/source-assets/0/caee46bfd0d7abdf3f204d29fe41ef2a844c4adf0612bdd7c381b706097e453a.jpg",
+      "source_file": "iemh107.pdf",
+      "pdf_page": 17,
+      "printed_page": 171,
+      "crop_pdf_points": [
+        291,
+        328,
+        400,
+        353
+      ]
+    }
+  ]
+}
