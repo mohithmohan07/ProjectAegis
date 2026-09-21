@@ -470,6 +470,66 @@
       "height": 1194,
       "alt": "Minerals crossword grid with its given letters",
       "url": "https://projectaegis.fly.dev/source-assets/0/e644e242cb070332ee3b4db5d3e1f71015426dc4cf291972d85b9d6e4775eb5f.jpg"
+    },
+    {
+      "asset_id": "BSE-01",
+      "filename": "b6af5fc88ea55e0efdd37fb1d38c4d7bfb4b547d6e09a567cb0c9f7b20865dc4.jpg",
+      "sha256": "b6af5fc88ea55e0efdd37fb1d38c4d7bfb4b547d6e09a567cb0c9f7b20865dc4",
+      "bytes": 230181,
+      "width": 777,
+      "height": 603,
+      "url": "https://projectaegis.fly.dev/source-assets/0/b6af5fc88ea55e0efdd37fb1d38c4d7bfb4b547d6e09a567cb0c9f7b20865dc4.jpg",
+      "source_file": "The Book That Saved the Earth.pdf",
+      "source_sha256": "b8a8f1aa4cda28cdfbe44e607bc77df4a983073a6ea67b8de8dbae50c192c004",
+      "pdf_page": 4,
+      "bbox_points": [
+        57.5,
+        46.2,
+        368,
+        287
+      ],
+      "alt": "The Martian crew handle unfamiliar books in the public library.",
+      "concept_key": "p04"
+    },
+    {
+      "asset_id": "BSE-02",
+      "filename": "5c27437737fd6eebb68ee6c98844f59f21ff4c9fc7e9a3598a6a3e7e7ea382c3.jpg",
+      "sha256": "5c27437737fd6eebb68ee6c98844f59f21ff4c9fc7e9a3598a6a3e7e7ea382c3",
+      "bytes": 252533,
+      "width": 828,
+      "height": 564,
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c27437737fd6eebb68ee6c98844f59f21ff4c9fc7e9a3598a6a3e7e7ea382c3.jpg",
+      "source_file": "The Book That Saved the Earth.pdf",
+      "source_sha256": "b8a8f1aa4cda28cdfbe44e607bc77df4a983073a6ea67b8de8dbae50c192c004",
+      "pdf_page": 5,
+      "bbox_points": [
+        77,
+        50.5,
+        408,
+        276
+      ],
+      "alt": "A Martian examines a book by placing it on his head.",
+      "concept_key": "p05"
+    },
+    {
+      "asset_id": "BSE-03",
+      "filename": "b43dfe78973a94a51d2dd2fc97ed22da185630fb3a018f7d0fab5e11febb09d1.jpg",
+      "sha256": "b43dfe78973a94a51d2dd2fc97ed22da185630fb3a018f7d0fab5e11febb09d1",
+      "bytes": 239552,
+      "width": 763,
+      "height": 654,
+      "url": "https://projectaegis.fly.dev/source-assets/0/b43dfe78973a94a51d2dd2fc97ed22da185630fb3a018f7d0fab5e11febb09d1.jpg",
+      "source_file": "The Book That Saved the Earth.pdf",
+      "source_sha256": "b8a8f1aa4cda28cdfbe44e607bc77df4a983073a6ea67b8de8dbae50c192c004",
+      "pdf_page": 8,
+      "bbox_points": [
+        61,
+        40.5,
+        366,
+        302
+      ],
+      "alt": "A Martian peers over the large Mother Goose book.",
+      "concept_key": "p10"
     }
   ]
 }
