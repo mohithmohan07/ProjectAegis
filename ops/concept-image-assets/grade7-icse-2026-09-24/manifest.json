@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "source_sha256": "80d1166d1098d0eb7046c6cef711c3c4e36abd471316e6ff84f5bcd32228c4f1",
+  "assets": [
+    {
+      "asset_id": "q14_polynomials",
+      "filename": "96565d88aa177c27cb40b19702411d55ecbb4cd5ea6448490f8c016693167ef2.jpg",
+      "sha256": "96565d88aa177c27cb40b19702411d55ecbb4cd5ea6448490f8c016693167ef2",
+      "bytes": 38281,
+      "width": 731,
+      "height": 288,
+      "alt": "Three fruit baskets labelled 5x, x + 3, and 2x squared + 3x + 1, from left to right.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96565d88aa177c27cb40b19702411d55ecbb4cd5ea6448490f8c016693167ef2.jpg",
+      "source_file": "7th Maths(2).pdf",
+      "pdf_page": 2,
+      "source_question": "Q14"
+    }
+  ]
+}
