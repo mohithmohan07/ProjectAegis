@@ -1,0 +1,1087 @@
+{
+  "schema": 1,
+  "offline_authoring": true,
+  "job_id": 0,
+  "assets": [
+    {
+      "key": "CH01_1.1",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 1,
+      "crop_points": [
+        241.92,
+        478.7279925537109,
+        535.6800000000001,
+        659.2319897460937
+      ],
+      "filename": "6105900d05cb0cf51763883c4b9f1aa27896167ceacf4ae1fb5473baa8e1dfdb.jpg",
+      "sha256": "6105900d05cb0cf51763883c4b9f1aa27896167ceacf4ae1fb5473baa8e1dfdb",
+      "bytes": 66769,
+      "width": 823,
+      "height": 506,
+      "alt": "Burning magnesium ribbon and collecting magnesium oxide",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6105900d05cb0cf51763883c4b9f1aa27896167ceacf4ae1fb5473baa8e1dfdb.jpg"
+    },
+    {
+      "key": "CH01_1.2",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 2,
+      "crop_points": [
+        40.32000000000001,
+        266.83199584960937,
+        230.4,
+        447.33599304199214
+      ],
+      "filename": "f6d9609a93f71cc47d622486fb590986b75c76695d731be1f27d54ae9d9d6a1f.jpg",
+      "sha256": "f6d9609a93f71cc47d622486fb590986b75c76695d731be1f27d54ae9d9d6a1f",
+      "bytes": 38156,
+      "width": 534,
+      "height": 506,
+      "alt": "Hydrogen evolved by zinc with dilute sulphuric acid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f6d9609a93f71cc47d622486fb590986b75c76695d731be1f27d54ae9d9d6a1f.jpg"
+    },
+    {
+      "key": "CH01_1.3",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        40.32000000000001,
+        463.03199279785156,
+        282.24,
+        563.4863912353516
+      ],
+      "filename": "d2b125d3cfa13427ba5ce9aa2671e3a39060766713a1e8f7c4a0c0e326914ad4.jpg",
+      "sha256": "d2b125d3cfa13427ba5ce9aa2671e3a39060766713a1e8f7c4a0c0e326914ad4",
+      "bytes": 40087,
+      "width": 679,
+      "height": 282,
+      "alt": "Formation of slaked lime from calcium oxide and water",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d2b125d3cfa13427ba5ce9aa2671e3a39060766713a1e8f7c4a0c0e326914ad4.jpg"
+    },
+    {
+      "key": "CH01_1.4",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        40.32000000000001,
+        54.935999145507814,
+        201.6,
+        235.43999633789062
+      ],
+      "filename": "61956b3ae28153de03c66b363b6d1ba27c7bb05208c1774105aadf469f59b948.jpg",
+      "sha256": "61956b3ae28153de03c66b363b6d1ba27c7bb05208c1774105aadf469f59b948",
+      "bytes": 65915,
+      "width": 453,
+      "height": 507,
+      "alt": "Heating ferrous sulphate crystals",
+      "url": "https://projectaegis.fly.dev/source-assets/0/61956b3ae28153de03c66b363b6d1ba27c7bb05208c1774105aadf469f59b948.jpg"
+    },
+    {
+      "key": "CH01_1.5",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        69.12,
+        478.7279925537109,
+        236.16,
+        651.383989868164
+      ],
+      "filename": "3024bd36ba68a79f2418f8943220781f427d8c2b5eeab1300b2dc862ccb0d647.jpg",
+      "sha256": "3024bd36ba68a79f2418f8943220781f427d8c2b5eeab1300b2dc862ccb0d647",
+      "bytes": 53884,
+      "width": 469,
+      "height": 484,
+      "alt": "Heating lead nitrate",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3024bd36ba68a79f2418f8943220781f427d8c2b5eeab1300b2dc862ccb0d647.jpg"
+    },
+    {
+      "key": "CH01_1.6",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        308.16,
+        133.41599792480469,
+        541.4399999999999,
+        337.46399475097655
+      ],
+      "filename": "ad158505942a0c9dc8eaaa2f547ffe4292f90e56835ef89f912e7beb93d900fb.jpg",
+      "sha256": "ad158505942a0c9dc8eaaa2f547ffe4292f90e56835ef89f912e7beb93d900fb",
+      "bytes": 61998,
+      "width": 655,
+      "height": 572,
+      "alt": "Electrolysis of water with two collecting tubes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ad158505942a0c9dc8eaaa2f547ffe4292f90e56835ef89f912e7beb93d900fb.jpg"
+    },
+    {
+      "key": "CH01_1.7",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        357.12,
+        482.6519924926758,
+        529.9200000000001,
+        608.2199905395508
+      ],
+      "filename": "ba754ede8ef84bd23189676e506e1b2cc19ce59a225d80263ff9eefc4edbcdca.jpg",
+      "sha256": "ba754ede8ef84bd23189676e506e1b2cc19ce59a225d80263ff9eefc4edbcdca",
+      "bytes": 46521,
+      "width": 485,
+      "height": 353,
+      "alt": "Silver chloride exposed to sunlight",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ba754ede8ef84bd23189676e506e1b2cc19ce59a225d80263ff9eefc4edbcdca.jpg"
+    },
+    {
+      "key": "CH01_1.8a",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 10,
+      "crop_points": [
+        40.32000000000001,
+        447.33599304199214,
+        282.24,
+        678.8519894409179
+      ],
+      "filename": "fdee7a13968641caf4f204053f09ac11e102802ec1a5d72812166d2b8fba5f96.jpg",
+      "sha256": "fdee7a13968641caf4f204053f09ac11e102802ec1a5d72812166d2b8fba5f96",
+      "bytes": 63123,
+      "width": 679,
+      "height": 649,
+      "alt": "Iron nails immersed in copper sulphate solution",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fdee7a13968641caf4f204053f09ac11e102802ec1a5d72812166d2b8fba5f96.jpg"
+    },
+    {
+      "key": "CH01_1.8b",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 11,
+      "crop_points": [
+        57.6,
+        47.08799926757813,
+        529.9200000000001,
+        211.89599670410158
+      ],
+      "filename": "278b0bb69f3c607eb42dbdcdf2c672f9aab8f0597cc23e6e7f4684cb9dc97da0.jpg",
+      "sha256": "278b0bb69f3c607eb42dbdcdf2c672f9aab8f0597cc23e6e7f4684cb9dc97da0",
+      "bytes": 80631,
+      "width": 1323,
+      "height": 463,
+      "alt": "Iron nails and copper sulphate before and after reaction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/278b0bb69f3c607eb42dbdcdf2c672f9aab8f0597cc23e6e7f4684cb9dc97da0.jpg"
+    },
+    {
+      "key": "CH01_1.9",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 11,
+      "crop_points": [
+        345.59999999999997,
+        463.03199279785156,
+        529.9200000000001,
+        627.839990234375
+      ],
+      "filename": "e36a8ab18acfa704e0d48079edd52ba2d253034565ee87cd152630a730a4da38.jpg",
+      "sha256": "e36a8ab18acfa704e0d48079edd52ba2d253034565ee87cd152630a730a4da38",
+      "bytes": 44474,
+      "width": 517,
+      "height": 462,
+      "alt": "Mixing sodium sulphate and barium chloride solutions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e36a8ab18acfa704e0d48079edd52ba2d253034565ee87cd152630a730a4da38.jpg"
+    },
+    {
+      "key": "CH01_1.10",
+      "source": "CH01_Chemical Reactions and Equations.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        46.08,
+        258.9839959716797,
+        270.71999999999997,
+        397.89359381103515
+      ],
+      "filename": "69fcf5d8f7b6eed723664f9e2e6d42d5751348bb6e72715bedda0984587a43c5.jpg",
+      "sha256": "69fcf5d8f7b6eed723664f9e2e6d42d5751348bb6e72715bedda0984587a43c5",
+      "bytes": 37780,
+      "width": 630,
+      "height": 390,
+      "alt": "Heating copper powder in air",
+      "url": "https://projectaegis.fly.dev/source-assets/0/69fcf5d8f7b6eed723664f9e2e6d42d5751348bb6e72715bedda0984587a43c5.jpg"
+    },
+    {
+      "key": "CH02_2.1",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 3,
+      "crop_points": [
+        51.839999999999996,
+        478.7279925537109,
+        495.36,
+        643.5359899902344
+      ],
+      "filename": "c75a7b4e3677d8b45c2cb9b4677f049af5cc2f9a328350ca01c085fc44556c79.jpg",
+      "sha256": "c75a7b4e3677d8b45c2cb9b4677f049af5cc2f9a328350ca01c085fc44556c79",
+      "bytes": 97764,
+      "width": 1243,
+      "height": 462,
+      "alt": "Zinc with dilute acid and the hydrogen bubble test",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c75a7b4e3677d8b45c2cb9b4677f049af5cc2f9a328350ca01c085fc44556c79.jpg"
+    },
+    {
+      "key": "CH02_2.2",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 4,
+      "crop_points": [
+        40.32000000000001,
+        404.1719937133789,
+        282.24,
+        549.3599914550781
+      ],
+      "filename": "19b26757e4c6cce1b975ba5eaa40b7dbac788db1e0c5f68499f2a1b0d925dd83.jpg",
+      "sha256": "19b26757e4c6cce1b975ba5eaa40b7dbac788db1e0c5f68499f2a1b0d925dd83",
+      "bytes": 61402,
+      "width": 679,
+      "height": 408,
+      "alt": "Carbon dioxide passed through lime water",
+      "url": "https://projectaegis.fly.dev/source-assets/0/19b26757e4c6cce1b975ba5eaa40b7dbac788db1e0c5f68499f2a1b0d925dd83.jpg"
+    },
+    {
+      "key": "CH02_2.3",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        40.32000000000001,
+        510.1199920654297,
+        250.56,
+        674.9279895019531
+      ],
+      "filename": "13abf483d9bcc28dfbda435c335527c7380955a6d11397d61e870c321788d702.jpg",
+      "sha256": "13abf483d9bcc28dfbda435c335527c7380955a6d11397d61e870c321788d702",
+      "bytes": 45332,
+      "width": 590,
+      "height": 462,
+      "alt": "Circuit for testing conductivity of an acid solution",
+      "url": "https://projectaegis.fly.dev/source-assets/0/13abf483d9bcc28dfbda435c335527c7380955a6d11397d61e870c321788d702.jpg"
+    },
+    {
+      "key": "CH02_2.4",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        339.84,
+        274.67999572753905,
+        541.4399999999999,
+        463.03199279785156
+      ],
+      "filename": "4312e9aae266e545fe6e2b4af184b0ecc7ddcf742d75268defb82a94bebcb330.jpg",
+      "sha256": "4312e9aae266e545fe6e2b4af184b0ecc7ddcf742d75268defb82a94bebcb330",
+      "bytes": 72464,
+      "width": 566,
+      "height": 528,
+      "alt": "Preparation of hydrogen chloride gas and litmus testing",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4312e9aae266e545fe6e2b4af184b0ecc7ddcf742d75268defb82a94bebcb330.jpg"
+    },
+    {
+      "key": "CH02_2.5",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        34.56,
+        392.3999938964844,
+        190.08,
+        502.2719921875
+      ],
+      "filename": "684b79f6e3dd11c292031d65e37bd6f9e0194a163f566bff53cb66570c232d37.jpg",
+      "sha256": "684b79f6e3dd11c292031d65e37bd6f9e0194a163f566bff53cb66570c232d37",
+      "bytes": 34468,
+      "width": 437,
+      "height": 309,
+      "alt": "Corrosive chemical warning symbol",
+      "url": "https://projectaegis.fly.dev/source-assets/0/684b79f6e3dd11c292031d65e37bd6f9e0194a163f566bff53cb66570c232d37.jpg"
+    },
+    {
+      "key": "CH02_2.6",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        46.08,
+        588.5999908447266,
+        524.16,
+        706.319989013672
+      ],
+      "filename": "c7c0bb258518b8fb0df7c40efe564644e05a273f88be293d865f2a6b52bc3297.jpg",
+      "sha256": "c7c0bb258518b8fb0df7c40efe564644e05a273f88be293d865f2a6b52bc3297",
+      "bytes": 90640,
+      "width": 1339,
+      "height": 330,
+      "alt": "pH and relative concentrations of hydrogen and hydroxide ions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c7c0bb258518b8fb0df7c40efe564644e05a273f88be293d865f2a6b52bc3297.jpg"
+    },
+    {
+      "key": "CH02_2.7",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 10,
+      "crop_points": [
+        63.36,
+        329.6159948730469,
+        512.64,
+        494.42399230957034
+      ],
+      "filename": "4e7f862d45c1dc763cad5974df5f71306f093d3ecdd402ccf307c150b79fa0a7.jpg",
+      "sha256": "4e7f862d45c1dc763cad5974df5f71306f093d3ecdd402ccf307c150b79fa0a7",
+      "bytes": 113875,
+      "width": 1259,
+      "height": 463,
+      "alt": "Approximate pH colours of common substances",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4e7f862d45c1dc763cad5974df5f71306f093d3ecdd402ccf307c150b79fa0a7.jpg"
+    },
+    {
+      "key": "CH02_2.8",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        97.92,
+        306.07199523925783,
+        535.6800000000001,
+        549.3599914550781
+      ],
+      "filename": "d0f750ee8abd3a84e7a13f1049efebd987c88aba7ff8b0a2d11d72c8dcb5989b.jpg",
+      "sha256": "d0f750ee8abd3a84e7a13f1049efebd987c88aba7ff8b0a2d11d72c8dcb5989b",
+      "bytes": 102595,
+      "width": 1226,
+      "height": 682,
+      "alt": "Products and uses of the chlor-alkali process",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d0f750ee8abd3a84e7a13f1049efebd987c88aba7ff8b0a2d11d72c8dcb5989b.jpg"
+    },
+    {
+      "key": "CH02_2.9",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 16,
+      "crop_points": [
+        40.32000000000001,
+        266.83199584960937,
+        253.44,
+        470.87999267578124
+      ],
+      "filename": "4bbbac72b916b53963cd5b4b5aca00a845f408b895b17935aa30f8a7185f2d35.jpg",
+      "sha256": "4bbbac72b916b53963cd5b4b5aca00a845f408b895b17935aa30f8a7185f2d35",
+      "bytes": 60361,
+      "width": 598,
+      "height": 572,
+      "alt": "Heating copper sulphate crystals to remove water of crystallisation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4bbbac72b916b53963cd5b4b5aca00a845f408b895b17935aa30f8a7185f2d35.jpg"
+    },
+    {
+      "key": "CH02_2.10",
+      "source": "CH02_Acids, Bases and Salts.pdf",
+      "source_pdf_page": 20,
+      "crop_points": [
+        63.36,
+        278.6039956665039,
+        518.4,
+        525.8159918212891
+      ],
+      "filename": "e162612642dcef642c916bc2170d20b963882a0728f5e6745911140be542ea1a.jpg",
+      "sha256": "e162612642dcef642c916bc2170d20b963882a0728f5e6745911140be542ea1a",
+      "bytes": 176175,
+      "width": 1275,
+      "height": 693,
+      "alt": "Soda-acid fire extinguisher apparatus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e162612642dcef642c916bc2170d20b963882a0728f5e6745911140be542ea1a.jpg"
+    },
+    {
+      "key": "CH03_3.1",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 2,
+      "crop_points": [
+        23.04,
+        431.63999328613284,
+        288,
+        627.839990234375
+      ],
+      "filename": "105192685a1bb00f50b1e37243b651661dbdde394709307ab7e65f415381a296.jpg",
+      "sha256": "105192685a1bb00f50b1e37243b651661dbdde394709307ab7e65f415381a296",
+      "bytes": 45083,
+      "width": 743,
+      "height": 550,
+      "alt": "Heat conduction through a metal wire",
+      "url": "https://projectaegis.fly.dev/source-assets/0/105192685a1bb00f50b1e37243b651661dbdde394709307ab7e65f415381a296.jpg"
+    },
+    {
+      "key": "CH03_3.2",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 3,
+      "crop_points": [
+        345.59999999999997,
+        47.08799926757813,
+        535.6800000000001,
+        172.65599731445312
+      ],
+      "filename": "e187211690fea16102471a5c0c752409a3b14dbf0ea00fc4fadd3db1152c6ee6.jpg",
+      "sha256": "e187211690fea16102471a5c0c752409a3b14dbf0ea00fc4fadd3db1152c6ee6",
+      "bytes": 32421,
+      "width": 533,
+      "height": 353,
+      "alt": "Electrical conductivity test for a metal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e187211690fea16102471a5c0c752409a3b14dbf0ea00fc4fadd3db1152c6ee6.jpg"
+    },
+    {
+      "key": "CH03_3.3",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        46.08,
+        47.08799926757813,
+        564.48,
+        266.83199584960937
+      ],
+      "filename": "428c12d5d4aef76a3a85476e8bcb77752273f857a76cd46d4f476495186982d9.jpg",
+      "sha256": "428c12d5d4aef76a3a85476e8bcb77752273f857a76cd46d4f476495186982d9",
+      "bytes": 100422,
+      "width": 1452,
+      "height": 617,
+      "alt": "Reaction of steam with a heated metal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/428c12d5d4aef76a3a85476e8bcb77752273f857a76cd46d4f476495186982d9.jpg"
+    },
+    {
+      "key": "CH03_3.4",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        270.71999999999997,
+        184.42799713134764,
+        564.48,
+        392.3999938964844
+      ],
+      "filename": "f7b4c2f26a763a42ed37c43fdf0366727538317cfe047a4d5656c2b22c2ad1fa.jpg",
+      "sha256": "f7b4c2f26a763a42ed37c43fdf0366727538317cfe047a4d5656c2b22c2ad1fa",
+      "bytes": 99716,
+      "width": 823,
+      "height": 583,
+      "alt": "Displacement tests using copper and iron",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f7b4c2f26a763a42ed37c43fdf0366727538317cfe047a4d5656c2b22c2ad1fa.jpg"
+    },
+    {
+      "key": "CH03_table-reactivity",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 10,
+      "crop_points": [
+        63.36,
+        196.1999969482422,
+        518.4,
+        294.2999954223633
+      ],
+      "filename": "0b7077dbcbefa1d0a3b1d28dde55af3ee0e50b6520fff3aec1c16fb92f1a5a68.jpg",
+      "sha256": "0b7077dbcbefa1d0a3b1d28dde55af3ee0e50b6520fff3aec1c16fb92f1a5a68",
+      "bytes": 94086,
+      "width": 1275,
+      "height": 276,
+      "alt": "Observed displacement results for metals A, B, C and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0b7077dbcbefa1d0a3b1d28dde55af3ee0e50b6520fff3aec1c16fb92f1a5a68.jpg"
+    },
+    {
+      "key": "CH03_3.5",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 11,
+      "crop_points": [
+        115.2,
+        557.2079913330078,
+        420.48,
+        619.9919903564453
+      ],
+      "filename": "dbcf76cc7a77a4de41a80abc14cd4c15f834df8ba8093fd9f4cabccf3aa13c15.jpg",
+      "sha256": "dbcf76cc7a77a4de41a80abc14cd4c15f834df8ba8093fd9f4cabccf3aa13c15",
+      "bytes": 29178,
+      "width": 856,
+      "height": 176,
+      "alt": "Electron transfer and ionic formation in sodium chloride",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dbcf76cc7a77a4de41a80abc14cd4c15f834df8ba8093fd9f4cabccf3aa13c15.jpg"
+    },
+    {
+      "key": "CH03_3.6",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        161.28000000000003,
+        145.1879977416992,
+        483.84,
+        200.12399688720703
+      ],
+      "filename": "fc09193c76f3d6e06bb9478dd2d9b3fe233a941a6e96fcdccdb2a760adc0d277.jpg",
+      "sha256": "fc09193c76f3d6e06bb9478dd2d9b3fe233a941a6e96fcdccdb2a760adc0d277",
+      "bytes": 26497,
+      "width": 904,
+      "height": 155,
+      "alt": "Electron transfer in magnesium chloride",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fc09193c76f3d6e06bb9478dd2d9b3fe233a941a6e96fcdccdb2a760adc0d277.jpg"
+    },
+    {
+      "key": "CH03_3.7",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        17.28,
+        323.3375949707031,
+        204.48,
+        427.715993347168
+      ],
+      "filename": "c5f93f4b97a6e03626d5e14b647531b5040d0e354096af7afbd9572d9a825f0a.jpg",
+      "sha256": "c5f93f4b97a6e03626d5e14b647531b5040d0e354096af7afbd9572d9a825f0a",
+      "bytes": 20457,
+      "width": 525,
+      "height": 293,
+      "alt": "Heating an ionic salt on a spatula",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c5f93f4b97a6e03626d5e14b647531b5040d0e354096af7afbd9572d9a825f0a.jpg"
+    },
+    {
+      "key": "CH03_3.8",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        23.04,
+        510.1199920654297,
+        207.35999999999999,
+        663.1559896850586
+      ],
+      "filename": "a85dc8afbc4000146d6977e2a3c48fd89823325df0d4b6e65c0d49d0e1bea805.jpg",
+      "sha256": "a85dc8afbc4000146d6977e2a3c48fd89823325df0d4b6e65c0d49d0e1bea805",
+      "bytes": 36828,
+      "width": 517,
+      "height": 429,
+      "alt": "Conductivity of a salt solution",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a85dc8afbc4000146d6977e2a3c48fd89823325df0d4b6e65c0d49d0e1bea805.jpg"
+    },
+    {
+      "key": "CH03_3.9",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        11.52,
+        31.39199951171875,
+        144,
+        329.6159948730469
+      ],
+      "filename": "bef78b4180b246a4be005311ea501712b5f4fbe516e5c0aa38e368ffc25ddf9e.jpg",
+      "sha256": "bef78b4180b246a4be005311ea501712b5f4fbe516e5c0aa38e368ffc25ddf9e",
+      "bytes": 42935,
+      "width": 372,
+      "height": 836,
+      "alt": "Reactivity series linked to metal extraction methods",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bef78b4180b246a4be005311ea501712b5f4fbe516e5c0aa38e368ffc25ddf9e.jpg"
+    },
+    {
+      "key": "CH03_3.10",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        161.28000000000003,
+        298.22399536132815,
+        472.32,
+        596.4479907226563
+      ],
+      "filename": "f495748717705258e920e18c30125f5de46c56750e96c2d48d1b30c24feb0872.jpg",
+      "sha256": "f495748717705258e920e18c30125f5de46c56750e96c2d48d1b30c24feb0872",
+      "bytes": 95326,
+      "width": 872,
+      "height": 836,
+      "alt": "Steps in extraction of metals from ores",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f495748717705258e920e18c30125f5de46c56750e96c2d48d1b30c24feb0872.jpg"
+    },
+    {
+      "key": "CH03_3.11",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 16,
+      "crop_points": [
+        23.04,
+        109.87199829101563,
+        172.79999999999998,
+        251.13599609375
+      ],
+      "filename": "15cc8160bda38ae358f5790df11d0a5b88b9ea3a45c78eed99404abf9e8e0c6d.jpg",
+      "sha256": "15cc8160bda38ae358f5790df11d0a5b88b9ea3a45c78eed99404abf9e8e0c6d",
+      "bytes": 60952,
+      "width": 420,
+      "height": 397,
+      "alt": "Thermit welding of railway tracks",
+      "url": "https://projectaegis.fly.dev/source-assets/0/15cc8160bda38ae358f5790df11d0a5b88b9ea3a45c78eed99404abf9e8e0c6d.jpg"
+    },
+    {
+      "key": "CH03_3.12",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 16,
+      "crop_points": [
+        23.04,
+        470.87999267578124,
+        250.56,
+        627.839990234375
+      ],
+      "filename": "5141d4b18ec67c3db3d723474f8fd7ac64860b330188d92e2472035b2510bd44.jpg",
+      "sha256": "5141d4b18ec67c3db3d723474f8fd7ac64860b330188d92e2472035b2510bd44",
+      "bytes": 56736,
+      "width": 638,
+      "height": 440,
+      "alt": "Electrolytic refining of copper",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5141d4b18ec67c3db3d723474f8fd7ac64860b330188d92e2472035b2510bd44.jpg"
+    },
+    {
+      "key": "CH03_3.13",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 17,
+      "crop_points": [
+        336.96,
+        400.24799377441406,
+        567.36,
+        639.6119900512695
+      ],
+      "filename": "e81ffd3ee3be6c104562419750d5362f9e7a57e2da58149c16e83dfa0eceb222.jpg",
+      "sha256": "e81ffd3ee3be6c104562419750d5362f9e7a57e2da58149c16e83dfa0eceb222",
+      "bytes": 89662,
+      "width": 646,
+      "height": 671,
+      "alt": "Three conditions tested for rusting of iron",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e81ffd3ee3be6c104562419750d5362f9e7a57e2da58149c16e83dfa0eceb222.jpg"
+    },
+    {
+      "key": "CH03_table-oxides",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 19,
+      "crop_points": [
+        103.67999999999999,
+        125.567998046875,
+        420.48,
+        223.66799652099607
+      ],
+      "filename": "18e174e5983244221510cbb3b338a709e49f87d411a1610561700440b03e8715.jpg",
+      "sha256": "18e174e5983244221510cbb3b338a709e49f87d411a1610561700440b03e8715",
+      "bytes": 49657,
+      "width": 888,
+      "height": 276,
+      "alt": "Blank comparison table of metals and metal oxides",
+      "url": "https://projectaegis.fly.dev/source-assets/0/18e174e5983244221510cbb3b338a709e49f87d411a1610561700440b03e8715.jpg"
+    },
+    {
+      "key": "CH03_exercise9",
+      "source": "CH03_Metals and Non-metals.pdf",
+      "source_pdf_page": 21,
+      "crop_points": [
+        311.04,
+        149.11199768066408,
+        518.4,
+        408.09599365234374
+      ],
+      "filename": "f373b8df9ae66b58646bcc970daa12bcc4a0c6f4a81a2367a61074d54fc221d5.jpg",
+      "sha256": "f373b8df9ae66b58646bcc970daa12bcc4a0c6f4a81a2367a61074d54fc221d5",
+      "bytes": 61332,
+      "width": 582,
+      "height": 726,
+      "alt": "Collecting sulphur dioxide in an inverted test tube",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f373b8df9ae66b58646bcc970daa12bcc4a0c6f4a81a2367a61074d54fc221d5.jpg"
+    },
+    {
+      "key": "CH05_5.1",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 4,
+      "crop_points": [
+        40.32000000000001,
+        149.11199768066408,
+        264.96000000000004,
+        390.04559393310547
+      ],
+      "filename": "f5ee092a47e0109700f5713dc375be08c3a6cfa39529091fd2672f2f08baabd4.jpg",
+      "sha256": "f5ee092a47e0109700f5713dc375be08c3a6cfa39529091fd2672f2f08baabd4",
+      "bytes": 117535,
+      "width": 630,
+      "height": 676,
+      "alt": "Leaf cross-section showing chloroplast-containing cells",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f5ee092a47e0109700f5713dc375be08c3a6cfa39529091fd2672f2f08baabd4.jpg"
+    },
+    {
+      "key": "CH05_5.2",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 4,
+      "crop_points": [
+        40.32000000000001,
+        478.7279925537109,
+        155.52,
+        655.3079898071289
+      ],
+      "filename": "e3bf7abe7acefbe36e4fa4e22d5a34c3f432f920cb11bc77fbda2b661f902415.jpg",
+      "sha256": "e3bf7abe7acefbe36e4fa4e22d5a34c3f432f920cb11bc77fbda2b661f902415",
+      "bytes": 68088,
+      "width": 324,
+      "height": 495,
+      "alt": "Variegated leaf before and after starch testing",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e3bf7abe7acefbe36e4fa4e22d5a34c3f432f920cb11bc77fbda2b661f902415.jpg"
+    },
+    {
+      "key": "CH05_5.3",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        250.56,
+        58.859999084472655,
+        564.48,
+        235.43999633789062
+      ],
+      "filename": "1e342897426b2cb26f6c9a549b4130d6dc090ac1b65f437a154553c3c1627019.jpg",
+      "sha256": "1e342897426b2cb26f6c9a549b4130d6dc090ac1b65f437a154553c3c1627019",
+      "bytes": 118140,
+      "width": 880,
+      "height": 496,
+      "alt": "Open and closed stomata with guard cells",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1e342897426b2cb26f6c9a549b4130d6dc090ac1b65f437a154553c3c1627019.jpg"
+    },
+    {
+      "key": "CH05_5.4",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        244.79999999999998,
+        325.691994934082,
+        555.84,
+        514.0439920043946
+      ],
+      "filename": "a52989788cbb351306f3bc98e76c00e4867ddcff7a8b8ea47435f051c2a94af8.jpg",
+      "sha256": "a52989788cbb351306f3bc98e76c00e4867ddcff7a8b8ea47435f051c2a94af8",
+      "bytes": 109026,
+      "width": 872,
+      "height": 529,
+      "alt": "Bell-jar photosynthesis experiment with and without potassium hydroxide",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a52989788cbb351306f3bc98e76c00e4867ddcff7a8b8ea47435f051c2a94af8.jpg"
+    },
+    {
+      "key": "CH05_5.5",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        20.160000000000004,
+        392.3999938964844,
+        190.08,
+        604.2959906005859
+      ],
+      "filename": "65063880df30a08b991d5d6e0c0b5fbcd707f1c01951f05645160c2b8516e7c4.jpg",
+      "sha256": "65063880df30a08b991d5d6e0c0b5fbcd707f1c01951f05645160c2b8516e7c4",
+      "bytes": 62264,
+      "width": 477,
+      "height": 595,
+      "alt": "Nutrition and food-vacuole formation in Amoeba",
+      "url": "https://projectaegis.fly.dev/source-assets/0/65063880df30a08b991d5d6e0c0b5fbcd707f1c01951f05645160c2b8516e7c4.jpg"
+    },
+    {
+      "key": "CH05_5.6",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        256.32,
+        319.4135950317383,
+        541.4399999999999,
+        577.612791015625
+      ],
+      "filename": "1c589e80456d9ef7fe91c97c2abdf8798ec3470f4589030b59da2808ccc8e115.jpg",
+      "sha256": "1c589e80456d9ef7fe91c97c2abdf8798ec3470f4589030b59da2808ccc8e115",
+      "bytes": 119276,
+      "width": 800,
+      "height": 724,
+      "alt": "Labelled human alimentary canal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c589e80456d9ef7fe91c97c2abdf8798ec3470f4589030b59da2808ccc8e115.jpg"
+    },
+    {
+      "key": "CH05_5.7",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        270.71999999999997,
+        204.04799682617187,
+        552.96,
+        384.5519940185547
+      ],
+      "filename": "00a6d7a9af2f2bedf3a33b3d4a03af72cc907aed3ee29328ebbe45ddba8675e4.jpg",
+      "sha256": "00a6d7a9af2f2bedf3a33b3d4a03af72cc907aed3ee29328ebbe45ddba8675e4",
+      "bytes": 49862,
+      "width": 791,
+      "height": 506,
+      "alt": "Testing carbon dioxide in atmospheric and exhaled air",
+      "url": "https://projectaegis.fly.dev/source-assets/0/00a6d7a9af2f2bedf3a33b3d4a03af72cc907aed3ee29328ebbe45ddba8675e4.jpg"
+    },
+    {
+      "key": "CH05_5.8",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 10,
+      "crop_points": [
+        144,
+        188.3519970703125,
+        524.16,
+        345.31199462890623
+      ],
+      "filename": "fb41e6ed79c82adc413ec656f3f0f60cb1893a5d18c6292db8b345ed7987e5a0.jpg",
+      "sha256": "fb41e6ed79c82adc413ec656f3f0f60cb1893a5d18c6292db8b345ed7987e5a0",
+      "bytes": 75840,
+      "width": 1065,
+      "height": 440,
+      "alt": "Three pathways for the breakdown of glucose",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fb41e6ed79c82adc413ec656f3f0f60cb1893a5d18c6292db8b345ed7987e5a0.jpg"
+    },
+    {
+      "key": "CH05_5.9",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        51.839999999999996,
+        62.7839990234375,
+        518.4,
+        313.9199951171875
+      ],
+      "filename": "e95b5addeb2e60c327884fa1703f4171868cf73bde7c7dfcb8c1cec52cb601bb.jpg",
+      "sha256": "e95b5addeb2e60c327884fa1703f4171868cf73bde7c7dfcb8c1cec52cb601bb",
+      "bytes": 211858,
+      "width": 1307,
+      "height": 704,
+      "alt": "Labelled human respiratory system and alveoli",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e95b5addeb2e60c327884fa1703f4171868cf73bde7c7dfcb8c1cec52cb601bb.jpg"
+    },
+    {
+      "key": "CH05_5.10",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        14.4,
+        70.63199890136718,
+        316.8,
+        274.67999572753905
+      ],
+      "filename": "ba0d7e601523580d67fad8cff59ef1fade350e04e572ec9957c3250d67b767bd.jpg",
+      "sha256": "ba0d7e601523580d67fad8cff59ef1fade350e04e572ec9957c3250d67b767bd",
+      "bytes": 107628,
+      "width": 848,
+      "height": 573,
+      "alt": "Labelled sectional view of the human heart",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ba0d7e601523580d67fad8cff59ef1fade350e04e572ec9957c3250d67b767bd.jpg"
+    },
+    {
+      "key": "CH05_5.11",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        17.28,
+        415.9439935302735,
+        250.56,
+        619.9919903564453
+      ],
+      "filename": "0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30.jpg",
+      "sha256": "0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30",
+      "bytes": 111329,
+      "width": 654,
+      "height": 572,
+      "alt": "Double circulation and exchange of oxygen and carbon dioxide",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30.jpg"
+    },
+    {
+      "key": "CH05_5.12",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 17,
+      "crop_points": [
+        334.08,
+        302.14799530029296,
+        541.4399999999999,
+        502.2719921875
+      ],
+      "filename": "ff4f6f7b2662c8234358b927e846760944c1d69fa3d09fcd325e3853baa77a69.jpg",
+      "sha256": "ff4f6f7b2662c8234358b927e846760944c1d69fa3d09fcd325e3853baa77a69",
+      "bytes": 95067,
+      "width": 582,
+      "height": 561,
+      "alt": "Transpiration and upward movement of water in a tree",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ff4f6f7b2662c8234358b927e846760944c1d69fa3d09fcd325e3853baa77a69.jpg"
+    },
+    {
+      "key": "CH05_5.13",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 18,
+      "crop_points": [
+        40.32000000000001,
+        447.33599304199214,
+        253.44,
+        655.3079898071289
+      ],
+      "filename": "3682070b529fe6fd3c3f7e159fd21436eba6c079522ce54770ccf89d15a5939a.jpg",
+      "sha256": "3682070b529fe6fd3c3f7e159fd21436eba6c079522ce54770ccf89d15a5939a",
+      "bytes": 73977,
+      "width": 598,
+      "height": 583,
+      "alt": "Human kidneys, ureters, bladder and urethra",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3682070b529fe6fd3c3f7e159fd21436eba6c079522ce54770ccf89d15a5939a.jpg"
+    },
+    {
+      "key": "CH05_5.14",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 19,
+      "crop_points": [
+        339.84,
+        39.23999938964844,
+        552.96,
+        329.6159948730469
+      ],
+      "filename": "fa97c6712eb4770714c2dcda66031c5b3e00baf7fb976c3f268b60632c3d7f4e.jpg",
+      "sha256": "fa97c6712eb4770714c2dcda66031c5b3e00baf7fb976c3f268b60632c3d7f4e",
+      "bytes": 111884,
+      "width": 598,
+      "height": 814,
+      "alt": "Labelled structure of a nephron",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fa97c6712eb4770714c2dcda66031c5b3e00baf7fb976c3f268b60632c3d7f4e.jpg"
+    },
+    {
+      "key": "CH05_dialysis",
+      "source": "CH05_Life Processes.pdf",
+      "source_pdf_page": 19,
+      "crop_points": [
+        74.88,
+        455.1839929199218,
+        311.04,
+        690.6239892578125
+      ],
+      "filename": "90d9a7628e93ef9776e581c4a1fda920a2da9f77e3c3e1bd98bac28075ee6f51.jpg",
+      "sha256": "90d9a7628e93ef9776e581c4a1fda920a2da9f77e3c3e1bd98bac28075ee6f51",
+      "bytes": 150634,
+      "width": 662,
+      "height": 660,
+      "alt": "Artificial kidney and dialysis circulation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/90d9a7628e93ef9776e581c4a1fda920a2da9f77e3c3e1bd98bac28075ee6f51.jpg"
+    },
+    {
+      "key": "CH06_6.1",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 2,
+      "crop_points": [
+        276.48,
+        39.23999938964844,
+        541.4399999999999,
+        361.00799438476565
+      ],
+      "filename": "586c9b6e3e3d991a20bfaa0aa1cf01eef806c676090a48ff976337849e59e8ba.jpg",
+      "sha256": "586c9b6e3e3d991a20bfaa0aa1cf01eef806c676090a48ff976337849e59e8ba",
+      "bytes": 125732,
+      "width": 743,
+      "height": 902,
+      "alt": "Neuron and neuromuscular junction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/586c9b6e3e3d991a20bfaa0aa1cf01eef806c676090a48ff976337849e59e8ba.jpg"
+    },
+    {
+      "key": "CH06_6.2",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 4,
+      "crop_points": [
+        97.92,
+        47.08799926757813,
+        506.88,
+        298.22399536132815
+      ],
+      "filename": "45312a7e2f1b23bfe8a0a824483d1d82cfb3f65294544734c50667feedf8856f.jpg",
+      "sha256": "45312a7e2f1b23bfe8a0a824483d1d82cfb3f65294544734c50667feedf8856f",
+      "bytes": 117532,
+      "width": 1146,
+      "height": 705,
+      "alt": "Reflex arc from skin receptor through spinal cord to muscle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/45312a7e2f1b23bfe8a0a824483d1d82cfb3f65294544734c50667feedf8856f.jpg"
+    },
+    {
+      "key": "CH06_6.3",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        74.88,
+        188.3519970703125,
+        460.8,
+        439.4879931640625
+      ],
+      "filename": "6215f1b8d8ebc70edcf1ff1776ad41bd7319e91d6736f7bb10dc2eea2ce2cfe8.jpg",
+      "sha256": "6215f1b8d8ebc70edcf1ff1776ad41bd7319e91d6736f7bb10dc2eea2ce2cfe8",
+      "bytes": 181937,
+      "width": 1082,
+      "height": 704,
+      "alt": "Labelled regions of the human brain",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6215f1b8d8ebc70edcf1ff1776ad41bd7319e91d6736f7bb10dc2eea2ce2cfe8.jpg"
+    },
+    {
+      "key": "CH06_6.4",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        115.2,
+        266.83199584960937,
+        501.12,
+        396.32399383544924
+      ],
+      "filename": "1ebb6e864cbae28f4feff2ba8d97deae7b728046a7c0c52965ad4ebcefef31d5.jpg",
+      "sha256": "1ebb6e864cbae28f4feff2ba8d97deae7b728046a7c0c52965ad4ebcefef31d5",
+      "bytes": 103505,
+      "width": 1082,
+      "height": 363,
+      "alt": "Sensitive plant leaves before and after touch",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1ebb6e864cbae28f4feff2ba8d97deae7b728046a7c0c52965ad4ebcefef31d5.jpg"
+    },
+    {
+      "key": "CH06_6.5",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        316.8,
+        82.40399871826172,
+        564.48,
+        266.83199584960937
+      ],
+      "filename": "da57d2ed9ba1bc85f633eec80b77a34db098540595c54dabf2bb9402fbb66561.jpg",
+      "sha256": "da57d2ed9ba1bc85f633eec80b77a34db098540595c54dabf2bb9402fbb66561",
+      "bytes": 73916,
+      "width": 694,
+      "height": 518,
+      "alt": "Seedlings responding to light from one direction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/da57d2ed9ba1bc85f633eec80b77a34db098540595c54dabf2bb9402fbb66561.jpg"
+    },
+    {
+      "key": "CH06_6.6",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        334.08,
+        286.4519955444336,
+        564.48,
+        431.63999328613284
+      ],
+      "filename": "fcec3d9df2c52f54b392a7f1f61bfafc7337b1d03c8282a7a75fb4ad1b27523e.jpg",
+      "sha256": "fcec3d9df2c52f54b392a7f1f61bfafc7337b1d03c8282a7a75fb4ad1b27523e",
+      "bytes": 50438,
+      "width": 646,
+      "height": 407,
+      "alt": "Roots and shoots showing geotropism",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fcec3d9df2c52f54b392a7f1f61bfafc7337b1d03c8282a7a75fb4ad1b27523e.jpg"
+    },
+    {
+      "key": "CH06_6.7",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 11,
+      "crop_points": [
+        115.2,
+        39.23999938964844,
+        541.4399999999999,
+        361.00799438476565
+      ],
+      "filename": "7aab049e922703d543c698ddba3e0b3e2cce81797b20280aac351e28f785baff.jpg",
+      "sha256": "7aab049e922703d543c698ddba3e0b3e2cce81797b20280aac351e28f785baff",
+      "bytes": 190345,
+      "width": 1195,
+      "height": 902,
+      "alt": "Endocrine glands in male and female human bodies",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7aab049e922703d543c698ddba3e0b3e2cce81797b20280aac351e28f785baff.jpg"
+    },
+    {
+      "key": "CH06_table6.1",
+      "source": "CH06_Control and Coordination.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        80.64000000000001,
+        211.89599670410158,
+        547.1999999999999,
+        408.09599365234374
+      ],
+      "filename": "fdb7672aa14f721c6327c9778d95b76ab7b322a9734c60d2c613c6b148bf615e.jpg",
+      "sha256": "fdb7672aa14f721c6327c9778d95b76ab7b322a9734c60d2c613c6b148bf615e",
+      "bytes": 193254,
+      "width": 1308,
+      "height": 550,
+      "alt": "Textbook table of hormones, glands and functions with completion blanks",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fdb7672aa14f721c6327c9778d95b76ab7b322a9734c60d2c613c6b148bf615e.jpg"
+    }
+  ]
+}

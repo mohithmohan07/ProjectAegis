@@ -1,34 +1,29 @@
-name: Publish reviewed concept images only
-
+name: Publish remaining Science concept images only
 on:
   push:
-    branches: [codex/social-english-image-assets]
+    branches: [codex/science-concept-images-20260929]
     paths:
       - '.github/workflows/publish-concept-images.yml'
-      - 'backend/scripts/publish_concept_images.py'
-      - 'ops/concept-image-assets/2026-09-18/**'
-
+      - 'ops/concept-image-assets/2026-09-29-science/**'
 permissions:
   contents: read
-
 concurrency:
   group: fly-deploy
   cancel-in-progress: false
-
 jobs:
   publish-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Publish content-addressed crops and verify public URLs
+      - name: Publish content-addressed Science crops and verify public URLs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: python backend/scripts/publish_concept_images.py
+        run: python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-09-29-science
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
-          name: concept-image-url-verification
+          name: science-concept-image-url-verification
           path: image-url-verification.json
           if-no-files-found: error
