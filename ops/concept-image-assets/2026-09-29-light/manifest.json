@@ -1,0 +1,421 @@
+{
+  "schema": 1,
+  "offline_authoring": true,
+  "job_id": 0,
+  "assets": [
+    {
+      "key": "CH09_9.1",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 2,
+      "crop_points": [
+        357.12,
+        547.7903914794922,
+        535.104,
+        693.7631892089844
+      ],
+      "filename": "bf60a5ea6afcec7b96a0af34e4190edcd92b864025b1a0c2c9020f78c4fc08db.jpg",
+      "sha256": "bf60a5ea6afcec7b96a0af34e4190edcd92b864025b1a0c2c9020f78c4fc08db",
+      "bytes": 34532,
+      "width": 500,
+      "height": 410,
+      "alt": "Figure 9.1. Concave and convex spherical mirrors; the shaded side is non-reflecting.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf60a5ea6afcec7b96a0af34e4190edcd92b864025b1a0c2c9020f78c4fc08db.jpg"
+    },
+    {
+      "key": "CH09_9.2",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 3,
+      "crop_points": [
+        42.623999999999995,
+        455.9687929077148,
+        225.216,
+        694.5479891967774
+      ],
+      "filename": "0015fea1bd96c86606dae10ac9ecf0277439b029fe85eaa414d9c4b392d9eccb.jpg",
+      "sha256": "0015fea1bd96c86606dae10ac9ecf0277439b029fe85eaa414d9c4b392d9eccb",
+      "bytes": 65562,
+      "width": 512,
+      "height": 669,
+      "alt": "Figure 9.2. Principal focus and parallel rays for concave and convex mirrors, with pole, centre, aperture and focal points.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0015fea1bd96c86606dae10ac9ecf0277439b029fe85eaa414d9c4b392d9eccb.jpg"
+    },
+    {
+      "key": "CH09_T9.1",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        42.623999999999995,
+        158.5295975341797,
+        521.28,
+        347.66639459228514
+      ],
+      "filename": "491ea9b6618b6bb175fe691851d960b028411088cae7713063cafdada6dd4579.jpg",
+      "sha256": "491ea9b6618b6bb175fe691851d960b028411088cae7713063cafdada6dd4579",
+      "bytes": 210813,
+      "width": 1341,
+      "height": 531,
+      "alt": "Table 9.1. Concave-mirror image position, size and nature for six object positions.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/491ea9b6618b6bb175fe691851d960b028411088cae7713063cafdada6dd4579.jpg"
+    },
+    {
+      "key": "CH09_9.3",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        42.047999999999995,
+        561.9167912597655,
+        338.11199999999997,
+        693.7631892089844
+      ],
+      "filename": "f9244feecdd262ce18be736b8bacd9287ac5d70db60f99d9e69fa2703c7824de.jpg",
+      "sha256": "f9244feecdd262ce18be736b8bacd9287ac5d70db60f99d9e69fa2703c7824de",
+      "bytes": 38670,
+      "width": 830,
+      "height": 370,
+      "alt": "Figure 9.3. A ray parallel to the principal axis reflected by concave and convex mirrors.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f9244feecdd262ce18be736b8bacd9287ac5d70db60f99d9e69fa2703c7824de.jpg"
+    },
+    {
+      "key": "CH09_9.4",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        236.16,
+        66.70799896240234,
+        532.8000000000001,
+        225.237596496582
+      ],
+      "filename": "f085ff5c986905112bd55fe567de8b7ddf2569e57b06144f81b44c6015def265.jpg",
+      "sha256": "f085ff5c986905112bd55fe567de8b7ddf2569e57b06144f81b44c6015def265",
+      "bytes": 40755,
+      "width": 831,
+      "height": 445,
+      "alt": "Figure 9.4. Rays through or directed towards the principal focus emerge parallel after reflection.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f085ff5c986905112bd55fe567de8b7ddf2569e57b06144f81b44c6015def265.jpg"
+    },
+    {
+      "key": "CH09_9.5",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        236.16,
+        229.16159643554687,
+        532.8000000000001,
+        374.3495941772461
+      ],
+      "filename": "3c61a999cbe8549a57f8f52f24194c549ab08682a38464c4ef57d74de4463ee5.jpg",
+      "sha256": "3c61a999cbe8549a57f8f52f24194c549ab08682a38464c4ef57d74de4463ee5",
+      "bytes": 38186,
+      "width": 831,
+      "height": 408,
+      "alt": "Figure 9.5. Rays along a radius through the centre of curvature retrace their paths.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c61a999cbe8549a57f8f52f24194c549ab08682a38464c4ef57d74de4463ee5.jpg"
+    },
+    {
+      "key": "CH09_9.6",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        237.88799999999998,
+        451.259992980957,
+        533.376,
+        585.4607908935546
+      ],
+      "filename": "b2ac2cd0db7c659a87828c966e7c55f119cb28d2bbef733e29c109cc3341f8fe.jpg",
+      "sha256": "b2ac2cd0db7c659a87828c966e7c55f119cb28d2bbef733e29c109cc3341f8fe",
+      "bytes": 38411,
+      "width": 828,
+      "height": 377,
+      "alt": "Figure 9.6. Reflection at the pole of concave and convex mirrors with equal incident and reflected angles.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b2ac2cd0db7c659a87828c966e7c55f119cb28d2bbef733e29c109cc3341f8fe.jpg"
+    },
+    {
+      "key": "CH09_9.7",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        99.648,
+        64.35359899902345,
+        460.22400000000005,
+        398.67839379882815
+      ],
+      "filename": "dbcf54c9f8885fa629b82577e25a85575e6d64a9fe7de18657f25dc4d92b5c28.jpg",
+      "sha256": "dbcf54c9f8885fa629b82577e25a85575e6d64a9fe7de18657f25dc4d92b5c28",
+      "bytes": 136607,
+      "width": 1010,
+      "height": 937,
+      "alt": "Figure 9.7. All six concave-mirror image-formation ray diagrams, panels a to f.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dbcf54c9f8885fa629b82577e25a85575e6d64a9fe7de18657f25dc4d92b5c28.jpg"
+    },
+    {
+      "key": "CH09_9.8",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        70.848,
+        303.7175952758789,
+        528.768,
+        437.9183931884766
+      ],
+      "filename": "56cee8e57c54739b30f5014a28d75b0f57a3b9abca82c9e686c88bef33b642a0.jpg",
+      "sha256": "56cee8e57c54739b30f5014a28d75b0f57a3b9abca82c9e686c88bef33b642a0",
+      "bytes": 67780,
+      "width": 1283,
+      "height": 377,
+      "alt": "Figure 9.8. Convex-mirror images for an object at infinity and a finite distance.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/56cee8e57c54739b30f5014a28d75b0f57a3b9abca82c9e686c88bef33b642a0.jpg"
+    },
+    {
+      "key": "CH09_T9.2",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        58.176,
+        444.98159307861323,
+        535.104,
+        575.2583910522461
+      ],
+      "filename": "86ba0c39a8afa8a240b959437e1c5f1d3ac5cf44935cf27706ed00d06f4a7841.jpg",
+      "sha256": "86ba0c39a8afa8a240b959437e1c5f1d3ac5cf44935cf27706ed00d06f4a7841",
+      "bytes": 136588,
+      "width": 1337,
+      "height": 366,
+      "alt": "Table 9.2. Position, size and nature of images formed by a convex mirror.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/86ba0c39a8afa8a240b959437e1c5f1d3ac5cf44935cf27706ed00d06f4a7841.jpg"
+    },
+    {
+      "key": "CH09_9.9",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 10,
+      "crop_points": [
+        282.816,
+        149.11199768066408,
+        536.832,
+        354.7295944824219
+      ],
+      "filename": "a7f4a7731ee53868dedc4cc8447d08a565c4038c0c3d2fa8ed5cf27135747df6.jpg",
+      "sha256": "a7f4a7731ee53868dedc4cc8447d08a565c4038c0c3d2fa8ed5cf27135747df6",
+      "bytes": 63367,
+      "width": 713,
+      "height": 577,
+      "alt": "Figure 9.9. New Cartesian sign convention for spherical mirrors, including the incident-light direction and height signs.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a7f4a7731ee53868dedc4cc8447d08a565c4038c0c3d2fa8ed5cf27135747df6.jpg"
+    },
+    {
+      "key": "CH09_9.10",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        288.576,
+        369.6407942504883,
+        536.832,
+        616.0679904174805
+      ],
+      "filename": "f62f8e97d1795066598717131532e3ed989dfbc934d09ade27324e315a08b644.jpg",
+      "sha256": "f62f8e97d1795066598717131532e3ed989dfbc934d09ade27324e315a08b644",
+      "bytes": 58623,
+      "width": 696,
+      "height": 691,
+      "alt": "Figure 9.10. Refraction through a rectangular glass slab, with normals, incident, refracted and emergent rays and lateral shift.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f62f8e97d1795066598717131532e3ed989dfbc934d09ade27324e315a08b644.jpg"
+    },
+    {
+      "key": "CH09_9.11",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 15,
+      "crop_points": [
+        43.775999999999996,
+        494.42399230957034,
+        221.76,
+        648.2447899169922
+      ],
+      "filename": "b9a9d220da8884d067e162541da942082558481286b50578f45f3f4260fb44f9.jpg",
+      "sha256": "b9a9d220da8884d067e162541da942082558481286b50578f45f3f4260fb44f9",
+      "bytes": 30781,
+      "width": 499,
+      "height": 432,
+      "alt": "Figure 9.11. A ray entering medium 2 from medium 1, with incidence and refraction angles.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b9a9d220da8884d067e162541da942082558481286b50578f45f3f4260fb44f9.jpg"
+    },
+    {
+      "key": "CH09_T9.3",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 16,
+      "crop_points": [
+        57.6,
+        225.237596496582,
+        418.176,
+        484.2215924682617
+      ],
+      "filename": "2869fdb95c0eeec6b9e2f157a89a032f62136c062eb07e92cffdaec35c5cf1c4.jpg",
+      "sha256": "2869fdb95c0eeec6b9e2f157a89a032f62136c062eb07e92cffdaec35c5cf1c4",
+      "bytes": 149713,
+      "width": 1010,
+      "height": 726,
+      "alt": "Table 9.3. Absolute refractive indices of the sixteen listed material media.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2869fdb95c0eeec6b9e2f157a89a032f62136c062eb07e92cffdaec35c5cf1c4.jpg"
+    },
+    {
+      "key": "CH09_9.12",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 17,
+      "crop_points": [
+        43.775999999999996,
+        381.4127940673828,
+        267.264,
+        646.6751899414062
+      ],
+      "filename": "445907375ae056dfbc314cade5cc0cc41d0bf44f74f96c31cd76b72bfacea026.jpg",
+      "sha256": "445907375ae056dfbc314cade5cc0cc41d0bf44f74f96c31cd76b72bfacea026",
+      "bytes": 78635,
+      "width": 627,
+      "height": 744,
+      "alt": "Figure 9.12. Converging action of a convex lens and diverging action of a concave lens, with centres and focal points.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/445907375ae056dfbc314cade5cc0cc41d0bf44f74f96c31cd76b72bfacea026.jpg"
+    },
+    {
+      "key": "CH09_T9.4",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 19,
+      "crop_points": [
+        43.199999999999996,
+        415.9439935302735,
+        521.28,
+        642.7511900024414
+      ],
+      "filename": "5851e9bacfab04e8e5d7cb4b817f8633a25d959257addb31c34f183c49972039.jpg",
+      "sha256": "5851e9bacfab04e8e5d7cb4b817f8633a25d959257addb31c34f183c49972039",
+      "bytes": 222883,
+      "width": 1340,
+      "height": 636,
+      "alt": "Table 9.4. Convex-lens image position, size and nature for six object positions.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5851e9bacfab04e8e5d7cb4b817f8633a25d959257addb31c34f183c49972039.jpg"
+    },
+    {
+      "key": "CH09_T9.5",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 20,
+      "crop_points": [
+        58.176,
+        247.99679614257812,
+        535.104,
+        396.32399383544924
+      ],
+      "filename": "a1bf4948afc4bd3287d27b5005d3dfd63558478d912a0d48c1b51047a1c07e4c.jpg",
+      "sha256": "a1bf4948afc4bd3287d27b5005d3dfd63558478d912a0d48c1b51047a1c07e4c",
+      "bytes": 148439,
+      "width": 1337,
+      "height": 416,
+      "alt": "Table 9.5. Concave-lens image position, size and nature for distant and finite objects.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a1bf4948afc4bd3287d27b5005d3dfd63558478d912a0d48c1b51047a1c07e4c.jpg"
+    },
+    {
+      "key": "CH09_9.13",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 20,
+      "crop_points": [
+        185.472,
+        558.7775913085937,
+        533.952,
+        693.7631892089844
+      ],
+      "filename": "3057051b65d2f623299c13728116d9d3bea788df7dbc8a7d8b08dfb42c8ae384.jpg",
+      "sha256": "3057051b65d2f623299c13728116d9d3bea788df7dbc8a7d8b08dfb42c8ae384",
+      "bytes": 30289,
+      "width": 977,
+      "height": 379,
+      "alt": "Figure 9.13. Parallel rays refracted through a convex lens and diverged by a concave lens.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3057051b65d2f623299c13728116d9d3bea788df7dbc8a7d8b08dfb42c8ae384.jpg"
+    },
+    {
+      "key": "CH09_9.14",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 21,
+      "crop_points": [
+        45.504,
+        62.7839990234375,
+        363.456,
+        192.27599700927735
+      ],
+      "filename": "7658124de50e8f6a1e312f3696f2a2dd6658df6f78c5b8e86b27f0f43889b069.jpg",
+      "sha256": "7658124de50e8f6a1e312f3696f2a2dd6658df6f78c5b8e86b27f0f43889b069",
+      "bytes": 29100,
+      "width": 891,
+      "height": 364,
+      "alt": "Figure 9.14. Rays through or directed towards the appropriate lens focus emerge parallel to the principal axis.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7658124de50e8f6a1e312f3696f2a2dd6658df6f78c5b8e86b27f0f43889b069.jpg"
+    },
+    {
+      "key": "CH09_9.15",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 21,
+      "crop_points": [
+        44.352,
+        218.17439660644533,
+        355.968,
+        333.5399948120117
+      ],
+      "filename": "1c2702f93b2eb01068fd8240fb122f4009b14bf115e4b15624848853e0f3b50a.jpg",
+      "sha256": "1c2702f93b2eb01068fd8240fb122f4009b14bf115e4b15624848853e0f3b50a",
+      "bytes": 28878,
+      "width": 873,
+      "height": 324,
+      "alt": "Figure 9.15. A ray through the optical centre emerges without deviation in the thin-lens model.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c2702f93b2eb01068fd8240fb122f4009b14bf115e4b15624848853e0f3b50a.jpg"
+    },
+    {
+      "key": "CH09_9.16a-d",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 21,
+      "crop_points": [
+        70.848,
+        423.0071934204102,
+        494.784,
+        699.2567891235352
+      ],
+      "filename": "bf23a045f6da01a965f3a9a58956f844126742797b4e71957b43c96d353dfefa.jpg",
+      "sha256": "bf23a045f6da01a965f3a9a58956f844126742797b4e71957b43c96d353dfefa",
+      "bytes": 114042,
+      "width": 1188,
+      "height": 774,
+      "alt": "Figure 9.16, panels a to d. Convex-lens images for objects at infinity, beyond twice the focal length, at twice the focal length, and between one and two focal lengths.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf23a045f6da01a965f3a9a58956f844126742797b4e71957b43c96d353dfefa.jpg"
+    },
+    {
+      "key": "CH09_9.16e-f",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 22,
+      "crop_points": [
+        96.768,
+        65.13839898681641,
+        482.11199999999997,
+        237.79439630126953
+      ],
+      "filename": "23f8834553a3b9dda314a87b991c6c5ba651b1ae458dcb39a5f874ff64f06d16.jpg",
+      "sha256": "23f8834553a3b9dda314a87b991c6c5ba651b1ae458dcb39a5f874ff64f06d16",
+      "bytes": 74713,
+      "width": 1080,
+      "height": 484,
+      "alt": "Figure 9.16, panels e and f. Convex-lens images when the object is at the focus or between the focus and optical centre.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/23f8834553a3b9dda314a87b991c6c5ba651b1ae458dcb39a5f874ff64f06d16.jpg"
+    },
+    {
+      "key": "CH09_9.17",
+      "source": "jesc109(1).pdf",
+      "source_pdf_page": 22,
+      "crop_points": [
+        72.576,
+        249.56639611816408,
+        512.064,
+        391.6151939086914
+      ],
+      "filename": "b141ae4f8690c433cbaf7e4ce28c466730f89260d706e6a23add60726dd8409e.jpg",
+      "sha256": "b141ae4f8690c433cbaf7e4ce28c466730f89260d706e6a23add60726dd8409e",
+      "bytes": 72710,
+      "width": 1231,
+      "height": 399,
+      "alt": "Figure 9.17. Concave-lens ray diagrams for an object at infinity and a finite distance.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b141ae4f8690c433cbaf7e4ce28c466730f89260d706e6a23add60726dd8409e.jpg"
+    }
+  ]
+}
