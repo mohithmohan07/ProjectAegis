@@ -388,7 +388,7 @@
       "crop_points": [
         23.04,
         431.63999328613284,
-        288,
+        288.0,
         627.839990234375
       ],
       "filename": "105192685a1bb00f50b1e37243b651661dbdde394709307ab7e65f415381a296.jpg",
@@ -550,7 +550,7 @@
       "crop_points": [
         11.52,
         31.39199951171875,
-        144,
+        144.0,
         329.6159948730469
       ],
       "filename": "bef78b4180b246a4be005311ea501712b5f4fbe516e5c0aa38e368ffc25ddf9e.jpg",
@@ -800,7 +800,7 @@
       "source": "CH05_Life Processes.pdf",
       "source_pdf_page": 10,
       "crop_points": [
-        144,
+        144.0,
         188.3519970703125,
         524.16,
         345.31199462890623
@@ -856,16 +856,16 @@
       "crop_points": [
         17.28,
         415.9439935302735,
-        250.56,
+        264.384,
         619.9919903564453
       ],
-      "filename": "0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30.jpg",
-      "sha256": "0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30",
-      "bytes": 111329,
-      "width": 654,
+      "filename": "c25952134547773490eb79050ce9f6ac5e3158092543774fe9e14da5618bc267.jpg",
+      "sha256": "c25952134547773490eb79050ce9f6ac5e3158092543774fe9e14da5618bc267",
+      "bytes": 112966,
+      "width": 693,
       "height": 572,
       "alt": "Double circulation and exchange of oxygen and carbon dioxide",
-      "url": "https://projectaegis.fly.dev/source-assets/0/0eda2abf4f8f2ea91c83b1610c52f14b10a9a564c103cb0844ede64b53ee3d30.jpg"
+      "url": "https://projectaegis.fly.dev/source-assets/0/c25952134547773490eb79050ce9f6ac5e3158092543774fe9e14da5618bc267.jpg"
     },
     {
       "key": "CH05_5.12",
