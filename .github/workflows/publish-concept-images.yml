@@ -1,10 +1,10 @@
-name: Publish Electricity concept images only
+name: Publish Science Master answer images
 on:
   push:
-    branches: [codex/electricity-concept-images-20260930]
+    branches: [codex/science-master-answer-images-20260930]
     paths:
       - '.github/workflows/publish-concept-images.yml'
-      - 'ops/concept-image-assets/2026-09-30-electricity/**'
+      - 'ops/science-master-answer-images/2026-09-30/**'
 permissions:
   contents: read
 concurrency:
@@ -13,17 +13,16 @@ concurrency:
 jobs:
   publish-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Publish content-addressed Electricity crops and verify public URLs
+      - name: Publish the nine reviewed answer diagrams and graph
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-09-30-electricity
-      - name: Save verification receipt
-        uses: actions/upload-artifact@v4
+        run: python backend/scripts/publish_concept_images.py --assets ops/science-master-answer-images/2026-09-30
+      - uses: actions/upload-artifact@v4
         with:
-          name: electricity-concept-image-url-verification
+          name: science-master-image-verification
           path: image-url-verification.json
           if-no-files-found: error

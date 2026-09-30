@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "key": "series-three-cells",
+      "filename": "191fbbfcd895fca15f50afbcfbed3ad1c858299ef2b3a9debd4326b2516dc892.jpg",
+      "sha256": "191fbbfcd895fca15f50afbcfbed3ad1c858299ef2b3a9debd4326b2516dc892",
+      "bytes": 59996,
+      "width": 1226,
+      "height": 682,
+      "alt": "Series circuit with three 2 V cells, 5, 8 and 12 ohm resistors and closed key.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/191fbbfcd895fca15f50afbcfbed3ad1c858299ef2b3a9debd4326b2516dc892.jpg"
+    },
+    {
+      "key": "series-three-cells-meters",
+      "filename": "ec72ce1b364ad1508164a4f9ae59ff097b2b320121d3081d0fe749391a80f123.jpg",
+      "sha256": "ec72ce1b364ad1508164a4f9ae59ff097b2b320121d3081d0fe749391a80f123",
+      "bytes": 64996,
+      "width": 954,
+      "height": 682,
+      "alt": "Series circuit with three 2 V cells, 5, 8 and 12 ohm resistors and closed key; series ammeter and voltmeter across 12 ohms.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ec72ce1b364ad1508164a4f9ae59ff097b2b320121d3081d0fe749391a80f123.jpg"
+    },
+    {
+      "key": "network-four-ohm",
+      "filename": "30a85226e0877a5c651269e9433cbde1e87f4aa91126b7d0f54d73079f90a861.jpg",
+      "sha256": "30a85226e0877a5c651269e9433cbde1e87f4aa91126b7d0f54d73079f90a861",
+      "bytes": 38070,
+      "width": 1015,
+      "height": 481,
+      "alt": "2 Ω in series with (3 Ω parallel 6 Ω): 4 Ω",
+      "url": "https://projectaegis.fly.dev/source-assets/0/30a85226e0877a5c651269e9433cbde1e87f4aa91126b7d0f54d73079f90a861.jpg"
+    },
+    {
+      "key": "network-one-ohm",
+      "filename": "6716ee33c7eacc402de1f9b6c4afd6b4134b47ae3ebaa9b7e8977d3fc32364db.jpg",
+      "sha256": "6716ee33c7eacc402de1f9b6c4afd6b4134b47ae3ebaa9b7e8977d3fc32364db",
+      "bytes": 38923,
+      "width": 1015,
+      "height": 481,
+      "alt": "2 Ω, 3 Ω and 6 Ω in parallel: 1 Ω",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6716ee33c7eacc402de1f9b6c4afd6b4134b47ae3ebaa9b7e8977d3fc32364db.jpg"
+    },
+    {
+      "key": "network-nine-ohm",
+      "filename": "5d679bb0f62de685fe1f5d8c4d4dc65c02b6fac5440d3c5237453c9beb0a4fed.jpg",
+      "sha256": "5d679bb0f62de685fe1f5d8c4d4dc65c02b6fac5440d3c5237453c9beb0a4fed",
+      "bytes": 38333,
+      "width": 1015,
+      "height": 481,
+      "alt": "6 Ω in series with (6 Ω parallel 6 Ω): 9 Ω",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5d679bb0f62de685fe1f5d8c4d4dc65c02b6fac5440d3c5237453c9beb0a4fed.jpg"
+    },
+    {
+      "key": "network-six-six-four",
+      "filename": "2b282a19482d2db2f2a5d1b612f38762a0e15063380c39a37285c612399e9cbc.jpg",
+      "sha256": "2b282a19482d2db2f2a5d1b612f38762a0e15063380c39a37285c612399e9cbc",
+      "bytes": 35649,
+      "width": 1015,
+      "height": 481,
+      "alt": "(6 Ω + 6 Ω) in parallel with 6 Ω: 4 Ω",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2b282a19482d2db2f2a5d1b612f38762a0e15063380c39a37285c612399e9cbc.jpg"
+    },
+    {
+      "key": "concave-lens-30",
+      "filename": "565835ee016ce2fca98ae837f76ec816d4839e5067f519cc11a74027242206e5.jpg",
+      "sha256": "565835ee016ce2fca98ae837f76ec816d4839e5067f519cc11a74027242206e5",
+      "bytes": 73183,
+      "width": 1483,
+      "height": 689,
+      "alt": "Calculated ray diagram: concave lens with object 30 cm in front, virtual image 10 cm in front.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/565835ee016ce2fca98ae837f76ec816d4839e5067f519cc11a74027242206e5.jpg"
+    },
+    {
+      "key": "convex-lens-25",
+      "filename": "8872856b603d4f0db8ec4d5d4e5f97b4eb93104d301f6b5b1fa56e6d8111741b.jpg",
+      "sha256": "8872856b603d4f0db8ec4d5d4e5f97b4eb93104d301f6b5b1fa56e6d8111741b",
+      "bytes": 74709,
+      "width": 1483,
+      "height": 689,
+      "alt": "Calculated ray diagram: convex lens with 5 cm object 25 cm in front and inverted image 16.67 cm beyond.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8872856b603d4f0db8ec4d5d4e5f97b4eb93104d301f6b5b1fa56e6d8111741b.jpg"
+    },
+    {
+      "key": "ohm-graph",
+      "filename": "b0a8a6f22cab91c083f40c72561f050db7958fc11e993b9174797a61d29b4ac9.jpg",
+      "sha256": "b0a8a6f22cab91c083f40c72561f050db7958fc11e993b9174797a61d29b4ac9",
+      "bytes": 116105,
+      "width": 1178,
+      "height": 810,
+      "alt": "V versus I graph of the five supplied measurements, with best-fit resistance approximately 3.34 ohms.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b0a8a6f22cab91c083f40c72561f050db7958fc11e993b9174797a61d29b4ac9.jpg"
+    }
+  ]
+}
