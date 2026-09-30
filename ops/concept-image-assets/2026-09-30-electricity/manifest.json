@@ -260,18 +260,18 @@
       "source": "jesc111.pdf",
       "source_pdf_page": 17,
       "crop_points": [
-        376.12800000000004,
+        366.91200000000003,
         331.1855948486328,
         532.224,
         565.8407911987305
       ],
-      "filename": "05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29.jpg",
-      "sha256": "05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29",
-      "bytes": 47814,
-      "width": 438,
+      "filename": "79cc0663c50d98784c75b004d69cbd2f1626062bcfada3da0d877a252548e077.jpg",
+      "sha256": "79cc0663c50d98784c75b004d69cbd2f1626062bcfada3da0d877a252548e077",
+      "bytes": 49672,
+      "width": 464,
       "height": 658,
       "alt": "Figure 11.12. Two parallel resistor groups connected in series to a battery, used in Example 11.9.",
-      "url": "https://projectaegis.fly.dev/source-assets/0/05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29.jpg"
+      "url": "https://projectaegis.fly.dev/source-assets/0/79cc0663c50d98784c75b004d69cbd2f1626062bcfada3da0d877a252548e077.jpg"
     },
     {
       "key": "CH11_11.13",
