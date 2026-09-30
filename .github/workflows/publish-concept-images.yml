@@ -1,12 +1,12 @@
-name: Publish reviewed remaining Class 10 Mathematics concept images only
+name: Publish Class 10 Mathematics Pre Master diagrams only
 
 on:
   push:
-    branches: [codex/math-remaining-concept-image-assets-20260929]
+    branches: [codex/math-pre-master-image-assets-20260930]
     paths:
       - '.github/workflows/publish-concept-images.yml'
       - 'backend/scripts/publish_concept_images.py'
-      - 'ops/concept-image-assets/math-remaining-2026-09-29.zip'
+      - 'ops/concept-image-assets/math-pre-master-2026-09-30.zip'
 
 permissions:
   contents: read
@@ -22,15 +22,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Publish content-addressed crops and verify public URLs
+      - name: Publish diagrams and verify public URLs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
-          python -m zipfile -e ops/concept-image-assets/math-remaining-2026-09-29.zip /tmp/math-remaining-assets
-          python backend/scripts/publish_concept_images.py --assets /tmp/math-remaining-assets
+          python -m zipfile -e ops/concept-image-assets/math-pre-master-2026-09-30.zip /tmp/math-pre-master-assets
+          python backend/scripts/publish_concept_images.py --assets /tmp/math-pre-master-assets
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
-          name: math-remaining-concept-image-url-verification
+          name: math-pre-master-image-url-verification
           path: image-url-verification.json
           if-no-files-found: error
