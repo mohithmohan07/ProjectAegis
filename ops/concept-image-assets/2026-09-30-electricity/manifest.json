@@ -1,0 +1,295 @@
+{
+  "schema": 1,
+  "offline_authoring": true,
+  "job_id": 0,
+  "assets": [
+    {
+      "key": "CH11_11.1",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 2,
+      "crop_points": [
+        43.199999999999996,
+        241.71839624023437,
+        256.32,
+        417.5135935058594
+      ],
+      "filename": "78cc291d03c120f3175763f17a407b398d56916c6a5637569ac9409a21a7167c.jpg",
+      "sha256": "78cc291d03c120f3175763f17a407b398d56916c6a5637569ac9409a21a7167c",
+      "bytes": 40896,
+      "width": 598,
+      "height": 494,
+      "alt": "Figure 11.1. Cell, bulb, ammeter and plug key in a closed circuit, with conventional-current arrows.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/78cc291d03c120f3175763f17a407b398d56916c6a5637569ac9409a21a7167c.jpg"
+    },
+    {
+      "key": "CH11_T11.1a",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 4,
+      "crop_points": [
+        43.199999999999996,
+        404.1719937133789,
+        520.128,
+        696.1175891723633
+      ],
+      "filename": "bcfec53257a07624da8e318a44f297720f85cf5cc191c686f085e798ad2e259a.jpg",
+      "sha256": "bcfec53257a07624da8e318a44f297720f85cf5cc191c686f085e798ad2e259a",
+      "bytes": 148290,
+      "width": 1337,
+      "height": 819,
+      "alt": "Table 11.1, rows 1 to 6. Symbols for a cell, battery, open and closed switches, a wire joint and unconnected crossing wires.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bcfec53257a07624da8e318a44f297720f85cf5cc191c686f085e798ad2e259a.jpg"
+    },
+    {
+      "key": "CH11_T11.1b",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        57.024,
+        65.13839898681641,
+        534.528,
+        261.3383959350586
+      ],
+      "filename": "78d7dd3181e1e4643a0ed237b8876d14454d9b07c01eb4a15087c235ae6d74d7.jpg",
+      "sha256": "78d7dd3181e1e4643a0ed237b8876d14454d9b07c01eb4a15087c235ae6d74d7",
+      "bytes": 96615,
+      "width": 1338,
+      "height": 550,
+      "alt": "Table 11.1, rows 7 to 11. Symbols for a bulb, resistor, variable resistor, ammeter and voltmeter.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/78d7dd3181e1e4643a0ed237b8876d14454d9b07c01eb4a15087c235ae6d74d7.jpg"
+    },
+    {
+      "key": "CH11_11.2",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 5,
+      "crop_points": [
+        299.52,
+        328.8311948852539,
+        528.768,
+        482.6519924926758
+      ],
+      "filename": "0e054b26f111fd6d53fa9156dbc45d950d7c0b3d66d678fa99f97b8c97e5240e.jpg",
+      "sha256": "0e054b26f111fd6d53fa9156dbc45d950d7c0b3d66d678fa99f97b8c97e5240e",
+      "bytes": 48894,
+      "width": 643,
+      "height": 432,
+      "alt": "Figure 11.2. Ohm's-law circuit with a series ammeter and a voltmeter across the nichrome wire.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0e054b26f111fd6d53fa9156dbc45d950d7c0b3d66d678fa99f97b8c97e5240e.jpg"
+    },
+    {
+      "key": "CH11_11.3",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 6,
+      "crop_points": [
+        41.471999999999994,
+        67.49279895019531,
+        213.696,
+        299.79359533691405
+      ],
+      "filename": "397d8bf274a4db39dd73511fdfae41611eba4313333caa78fbdb8e2f1a7bec02.jpg",
+      "sha256": "397d8bf274a4db39dd73511fdfae41611eba4313333caa78fbdb8e2f1a7bec02",
+      "bytes": 68241,
+      "width": 483,
+      "height": 652,
+      "alt": "Figure 11.3. Potential difference on the vertical axis against current on the horizontal axis for nichrome; the straight line passes through the origin.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/397d8bf274a4db39dd73511fdfae41611eba4313333caa78fbdb8e2f1a7bec02.jpg"
+    },
+    {
+      "key": "CH11_11.4",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 7,
+      "crop_points": [
+        76.03200000000001,
+        81.61919873046875,
+        510.91200000000003,
+        236.2247963256836
+      ],
+      "filename": "8d0b3deb5925b0b4804121bc7a6902dee91ebb377c6352e7e262854d391fa2d6.jpg",
+      "sha256": "8d0b3deb5925b0b4804121bc7a6902dee91ebb377c6352e7e262854d391fa2d6",
+      "bytes": 58316,
+      "width": 1219,
+      "height": 434,
+      "alt": "Figure 11.4. Circuit with gap XY and alternative nichrome wire, 10 W bulb and torch bulb for comparing current.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8d0b3deb5925b0b4804121bc7a6902dee91ebb377c6352e7e262854d391fa2d6.jpg"
+    },
+    {
+      "key": "CH11_11.5",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 8,
+      "crop_points": [
+        50.687999999999995,
+        76.12559881591797,
+        513.216,
+        220.52879656982424
+      ],
+      "filename": "0330ff6c58a685be01b2df538d9c2ca5f29255ca4eca7e1533bafecf0dc113e2.jpg",
+      "sha256": "0330ff6c58a685be01b2df538d9c2ca5f29255ca4eca7e1533bafecf0dc113e2",
+      "bytes": 63645,
+      "width": 1297,
+      "height": 405,
+      "alt": "Figure 11.5. Circuit for comparing wire length, cross-sectional area and material while measuring current.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0330ff6c58a685be01b2df538d9c2ca5f29255ca4eca7e1533bafecf0dc113e2.jpg"
+    },
+    {
+      "key": "CH11_T11.2",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 9,
+      "crop_points": [
+        58.176,
+        193.84559698486328,
+        418.176,
+        501.48719219970707
+      ],
+      "filename": "88607a1dba10286f6002644e9187ba950ee32ddbf54c1c8260b25f74609b7ad2.jpg",
+      "sha256": "88607a1dba10286f6002644e9187ba950ee32ddbf54c1c8260b25f74609b7ad2",
+      "bytes": 216996,
+      "width": 1009,
+      "height": 863,
+      "alt": "Table 11.2. Electrical resistivity of the listed substances at 20 degrees Celsius, reproduced from the supplied textbook.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/88607a1dba10286f6002644e9187ba950ee32ddbf54c1c8260b25f74609b7ad2.jpg"
+    },
+    {
+      "key": "CH11_11.6",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 11,
+      "crop_points": [
+        117.50399999999999,
+        532.8791917114258,
+        358.272,
+        693.7631892089844
+      ],
+      "filename": "fdd1f71074a810cc49c3abd152d6fa162694928ebfa94998fca0a49d15b18412.jpg",
+      "sha256": "fdd1f71074a810cc49c3abd152d6fa162694928ebfa94998fca0a49d15b18412",
+      "bytes": 36616,
+      "width": 675,
+      "height": 451,
+      "alt": "Figure 11.6. Three series resistors with an ammeter in the main loop and voltmeter across the complete combination.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fdd1f71074a810cc49c3abd152d6fa162694928ebfa94998fca0a49d15b18412.jpg"
+    },
+    {
+      "key": "CH11_11.7",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 12,
+      "crop_points": [
+        216,
+        126.35279803466797,
+        463.10400000000004,
+        309.2111951904297
+      ],
+      "filename": "51233d4159d653fcb1a25a2223e67d9a63f08f67d991dc23e951962f9380b8f9.jpg",
+      "sha256": "51233d4159d653fcb1a25a2223e67d9a63f08f67d991dc23e951962f9380b8f9",
+      "bytes": 44223,
+      "width": 693,
+      "height": 513,
+      "alt": "Figure 11.7. Three parallel resistors between the same junctions, with a voltmeter across them and an ammeter measuring total current.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/51233d4159d653fcb1a25a2223e67d9a63f08f67d991dc23e951962f9380b8f9.jpg"
+    },
+    {
+      "key": "CH11_11.8",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 13,
+      "crop_points": [
+        101.952,
+        207.97199676513674,
+        369.216,
+        403.387193725586
+      ],
+      "filename": "8379c9fc28a34e9d64ecedf15ea44c7034ea6be51c6735453edb778620ee983c.jpg",
+      "sha256": "8379c9fc28a34e9d64ecedf15ea44c7034ea6be51c6735453edb778620ee983c",
+      "bytes": 52590,
+      "width": 749,
+      "height": 548,
+      "alt": "Figure 11.8. Voltage measurements across each of three series resistors.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8379c9fc28a34e9d64ecedf15ea44c7034ea6be51c6735453edb778620ee983c.jpg"
+    },
+    {
+      "key": "CH11_11.9",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 14,
+      "crop_points": [
+        152.64000000000001,
+        330.4007948608398,
+        409.536,
+        524.2463918457031
+      ],
+      "filename": "d929c4b69caa3a8219e9f433862d484d5265c4e942702a09638327e674f6bb28.jpg",
+      "sha256": "d929c4b69caa3a8219e9f433862d484d5265c4e942702a09638327e674f6bb28",
+      "bytes": 53620,
+      "width": 720,
+      "height": 543,
+      "alt": "Figure 11.9. A lamp in series with a 4 ohm resistor and a 6 V battery, used in Example 11.7.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d929c4b69caa3a8219e9f433862d484d5265c4e942702a09638327e674f6bb28.jpg"
+    },
+    {
+      "key": "CH11_11.10",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 15,
+      "crop_points": [
+        304.704,
+        521.8919918823242,
+        530.496,
+        689.8391892700196
+      ],
+      "filename": "6bcb4e91fcf34d0295ea6cc92d00926bb7e915537397b2ff4e2aa5c8d4d7d273.jpg",
+      "sha256": "6bcb4e91fcf34d0295ea6cc92d00926bb7e915537397b2ff4e2aa5c8d4d7d273",
+      "bytes": 38199,
+      "width": 633,
+      "height": 471,
+      "alt": "Figure 11.10. Three parallel resistor branches, a voltmeter across the combination and an ammeter in the supply line.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6bcb4e91fcf34d0295ea6cc92d00926bb7e915537397b2ff4e2aa5c8d4d7d273.jpg"
+    },
+    {
+      "key": "CH11_11.11",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 16,
+      "crop_points": [
+        120.96,
+        117.71999816894531,
+        406.65599999999995,
+        228.3767964477539
+      ],
+      "filename": "1d517fa75462eeeaa0565370b54f87d8076cf7dfd20ef65b31f326b4c2c8b986.jpg",
+      "sha256": "1d517fa75462eeeaa0565370b54f87d8076cf7dfd20ef65b31f326b4c2c8b986",
+      "bytes": 39071,
+      "width": 801,
+      "height": 311,
+      "alt": "Figure 11.11. Ammeter in the first parallel branch and labelled branch currents, with a voltmeter across the first resistor.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1d517fa75462eeeaa0565370b54f87d8076cf7dfd20ef65b31f326b4c2c8b986.jpg"
+    },
+    {
+      "key": "CH11_11.12",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 17,
+      "crop_points": [
+        376.12800000000004,
+        331.1855948486328,
+        532.224,
+        565.8407911987305
+      ],
+      "filename": "05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29.jpg",
+      "sha256": "05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29",
+      "bytes": 47814,
+      "width": 438,
+      "height": 658,
+      "alt": "Figure 11.12. Two parallel resistor groups connected in series to a battery, used in Example 11.9.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/05e950888c81b5b65c2999aacb488141da569394510b064cfcf8b5890f568d29.jpg"
+    },
+    {
+      "key": "CH11_11.13",
+      "source": "jesc111.pdf",
+      "source_pdf_page": 19,
+      "crop_points": [
+        312.192,
+        92.60639855957031,
+        535.104,
+        241.71839624023437
+      ],
+      "filename": "b9b8b6c44d8e517021520cd022688a67ae6da953dcd10f3f074a7ff49905f36d.jpg",
+      "sha256": "b9b8b6c44d8e517021520cd022688a67ae6da953dcd10f3f074a7ff49905f36d",
+      "bytes": 34431,
+      "width": 625,
+      "height": 418,
+      "alt": "Figure 11.13. A steady current through a purely resistive circuit, with ammeter and voltmeter, for the heating-effect discussion.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b9b8b6c44d8e517021520cd022688a67ae6da953dcd10f3f074a7ff49905f36d.jpg"
+    }
+  ]
+}

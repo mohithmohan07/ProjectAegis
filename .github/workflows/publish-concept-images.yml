@@ -1,10 +1,10 @@
-name: Publish Light concept images only
+name: Publish Electricity concept images only
 on:
   push:
-    branches: [codex/light-concept-images-20260929]
+    branches: [codex/electricity-concept-images-20260930]
     paths:
       - '.github/workflows/publish-concept-images.yml'
-      - 'ops/concept-image-assets/2026-09-29-light/**'
+      - 'ops/concept-image-assets/2026-09-30-electricity/**'
 permissions:
   contents: read
 concurrency:
@@ -17,13 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Publish content-addressed Light crops and verify public URLs
+      - name: Publish content-addressed Electricity crops and verify public URLs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-09-29-light
+        run: python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-09-30-electricity
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
-          name: light-concept-image-url-verification
+          name: electricity-concept-image-url-verification
           path: image-url-verification.json
           if-no-files-found: error
