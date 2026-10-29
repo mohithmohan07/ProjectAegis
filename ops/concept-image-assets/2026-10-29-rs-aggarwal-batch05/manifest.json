@@ -1,0 +1,1059 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "ee737198c656975c9d99f585ad4e3d778aabd722773fe1a5a03760e0c447061a.jpg",
+      "sha256": "ee737198c656975c9d99f585ad4e3d778aabd722773fe1a5a03760e0c447061a",
+      "bytes": 22384,
+      "width": 222,
+      "height": 236,
+      "alt": "RS Aggarwal source figure for CompositeExample 1",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ee737198c656975c9d99f585ad4e3d778aabd722773fe1a5a03760e0c447061a.jpg"
+    },
+    {
+      "filename": "8c5cca82841fd2f4ba2150d71d33b0533b4cbf0367348750a584e93da36d0769.jpg",
+      "sha256": "8c5cca82841fd2f4ba2150d71d33b0533b4cbf0367348750a584e93da36d0769",
+      "bytes": 17134,
+      "width": 290,
+      "height": 210,
+      "alt": "RS Aggarwal source figure for CompositeExample 2",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c5cca82841fd2f4ba2150d71d33b0533b4cbf0367348750a584e93da36d0769.jpg"
+    },
+    {
+      "filename": "3f286647f0240c547c4cb0b030a936058677ad75d8640e748f4f2b343d254433.jpg",
+      "sha256": "3f286647f0240c547c4cb0b030a936058677ad75d8640e748f4f2b343d254433",
+      "bytes": 12652,
+      "width": 207,
+      "height": 208,
+      "alt": "RS Aggarwal source figure for CompositeExample 3",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3f286647f0240c547c4cb0b030a936058677ad75d8640e748f4f2b343d254433.jpg"
+    },
+    {
+      "filename": "c4e66a4d7f880f6ed2bf1da71c23ed9d88881877050c695014f36d2ca531f7ec.jpg",
+      "sha256": "c4e66a4d7f880f6ed2bf1da71c23ed9d88881877050c695014f36d2ca531f7ec",
+      "bytes": 18474,
+      "width": 153,
+      "height": 193,
+      "alt": "RS Aggarwal source figure for CompositeExample 4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c4e66a4d7f880f6ed2bf1da71c23ed9d88881877050c695014f36d2ca531f7ec.jpg"
+    },
+    {
+      "filename": "a2b2b71141d9b7f333a915dc047c3a9ba99257796db2ddc634dffc77c831ea7d.jpg",
+      "sha256": "a2b2b71141d9b7f333a915dc047c3a9ba99257796db2ddc634dffc77c831ea7d",
+      "bytes": 15823,
+      "width": 221,
+      "height": 237,
+      "alt": "RS Aggarwal source figure for CompositeExample 5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a2b2b71141d9b7f333a915dc047c3a9ba99257796db2ddc634dffc77c831ea7d.jpg"
+    },
+    {
+      "filename": "cc284de9f7717a1fa0505a290f41a7aaf92791c5504b80023f79acc759896d5f.jpg",
+      "sha256": "cc284de9f7717a1fa0505a290f41a7aaf92791c5504b80023f79acc759896d5f",
+      "bytes": 20865,
+      "width": 199,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for CompositeExample 6",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cc284de9f7717a1fa0505a290f41a7aaf92791c5504b80023f79acc759896d5f.jpg"
+    },
+    {
+      "filename": "13dfccb4801c18f2ff4776682d10ef909c864896aa50036ab55bd1e4e052ef1b.jpg",
+      "sha256": "13dfccb4801c18f2ff4776682d10ef909c864896aa50036ab55bd1e4e052ef1b",
+      "bytes": 23762,
+      "width": 227,
+      "height": 221,
+      "alt": "RS Aggarwal source figure for CompositeExample 7",
+      "url": "https://projectaegis.fly.dev/source-assets/0/13dfccb4801c18f2ff4776682d10ef909c864896aa50036ab55bd1e4e052ef1b.jpg"
+    },
+    {
+      "filename": "b076f20d0013f31285915942fb65d458315de543f5dc594876d228b82f5b543d.jpg",
+      "sha256": "b076f20d0013f31285915942fb65d458315de543f5dc594876d228b82f5b543d",
+      "bytes": 19090,
+      "width": 415,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for CompositeExample 8",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b076f20d0013f31285915942fb65d458315de543f5dc594876d228b82f5b543d.jpg"
+    },
+    {
+      "filename": "22fa77e43976b89676438ad7592a6c96fff337b9007d1fba9728d07284fa6ea6.jpg",
+      "sha256": "22fa77e43976b89676438ad7592a6c96fff337b9007d1fba9728d07284fa6ea6",
+      "bytes": 10469,
+      "width": 204,
+      "height": 200,
+      "alt": "RS Aggarwal source figure for CompositeExample 9",
+      "url": "https://projectaegis.fly.dev/source-assets/0/22fa77e43976b89676438ad7592a6c96fff337b9007d1fba9728d07284fa6ea6.jpg"
+    },
+    {
+      "filename": "e4fdd2262e6e2f9df24e81b77fc7e812d601c8c502bdcb3ef5e31e5c069784d7.jpg",
+      "sha256": "e4fdd2262e6e2f9df24e81b77fc7e812d601c8c502bdcb3ef5e31e5c069784d7",
+      "bytes": 16785,
+      "width": 252,
+      "height": 240,
+      "alt": "RS Aggarwal source figure for CompositeExample 10",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e4fdd2262e6e2f9df24e81b77fc7e812d601c8c502bdcb3ef5e31e5c069784d7.jpg"
+    },
+    {
+      "filename": "0b5280c413924db511e574949af5ba5bcc565df198c0827f25656186585368ad.jpg",
+      "sha256": "0b5280c413924db511e574949af5ba5bcc565df198c0827f25656186585368ad",
+      "bytes": 15443,
+      "width": 275,
+      "height": 206,
+      "alt": "RS Aggarwal source figure for CompositeExample 11",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0b5280c413924db511e574949af5ba5bcc565df198c0827f25656186585368ad.jpg"
+    },
+    {
+      "filename": "d7e10df5f2664a01ece33a7305bbc1ed369b5de07dfd74cda93ed632b7a714dd.jpg",
+      "sha256": "d7e10df5f2664a01ece33a7305bbc1ed369b5de07dfd74cda93ed632b7a714dd",
+      "bytes": 19071,
+      "width": 270,
+      "height": 174,
+      "alt": "RS Aggarwal source figure for CompositeExample 12",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d7e10df5f2664a01ece33a7305bbc1ed369b5de07dfd74cda93ed632b7a714dd.jpg"
+    },
+    {
+      "filename": "f5cc37de7a817f1489de105d614448f1c7488ee7460ae5663fa9ad2e9dc08a24.jpg",
+      "sha256": "f5cc37de7a817f1489de105d614448f1c7488ee7460ae5663fa9ad2e9dc08a24",
+      "bytes": 48149,
+      "width": 364,
+      "height": 385,
+      "alt": "RS Aggarwal source figure for CompositeExample 13",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f5cc37de7a817f1489de105d614448f1c7488ee7460ae5663fa9ad2e9dc08a24.jpg"
+    },
+    {
+      "filename": "4ccadcf4603ad596f9269d293bd41f5b13010a9c23de6aba974bf1640317a8b9.jpg",
+      "sha256": "4ccadcf4603ad596f9269d293bd41f5b13010a9c23de6aba974bf1640317a8b9",
+      "bytes": 11483,
+      "width": 190,
+      "height": 214,
+      "alt": "RS Aggarwal source figure for CompositeExample 14",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4ccadcf4603ad596f9269d293bd41f5b13010a9c23de6aba974bf1640317a8b9.jpg"
+    },
+    {
+      "filename": "aa7e84545148e8b39495435d4e82a9aca5f46aa2f8ecc8c1a00e39267871798b.jpg",
+      "sha256": "aa7e84545148e8b39495435d4e82a9aca5f46aa2f8ecc8c1a00e39267871798b",
+      "bytes": 11114,
+      "width": 270,
+      "height": 141,
+      "alt": "RS Aggarwal source figure for CompositeExample 15",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aa7e84545148e8b39495435d4e82a9aca5f46aa2f8ecc8c1a00e39267871798b.jpg"
+    },
+    {
+      "filename": "262aa50d524b8a8099bb63b5a808af060de125937fc241e958556488113afe6a.jpg",
+      "sha256": "262aa50d524b8a8099bb63b5a808af060de125937fc241e958556488113afe6a",
+      "bytes": 15716,
+      "width": 224,
+      "height": 226,
+      "alt": "RS Aggarwal source figure for CompositeExample 16",
+      "url": "https://projectaegis.fly.dev/source-assets/0/262aa50d524b8a8099bb63b5a808af060de125937fc241e958556488113afe6a.jpg"
+    },
+    {
+      "filename": "a990dd6a8b33c174926b067bddd107f5be7a827e97863f9caa2abd2d1197c186.jpg",
+      "sha256": "a990dd6a8b33c174926b067bddd107f5be7a827e97863f9caa2abd2d1197c186",
+      "bytes": 38842,
+      "width": 535,
+      "height": 276,
+      "alt": "RS Aggarwal source figure for CompositeExample 17",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a990dd6a8b33c174926b067bddd107f5be7a827e97863f9caa2abd2d1197c186.jpg"
+    },
+    {
+      "filename": "8fb7e2dafed70b2bae6f09551169e1aaaf68b183b862b6f655520ecc511fcd32.jpg",
+      "sha256": "8fb7e2dafed70b2bae6f09551169e1aaaf68b183b862b6f655520ecc511fcd32",
+      "bytes": 16088,
+      "width": 292,
+      "height": 172,
+      "alt": "RS Aggarwal source figure for CompositeExample 18",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8fb7e2dafed70b2bae6f09551169e1aaaf68b183b862b6f655520ecc511fcd32.jpg"
+    },
+    {
+      "filename": "f121b52b9ca734db6d55ecb53a0022123c0beafac197fa0892a7e6bed6d68707.jpg",
+      "sha256": "f121b52b9ca734db6d55ecb53a0022123c0beafac197fa0892a7e6bed6d68707",
+      "bytes": 18558,
+      "width": 215,
+      "height": 217,
+      "alt": "RS Aggarwal source figure for CompositeExample 19",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f121b52b9ca734db6d55ecb53a0022123c0beafac197fa0892a7e6bed6d68707.jpg"
+    },
+    {
+      "filename": "78559ee07de1d2ce76b8425202c3afea6645d96e1a4dcf01ed1ed1a3c94607dc.jpg",
+      "sha256": "78559ee07de1d2ce76b8425202c3afea6645d96e1a4dcf01ed1ed1a3c94607dc",
+      "bytes": 18994,
+      "width": 238,
+      "height": 326,
+      "alt": "RS Aggarwal source figure for CompositeExample 20",
+      "url": "https://projectaegis.fly.dev/source-assets/0/78559ee07de1d2ce76b8425202c3afea6645d96e1a4dcf01ed1ed1a3c94607dc.jpg"
+    },
+    {
+      "filename": "2845f993d9e61f74b2f480ad9e89b1c512419f260644d464eed767f2662b986f.jpg",
+      "sha256": "2845f993d9e61f74b2f480ad9e89b1c512419f260644d464eed767f2662b986f",
+      "bytes": 14808,
+      "width": 225,
+      "height": 234,
+      "alt": "RS Aggarwal source figure for Ex16B 26",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2845f993d9e61f74b2f480ad9e89b1c512419f260644d464eed767f2662b986f.jpg"
+    },
+    {
+      "filename": "bb5ad5521e2665bb1c724b568f409cf40af69dcc76da06b013ce3f4bf06ff429.jpg",
+      "sha256": "bb5ad5521e2665bb1c724b568f409cf40af69dcc76da06b013ce3f4bf06ff429",
+      "bytes": 9253,
+      "width": 242,
+      "height": 242,
+      "alt": "RS Aggarwal source figure for Ex16B 28",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bb5ad5521e2665bb1c724b568f409cf40af69dcc76da06b013ce3f4bf06ff429.jpg"
+    },
+    {
+      "filename": "2c169a31c1dff279c4d659b391b9bfb4fdbfc1b568bc614189e5359e457ab052.jpg",
+      "sha256": "2c169a31c1dff279c4d659b391b9bfb4fdbfc1b568bc614189e5359e457ab052",
+      "bytes": 17224,
+      "width": 263,
+      "height": 223,
+      "alt": "RS Aggarwal source figure for Ex16B 29",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2c169a31c1dff279c4d659b391b9bfb4fdbfc1b568bc614189e5359e457ab052.jpg"
+    },
+    {
+      "filename": "d708994abed3fcf1565de4bef6b4528f0fd9c3ea738b081640a4b4f60e3f3194.jpg",
+      "sha256": "d708994abed3fcf1565de4bef6b4528f0fd9c3ea738b081640a4b4f60e3f3194",
+      "bytes": 10446,
+      "width": 240,
+      "height": 158,
+      "alt": "RS Aggarwal source figure for Ex16B 30",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d708994abed3fcf1565de4bef6b4528f0fd9c3ea738b081640a4b4f60e3f3194.jpg"
+    },
+    {
+      "filename": "c754f296740fc2df405352cc49243c8daada6223db0ecb005673c57cadf141db.jpg",
+      "sha256": "c754f296740fc2df405352cc49243c8daada6223db0ecb005673c57cadf141db",
+      "bytes": 13479,
+      "width": 215,
+      "height": 231,
+      "alt": "RS Aggarwal source figure for Ex16B 31",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c754f296740fc2df405352cc49243c8daada6223db0ecb005673c57cadf141db.jpg"
+    },
+    {
+      "filename": "d8bcfe62b9a58e5346ecf4a38576177ada59c4fded8c91c5720d875cb9a6baab.jpg",
+      "sha256": "d8bcfe62b9a58e5346ecf4a38576177ada59c4fded8c91c5720d875cb9a6baab",
+      "bytes": 8474,
+      "width": 195,
+      "height": 188,
+      "alt": "RS Aggarwal source figure for Ex16B 32",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8bcfe62b9a58e5346ecf4a38576177ada59c4fded8c91c5720d875cb9a6baab.jpg"
+    },
+    {
+      "filename": "40ea3ff1cf0e84fe74e9def940f7ecbd502b4261801f2642da6bc5e1dc624f09.jpg",
+      "sha256": "40ea3ff1cf0e84fe74e9def940f7ecbd502b4261801f2642da6bc5e1dc624f09",
+      "bytes": 13931,
+      "width": 199,
+      "height": 201,
+      "alt": "RS Aggarwal source figure for Ex16B 33",
+      "url": "https://projectaegis.fly.dev/source-assets/0/40ea3ff1cf0e84fe74e9def940f7ecbd502b4261801f2642da6bc5e1dc624f09.jpg"
+    },
+    {
+      "filename": "6a16b8b7dcb7c587a03474f46596baa51c15680bf2a2367dbfa9e12fcd9bcec5.jpg",
+      "sha256": "6a16b8b7dcb7c587a03474f46596baa51c15680bf2a2367dbfa9e12fcd9bcec5",
+      "bytes": 13328,
+      "width": 256,
+      "height": 216,
+      "alt": "RS Aggarwal source figure for Ex16B 34",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6a16b8b7dcb7c587a03474f46596baa51c15680bf2a2367dbfa9e12fcd9bcec5.jpg"
+    },
+    {
+      "filename": "739b066159206ae88c7fff0de35bb344b1b04e8957becf75f1297af283eedf51.jpg",
+      "sha256": "739b066159206ae88c7fff0de35bb344b1b04e8957becf75f1297af283eedf51",
+      "bytes": 13259,
+      "width": 213,
+      "height": 222,
+      "alt": "RS Aggarwal source figure for Ex16B 35",
+      "url": "https://projectaegis.fly.dev/source-assets/0/739b066159206ae88c7fff0de35bb344b1b04e8957becf75f1297af283eedf51.jpg"
+    },
+    {
+      "filename": "5f38853c832d385a6e6c285125eab67c5680d870d6c788a5f3c3d5ec509c8160.jpg",
+      "sha256": "5f38853c832d385a6e6c285125eab67c5680d870d6c788a5f3c3d5ec509c8160",
+      "bytes": 20939,
+      "width": 368,
+      "height": 261,
+      "alt": "RS Aggarwal source figure for Ex16B 37",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5f38853c832d385a6e6c285125eab67c5680d870d6c788a5f3c3d5ec509c8160.jpg"
+    },
+    {
+      "filename": "76173a9ef4391b9728340525debb56779a7c416461b625eecacc9693b9fbfe81.jpg",
+      "sha256": "76173a9ef4391b9728340525debb56779a7c416461b625eecacc9693b9fbfe81",
+      "bytes": 22396,
+      "width": 383,
+      "height": 250,
+      "alt": "RS Aggarwal source figure for Ex16B 38",
+      "url": "https://projectaegis.fly.dev/source-assets/0/76173a9ef4391b9728340525debb56779a7c416461b625eecacc9693b9fbfe81.jpg"
+    },
+    {
+      "filename": "d4358b60a8630564164bd4afcf6d52b1ed55e72ceb80da31d3f0e9bc1aa42778.jpg",
+      "sha256": "d4358b60a8630564164bd4afcf6d52b1ed55e72ceb80da31d3f0e9bc1aa42778",
+      "bytes": 12716,
+      "width": 211,
+      "height": 229,
+      "alt": "RS Aggarwal source figure for Ex16B 39",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d4358b60a8630564164bd4afcf6d52b1ed55e72ceb80da31d3f0e9bc1aa42778.jpg"
+    },
+    {
+      "filename": "c974709578197bdd8fc85017ff82543623dbbee778978a77da211195e80f9b6d.jpg",
+      "sha256": "c974709578197bdd8fc85017ff82543623dbbee778978a77da211195e80f9b6d",
+      "bytes": 32698,
+      "width": 324,
+      "height": 238,
+      "alt": "RS Aggarwal source figure for Ex16B 40",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c974709578197bdd8fc85017ff82543623dbbee778978a77da211195e80f9b6d.jpg"
+    },
+    {
+      "filename": "db06c7ac502664b2fcb789fc4a9a0bcb05127eca40507287a3cf54b8f896359e.jpg",
+      "sha256": "db06c7ac502664b2fcb789fc4a9a0bcb05127eca40507287a3cf54b8f896359e",
+      "bytes": 16692,
+      "width": 229,
+      "height": 238,
+      "alt": "RS Aggarwal source figure for Ex16B 42",
+      "url": "https://projectaegis.fly.dev/source-assets/0/db06c7ac502664b2fcb789fc4a9a0bcb05127eca40507287a3cf54b8f896359e.jpg"
+    },
+    {
+      "filename": "db460d92da8c6c2d5a940dd4baaf05aabc243af7724b0736dd231726e8e52cbd.jpg",
+      "sha256": "db460d92da8c6c2d5a940dd4baaf05aabc243af7724b0736dd231726e8e52cbd",
+      "bytes": 22479,
+      "width": 236,
+      "height": 234,
+      "alt": "RS Aggarwal source figure for Ex16B 43",
+      "url": "https://projectaegis.fly.dev/source-assets/0/db460d92da8c6c2d5a940dd4baaf05aabc243af7724b0736dd231726e8e52cbd.jpg"
+    },
+    {
+      "filename": "7c88fdabaa63ca976b5dbd0553ef141f1a3d6546d7f4865396f12001ad6c5488.jpg",
+      "sha256": "7c88fdabaa63ca976b5dbd0553ef141f1a3d6546d7f4865396f12001ad6c5488",
+      "bytes": 9658,
+      "width": 191,
+      "height": 142,
+      "alt": "RS Aggarwal source figure for Ex16B 47",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7c88fdabaa63ca976b5dbd0553ef141f1a3d6546d7f4865396f12001ad6c5488.jpg"
+    },
+    {
+      "filename": "203383ad88d6f60d6904353409a6ddde34d0e67625351b01874e011b1fe9a661.jpg",
+      "sha256": "203383ad88d6f60d6904353409a6ddde34d0e67625351b01874e011b1fe9a661",
+      "bytes": 11659,
+      "width": 194,
+      "height": 188,
+      "alt": "RS Aggarwal source figure for Ex16B 48",
+      "url": "https://projectaegis.fly.dev/source-assets/0/203383ad88d6f60d6904353409a6ddde34d0e67625351b01874e011b1fe9a661.jpg"
+    },
+    {
+      "filename": "ace59c6490d017ba477457f7e9f49f072815395c3f72bc15421739b99bc614aa.jpg",
+      "sha256": "ace59c6490d017ba477457f7e9f49f072815395c3f72bc15421739b99bc614aa",
+      "bytes": 18175,
+      "width": 274,
+      "height": 237,
+      "alt": "RS Aggarwal source figure for Ex16B 49",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ace59c6490d017ba477457f7e9f49f072815395c3f72bc15421739b99bc614aa.jpg"
+    },
+    {
+      "filename": "0002f531760fac3c12d07638cdf15e1c5fa6780de3afa2fe6ce16205ba4b1879.jpg",
+      "sha256": "0002f531760fac3c12d07638cdf15e1c5fa6780de3afa2fe6ce16205ba4b1879",
+      "bytes": 13292,
+      "width": 251,
+      "height": 233,
+      "alt": "RS Aggarwal source figure for Ex16B 50",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0002f531760fac3c12d07638cdf15e1c5fa6780de3afa2fe6ce16205ba4b1879.jpg"
+    },
+    {
+      "filename": "07d96937438fcfba0c6b0d4fbb921e9cf04efce2bc76dc6291497ee4f29ac8a1.jpg",
+      "sha256": "07d96937438fcfba0c6b0d4fbb921e9cf04efce2bc76dc6291497ee4f29ac8a1",
+      "bytes": 9472,
+      "width": 161,
+      "height": 186,
+      "alt": "RS Aggarwal source figure for Ex16B 51",
+      "url": "https://projectaegis.fly.dev/source-assets/0/07d96937438fcfba0c6b0d4fbb921e9cf04efce2bc76dc6291497ee4f29ac8a1.jpg"
+    },
+    {
+      "filename": "fa6c61f4f103e8997b7b1949eb1864f049e4d6b41968b73d02f3333597608df0.jpg",
+      "sha256": "fa6c61f4f103e8997b7b1949eb1864f049e4d6b41968b73d02f3333597608df0",
+      "bytes": 8175,
+      "width": 165,
+      "height": 153,
+      "alt": "RS Aggarwal source figure for CircleExample 14",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fa6c61f4f103e8997b7b1949eb1864f049e4d6b41968b73d02f3333597608df0.jpg"
+    },
+    {
+      "filename": "49d1cbdc97c737e45cbcc17bcc0331f7b2edb523e7da968d5215f0a3c933267e.jpg",
+      "sha256": "49d1cbdc97c737e45cbcc17bcc0331f7b2edb523e7da968d5215f0a3c933267e",
+      "bytes": 15589,
+      "width": 196,
+      "height": 201,
+      "alt": "RS Aggarwal source figure for CircleExample 23",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49d1cbdc97c737e45cbcc17bcc0331f7b2edb523e7da968d5215f0a3c933267e.jpg"
+    },
+    {
+      "filename": "f7d4e91ff2c636cbe91b1e43777ee6596c6d7078c3bb0d701996e9411ce017d9.jpg",
+      "sha256": "f7d4e91ff2c636cbe91b1e43777ee6596c6d7078c3bb0d701996e9411ce017d9",
+      "bytes": 20101,
+      "width": 201,
+      "height": 192,
+      "alt": "RS Aggarwal source figure for CircleExample 24",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f7d4e91ff2c636cbe91b1e43777ee6596c6d7078c3bb0d701996e9411ce017d9.jpg"
+    },
+    {
+      "filename": "23e3a72c02825a8e4552df6f8d57476617af9d625d3756ca8bccdee805453e8f.jpg",
+      "sha256": "23e3a72c02825a8e4552df6f8d57476617af9d625d3756ca8bccdee805453e8f",
+      "bytes": 9266,
+      "width": 305,
+      "height": 248,
+      "alt": "RS Aggarwal source figure for CircleExample 25",
+      "url": "https://projectaegis.fly.dev/source-assets/0/23e3a72c02825a8e4552df6f8d57476617af9d625d3756ca8bccdee805453e8f.jpg"
+    },
+    {
+      "filename": "cf734efb175cb917e1181fe8baa5abe921ebfd05eb51a7f749b36ecaee338d06.jpg",
+      "sha256": "cf734efb175cb917e1181fe8baa5abe921ebfd05eb51a7f749b36ecaee338d06",
+      "bytes": 7698,
+      "width": 150,
+      "height": 161,
+      "alt": "RS Aggarwal source figure for Ex16A 26",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cf734efb175cb917e1181fe8baa5abe921ebfd05eb51a7f749b36ecaee338d06.jpg"
+    },
+    {
+      "filename": "0bd51ca283fadb05da7e535119ec7b2b66eb54990269d725611437e9d224a637.jpg",
+      "sha256": "0bd51ca283fadb05da7e535119ec7b2b66eb54990269d725611437e9d224a637",
+      "bytes": 14961,
+      "width": 185,
+      "height": 180,
+      "alt": "RS Aggarwal source figure for Ex16A 36",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0bd51ca283fadb05da7e535119ec7b2b66eb54990269d725611437e9d224a637.jpg"
+    },
+    {
+      "filename": "9439bc19d86c11399c82ddf171d4a73e15e42e7e8e11545ca55c30958a383314.jpg",
+      "sha256": "9439bc19d86c11399c82ddf171d4a73e15e42e7e8e11545ca55c30958a383314",
+      "bytes": 13023,
+      "width": 209,
+      "height": 215,
+      "alt": "RS Aggarwal source figure for Ex16A 37",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9439bc19d86c11399c82ddf171d4a73e15e42e7e8e11545ca55c30958a383314.jpg"
+    },
+    {
+      "filename": "dbb5ff87fff578ccf55e9d1de38a8e2b23afbc5dbbd23c6ada8cff46565c54ff.jpg",
+      "sha256": "dbb5ff87fff578ccf55e9d1de38a8e2b23afbc5dbbd23c6ada8cff46565c54ff",
+      "bytes": 8903,
+      "width": 182,
+      "height": 173,
+      "alt": "RS Aggarwal source figure for Ex16A 39",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dbb5ff87fff578ccf55e9d1de38a8e2b23afbc5dbbd23c6ada8cff46565c54ff.jpg"
+    },
+    {
+      "filename": "d25acd2d8ede446ec73a53e60dfd0f31f9399b5e1793d43ca496742b4f5c2e4c.jpg",
+      "sha256": "d25acd2d8ede446ec73a53e60dfd0f31f9399b5e1793d43ca496742b4f5c2e4c",
+      "bytes": 9812,
+      "width": 276,
+      "height": 186,
+      "alt": "RS Aggarwal source figure for Ex16A 41",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d25acd2d8ede446ec73a53e60dfd0f31f9399b5e1793d43ca496742b4f5c2e4c.jpg"
+    },
+    {
+      "filename": "d5140c33e51e586723084bc23f96a7b79a330efb1c4b0965762e31835c922598.jpg",
+      "sha256": "d5140c33e51e586723084bc23f96a7b79a330efb1c4b0965762e31835c922598",
+      "bytes": 13178,
+      "width": 282,
+      "height": 202,
+      "alt": "RS Aggarwal source figure for Ex16A 42",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d5140c33e51e586723084bc23f96a7b79a330efb1c4b0965762e31835c922598.jpg"
+    },
+    {
+      "filename": "3622c7f215f5b90a20bb7638298748c9b4afe18421565c69414786b717ad0077.jpg",
+      "sha256": "3622c7f215f5b90a20bb7638298748c9b4afe18421565c69414786b717ad0077",
+      "bytes": 15943,
+      "width": 188,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for Ex16A 43",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3622c7f215f5b90a20bb7638298748c9b4afe18421565c69414786b717ad0077.jpg"
+    },
+    {
+      "filename": "57774d1b3c1364e07678e62101fb61dd6cbe160e8b135877b7e504417e43368f.jpg",
+      "sha256": "57774d1b3c1364e07678e62101fb61dd6cbe160e8b135877b7e504417e43368f",
+      "bytes": 12012,
+      "width": 232,
+      "height": 173,
+      "alt": "RS Aggarwal source figure for Ex16A 44",
+      "url": "https://projectaegis.fly.dev/source-assets/0/57774d1b3c1364e07678e62101fb61dd6cbe160e8b135877b7e504417e43368f.jpg"
+    },
+    {
+      "filename": "0e34d2f2a99fe98613f1843c5168a5be48ee32d9abd5ef8c15e3d5d9677a4181.jpg",
+      "sha256": "0e34d2f2a99fe98613f1843c5168a5be48ee32d9abd5ef8c15e3d5d9677a4181",
+      "bytes": 8942,
+      "width": 236,
+      "height": 154,
+      "alt": "RS Aggarwal source figure for Ex16A 45",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0e34d2f2a99fe98613f1843c5168a5be48ee32d9abd5ef8c15e3d5d9677a4181.jpg"
+    },
+    {
+      "filename": "6a8339cd6be506144faa76831cb17f7dc897936a2949e3604d11084484dfcac4.jpg",
+      "sha256": "6a8339cd6be506144faa76831cb17f7dc897936a2949e3604d11084484dfcac4",
+      "bytes": 10627,
+      "width": 172,
+      "height": 180,
+      "alt": "RS Aggarwal source figure for Ex16A 46",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6a8339cd6be506144faa76831cb17f7dc897936a2949e3604d11084484dfcac4.jpg"
+    },
+    {
+      "filename": "439581e19bf687cb849e67fb82d8357f011c8a20a3b9c52920222cc26d1a6e45.jpg",
+      "sha256": "439581e19bf687cb849e67fb82d8357f011c8a20a3b9c52920222cc26d1a6e45",
+      "bytes": 11558,
+      "width": 214,
+      "height": 191,
+      "alt": "RS Aggarwal source figure for Ex16A 47",
+      "url": "https://projectaegis.fly.dev/source-assets/0/439581e19bf687cb849e67fb82d8357f011c8a20a3b9c52920222cc26d1a6e45.jpg"
+    },
+    {
+      "filename": "69f4f01fa21dfd9e2af7371ee2d03c7895f732e268b2a5981f10de3889a7389e.jpg",
+      "sha256": "69f4f01fa21dfd9e2af7371ee2d03c7895f732e268b2a5981f10de3889a7389e",
+      "bytes": 14459,
+      "width": 167,
+      "height": 170,
+      "alt": "RS Aggarwal source figure for Ex16A 48",
+      "url": "https://projectaegis.fly.dev/source-assets/0/69f4f01fa21dfd9e2af7371ee2d03c7895f732e268b2a5981f10de3889a7389e.jpg"
+    },
+    {
+      "filename": "583dfbe9bd28cc24f7651564b1215977d493cfa609eb92c5388419656b79a516.jpg",
+      "sha256": "583dfbe9bd28cc24f7651564b1215977d493cfa609eb92c5388419656b79a516",
+      "bytes": 12947,
+      "width": 238,
+      "height": 235,
+      "alt": "RS Aggarwal source figure for Ex16A 53",
+      "url": "https://projectaegis.fly.dev/source-assets/0/583dfbe9bd28cc24f7651564b1215977d493cfa609eb92c5388419656b79a516.jpg"
+    },
+    {
+      "filename": "1588b0be80148cc9274674f062be7d8d1224de66e6f1b336b5b64671f4d95596.jpg",
+      "sha256": "1588b0be80148cc9274674f062be7d8d1224de66e6f1b336b5b64671f4d95596",
+      "bytes": 11761,
+      "width": 205,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for Ex16A 55",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1588b0be80148cc9274674f062be7d8d1224de66e6f1b336b5b64671f4d95596.jpg"
+    },
+    {
+      "filename": "eb2f1fc6ed289ea675d6fca66bfa2ca06c71a00dbec3a6f10caf7edb4f54d902.jpg",
+      "sha256": "eb2f1fc6ed289ea675d6fca66bfa2ca06c71a00dbec3a6f10caf7edb4f54d902",
+      "bytes": 17026,
+      "width": 265,
+      "height": 276,
+      "alt": "RS Aggarwal source figure for Ex16A 56",
+      "url": "https://projectaegis.fly.dev/source-assets/0/eb2f1fc6ed289ea675d6fca66bfa2ca06c71a00dbec3a6f10caf7edb4f54d902.jpg"
+    },
+    {
+      "filename": "09dd39b117b448e2a16944d2528659383e4789e8e4b2f98337c7d0209e44d803.jpg",
+      "sha256": "09dd39b117b448e2a16944d2528659383e4789e8e4b2f98337c7d0209e44d803",
+      "bytes": 23343,
+      "width": 419,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for Ex16A 57",
+      "url": "https://projectaegis.fly.dev/source-assets/0/09dd39b117b448e2a16944d2528659383e4789e8e4b2f98337c7d0209e44d803.jpg"
+    },
+    {
+      "filename": "1ff9e57d0fa1a9c5e67aad3d978253e7bdd450cab088482e6f8f419a021ead0a.jpg",
+      "sha256": "1ff9e57d0fa1a9c5e67aad3d978253e7bdd450cab088482e6f8f419a021ead0a",
+      "bytes": 12982,
+      "width": 229,
+      "height": 203,
+      "alt": "RS Aggarwal source figure for Ex16A 58",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1ff9e57d0fa1a9c5e67aad3d978253e7bdd450cab088482e6f8f419a021ead0a.jpg"
+    },
+    {
+      "filename": "90e57ebb87e3f3434c6ff8aea92488d3477df7d2a1b9a422d293a12625431bee.jpg",
+      "sha256": "90e57ebb87e3f3434c6ff8aea92488d3477df7d2a1b9a422d293a12625431bee",
+      "bytes": 11994,
+      "width": 278,
+      "height": 150,
+      "alt": "RS Aggarwal source figure for Ex16A 59",
+      "url": "https://projectaegis.fly.dev/source-assets/0/90e57ebb87e3f3434c6ff8aea92488d3477df7d2a1b9a422d293a12625431bee.jpg"
+    },
+    {
+      "filename": "96b5d8300ceb76a8e3604f153d7d91086c17e188a57c3ea5e7f725bc1602b70c.jpg",
+      "sha256": "96b5d8300ceb76a8e3604f153d7d91086c17e188a57c3ea5e7f725bc1602b70c",
+      "bytes": 12181,
+      "width": 292,
+      "height": 188,
+      "alt": "RS Aggarwal source figure for Ex16A 60",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96b5d8300ceb76a8e3604f153d7d91086c17e188a57c3ea5e7f725bc1602b70c.jpg"
+    },
+    {
+      "filename": "b0ec57bc85ad7a6605b9eafce04b395cf53b426e74b934f8c5d879b14b62f289.jpg",
+      "sha256": "b0ec57bc85ad7a6605b9eafce04b395cf53b426e74b934f8c5d879b14b62f289",
+      "bytes": 18991,
+      "width": 232,
+      "height": 228,
+      "alt": "RS Aggarwal source figure for Ex16A 61",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b0ec57bc85ad7a6605b9eafce04b395cf53b426e74b934f8c5d879b14b62f289.jpg"
+    },
+    {
+      "filename": "2bacb71600123a2b64ad59a39e9a8a8b91223a190c8163ec83e726143c89a2f3.jpg",
+      "sha256": "2bacb71600123a2b64ad59a39e9a8a8b91223a190c8163ec83e726143c89a2f3",
+      "bytes": 19485,
+      "width": 317,
+      "height": 208,
+      "alt": "RS Aggarwal source figure for Ex16A 62",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2bacb71600123a2b64ad59a39e9a8a8b91223a190c8163ec83e726143c89a2f3.jpg"
+    },
+    {
+      "filename": "688fbf1d3eb2446f693033782d4f9827156c1764be5f90de95c6cad91b1ac089.jpg",
+      "sha256": "688fbf1d3eb2446f693033782d4f9827156c1764be5f90de95c6cad91b1ac089",
+      "bytes": 18493,
+      "width": 298,
+      "height": 297,
+      "alt": "RS Aggarwal source figure for Ex16A 63",
+      "url": "https://projectaegis.fly.dev/source-assets/0/688fbf1d3eb2446f693033782d4f9827156c1764be5f90de95c6cad91b1ac089.jpg"
+    },
+    {
+      "filename": "1c03ad36d34e2e0f8884f20ab56cb1ab534ccb633f87b5e0477f70461204d747.jpg",
+      "sha256": "1c03ad36d34e2e0f8884f20ab56cb1ab534ccb633f87b5e0477f70461204d747",
+      "bytes": 7106,
+      "width": 183,
+      "height": 194,
+      "alt": "RS Aggarwal source figure for Ex16A 64",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c03ad36d34e2e0f8884f20ab56cb1ab534ccb633f87b5e0477f70461204d747.jpg"
+    },
+    {
+      "filename": "3640164872c2ad1afd4ef5ef7947c3a0493b86a528cc4ea917586766cd248dad.jpg",
+      "sha256": "3640164872c2ad1afd4ef5ef7947c3a0493b86a528cc4ea917586766cd248dad",
+      "bytes": 17952,
+      "width": 212,
+      "height": 204,
+      "alt": "RS Aggarwal source figure for Ex16A 65",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3640164872c2ad1afd4ef5ef7947c3a0493b86a528cc4ea917586766cd248dad.jpg"
+    },
+    {
+      "filename": "f30d6cdb395301eeb7e9976af7475a9eb7530e6877b76d0601733abc95cca375.jpg",
+      "sha256": "f30d6cdb395301eeb7e9976af7475a9eb7530e6877b76d0601733abc95cca375",
+      "bytes": 10743,
+      "width": 175,
+      "height": 175,
+      "alt": "RS Aggarwal Ex15A 20 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f30d6cdb395301eeb7e9976af7475a9eb7530e6877b76d0601733abc95cca375.jpg"
+    },
+    {
+      "filename": "407ab32275ba684266c77c361cadc67ea7fed9f5bbe44c11f581af3e2b7afc80.jpg",
+      "sha256": "407ab32275ba684266c77c361cadc67ea7fed9f5bbe44c11f581af3e2b7afc80",
+      "bytes": 8838,
+      "width": 180,
+      "height": 150,
+      "alt": "RS Aggarwal Ex15B 24 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/407ab32275ba684266c77c361cadc67ea7fed9f5bbe44c11f581af3e2b7afc80.jpg"
+    },
+    {
+      "filename": "3fe22455b3a038f224788f13c9d389de60cde288795946d5847544691858775a.jpg",
+      "sha256": "3fe22455b3a038f224788f13c9d389de60cde288795946d5847544691858775a",
+      "bytes": 10977,
+      "width": 185,
+      "height": 185,
+      "alt": "RS Aggarwal Ex15B 25 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3fe22455b3a038f224788f13c9d389de60cde288795946d5847544691858775a.jpg"
+    },
+    {
+      "filename": "632aae5b2918041ff6e6e0b265d303703e2b0ae7c4884586452b58c51f234670.jpg",
+      "sha256": "632aae5b2918041ff6e6e0b265d303703e2b0ae7c4884586452b58c51f234670",
+      "bytes": 9204,
+      "width": 150,
+      "height": 175,
+      "alt": "RS Aggarwal Ex15B 26 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/632aae5b2918041ff6e6e0b265d303703e2b0ae7c4884586452b58c51f234670.jpg"
+    },
+    {
+      "filename": "5c3c9ab6cde6bf17322fb52bf442603eef79256ade2c7b18f6cd3080807de226.jpg",
+      "sha256": "5c3c9ab6cde6bf17322fb52bf442603eef79256ade2c7b18f6cd3080807de226",
+      "bytes": 13709,
+      "width": 360,
+      "height": 140,
+      "alt": "RS Aggarwal Ex15B 27 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c3c9ab6cde6bf17322fb52bf442603eef79256ade2c7b18f6cd3080807de226.jpg"
+    },
+    {
+      "filename": "0c1019f486d2e7beeddb2102c407fc2f082042285b05af81ca6ae380c8e1b8fc.jpg",
+      "sha256": "0c1019f486d2e7beeddb2102c407fc2f082042285b05af81ca6ae380c8e1b8fc",
+      "bytes": 9446,
+      "width": 215,
+      "height": 140,
+      "alt": "RS Aggarwal Ex15B 31 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0c1019f486d2e7beeddb2102c407fc2f082042285b05af81ca6ae380c8e1b8fc.jpg"
+    },
+    {
+      "filename": "66cc88251677d472ebb0050c20274a8da405c2640b1ecbc51a596d5611c69221.jpg",
+      "sha256": "66cc88251677d472ebb0050c20274a8da405c2640b1ecbc51a596d5611c69221",
+      "bytes": 9570,
+      "width": 250,
+      "height": 240,
+      "alt": "RS Aggarwal PlaneTest 1 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/66cc88251677d472ebb0050c20274a8da405c2640b1ecbc51a596d5611c69221.jpg"
+    },
+    {
+      "filename": "ba6ae77513dc3f5d849b1a7f1c3c8362abb62463994cf8f9141b6443fc2b9efe.jpg",
+      "sha256": "ba6ae77513dc3f5d849b1a7f1c3c8362abb62463994cf8f9141b6443fc2b9efe",
+      "bytes": 9799,
+      "width": 245,
+      "height": 150,
+      "alt": "RS Aggarwal PlaneTest 2 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ba6ae77513dc3f5d849b1a7f1c3c8362abb62463994cf8f9141b6443fc2b9efe.jpg"
+    },
+    {
+      "filename": "47eaff37c6c26d17958348af64a45d9411c943f602cac4d51784dcbb72582881.jpg",
+      "sha256": "47eaff37c6c26d17958348af64a45d9411c943f602cac4d51784dcbb72582881",
+      "bytes": 10715,
+      "width": 240,
+      "height": 150,
+      "alt": "RS Aggarwal PlaneTest 14 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/47eaff37c6c26d17958348af64a45d9411c943f602cac4d51784dcbb72582881.jpg"
+    },
+    {
+      "filename": "ecb31d0fb9215cea22762d182aa3ded03b6ed334e56810cb21e5a40ef40c267e.jpg",
+      "sha256": "ecb31d0fb9215cea22762d182aa3ded03b6ed334e56810cb21e5a40ef40c267e",
+      "bytes": 13945,
+      "width": 360,
+      "height": 145,
+      "alt": "RS Aggarwal PlaneTest 16 source figure",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ecb31d0fb9215cea22762d182aa3ded03b6ed334e56810cb21e5a40ef40c267e.jpg"
+    },
+    {
+      "filename": "5ab8b73816ab9ec22dfe93fef79b916185a8a592c14c18ad4b029abfc1634b58.jpg",
+      "sha256": "5ab8b73816ab9ec22dfe93fef79b916185a8a592c14c18ad4b029abfc1634b58",
+      "bytes": 10607,
+      "width": 200,
+      "height": 195,
+      "alt": "RS Aggarwal CircleTest 1 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5ab8b73816ab9ec22dfe93fef79b916185a8a592c14c18ad4b029abfc1634b58.jpg"
+    },
+    {
+      "filename": "4e8b6e49236d29f5f3caf626f7702d12bacfe0676ac19a559951e0f7e2295c0e.jpg",
+      "sha256": "4e8b6e49236d29f5f3caf626f7702d12bacfe0676ac19a559951e0f7e2295c0e",
+      "bytes": 14152,
+      "width": 205,
+      "height": 215,
+      "alt": "RS Aggarwal CircleTest 4 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4e8b6e49236d29f5f3caf626f7702d12bacfe0676ac19a559951e0f7e2295c0e.jpg"
+    },
+    {
+      "filename": "173ebede4c32ab33a1ed21d654928eab034d352eac082f98a84af5bf1a2c6529.jpg",
+      "sha256": "173ebede4c32ab33a1ed21d654928eab034d352eac082f98a84af5bf1a2c6529",
+      "bytes": 7450,
+      "width": 190,
+      "height": 135,
+      "alt": "RS Aggarwal CircleTest 10 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/173ebede4c32ab33a1ed21d654928eab034d352eac082f98a84af5bf1a2c6529.jpg"
+    },
+    {
+      "filename": "73f6beee5481ed1411cf1f3d1ba3a4b1da7f76ef10eff762b848fa7ebdc931b7.jpg",
+      "sha256": "73f6beee5481ed1411cf1f3d1ba3a4b1da7f76ef10eff762b848fa7ebdc931b7",
+      "bytes": 9825,
+      "width": 190,
+      "height": 200,
+      "alt": "RS Aggarwal CircleTest 13 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/73f6beee5481ed1411cf1f3d1ba3a4b1da7f76ef10eff762b848fa7ebdc931b7.jpg"
+    },
+    {
+      "filename": "1c198c222a7492e4a36ab9e8c06565a1acbaa216c570f6609fae347964e1a7e0.jpg",
+      "sha256": "1c198c222a7492e4a36ab9e8c06565a1acbaa216c570f6609fae347964e1a7e0",
+      "bytes": 14729,
+      "width": 200,
+      "height": 195,
+      "alt": "RS Aggarwal CircleTest 14 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c198c222a7492e4a36ab9e8c06565a1acbaa216c570f6609fae347964e1a7e0.jpg"
+    },
+    {
+      "filename": "d4b649c91751c04aa7d7f8f2e9686c178ebc8518ab4b5673670534a52e947d09.jpg",
+      "sha256": "d4b649c91751c04aa7d7f8f2e9686c178ebc8518ab4b5673670534a52e947d09",
+      "bytes": 13360,
+      "width": 195,
+      "height": 190,
+      "alt": "RS Aggarwal CircleTest 15 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d4b649c91751c04aa7d7f8f2e9686c178ebc8518ab4b5673670534a52e947d09.jpg"
+    },
+    {
+      "filename": "ffa5af12125cb1bed8adabc06560dfeb2ce56edfe162882018296c085054bfa8.jpg",
+      "sha256": "ffa5af12125cb1bed8adabc06560dfeb2ce56edfe162882018296c085054bfa8",
+      "bytes": 20921,
+      "width": 245,
+      "height": 230,
+      "alt": "RS Aggarwal CircleCase 1 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ffa5af12125cb1bed8adabc06560dfeb2ce56edfe162882018296c085054bfa8.jpg"
+    },
+    {
+      "filename": "db171f635add5bd7461348e0d22bd0ea7c712b8ac52789aad59550cd09e7b887.jpg",
+      "sha256": "db171f635add5bd7461348e0d22bd0ea7c712b8ac52789aad59550cd09e7b887",
+      "bytes": 44066,
+      "width": 565,
+      "height": 265,
+      "alt": "RS Aggarwal CircleCase 2 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/db171f635add5bd7461348e0d22bd0ea7c712b8ac52789aad59550cd09e7b887.jpg"
+    },
+    {
+      "filename": "aa9bab76d74b118cf03733f43aebfc09f25182d706cc0c2487c7240f2473175a.jpg",
+      "sha256": "aa9bab76d74b118cf03733f43aebfc09f25182d706cc0c2487c7240f2473175a",
+      "bytes": 18254,
+      "width": 265,
+      "height": 235,
+      "alt": "RS Aggarwal CircleCase 3 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aa9bab76d74b118cf03733f43aebfc09f25182d706cc0c2487c7240f2473175a.jpg"
+    },
+    {
+      "filename": "21feace24952720ed3fd6f6853f2e2012fbb861a9f103b989d6cc747560c9fa4.jpg",
+      "sha256": "21feace24952720ed3fd6f6853f2e2012fbb861a9f103b989d6cc747560c9fa4",
+      "bytes": 12507,
+      "width": 235,
+      "height": 255,
+      "alt": "RS Aggarwal CircleCase 4 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/21feace24952720ed3fd6f6853f2e2012fbb861a9f103b989d6cc747560c9fa4.jpg"
+    },
+    {
+      "filename": "55275110e23843af1462220ef3b6ca0715f60115de0dd76e0a517250d4d0c1b5.jpg",
+      "sha256": "55275110e23843af1462220ef3b6ca0715f60115de0dd76e0a517250d4d0c1b5",
+      "bytes": 13667,
+      "width": 260,
+      "height": 240,
+      "alt": "RS Aggarwal CircleCase 5 original diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/55275110e23843af1462220ef3b6ca0715f60115de0dd76e0a517250d4d0c1b5.jpg"
+    },
+    {
+      "filename": "8f6dab625e5d04fe223f8b1ed3bf462fbe9e2e373028c94d8edda2a276933067.jpg",
+      "sha256": "8f6dab625e5d04fe223f8b1ed3bf462fbe9e2e373028c94d8edda2a276933067",
+      "bytes": 8267,
+      "width": 152,
+      "height": 183,
+      "alt": "RS Aggarwal SurfaceAreas CombinationExample_14a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8f6dab625e5d04fe223f8b1ed3bf462fbe9e2e373028c94d8edda2a276933067.jpg"
+    },
+    {
+      "filename": "927d62a46d4c136dd912636bae322ae8b38a4b55411fbc578842d6e3778e0f34.jpg",
+      "sha256": "927d62a46d4c136dd912636bae322ae8b38a4b55411fbc578842d6e3778e0f34",
+      "bytes": 9580,
+      "width": 127,
+      "height": 186,
+      "alt": "RS Aggarwal SurfaceAreas CombinationExample_20a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/927d62a46d4c136dd912636bae322ae8b38a4b55411fbc578842d6e3778e0f34.jpg"
+    },
+    {
+      "filename": "46946cf11267b893a0248fdefd2d8b19e78fc17c06ae269623a18e1a33c4e2a3.jpg",
+      "sha256": "46946cf11267b893a0248fdefd2d8b19e78fc17c06ae269623a18e1a33c4e2a3",
+      "bytes": 22642,
+      "width": 366,
+      "height": 218,
+      "alt": "RS Aggarwal SurfaceAreas CombinationExample_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/46946cf11267b893a0248fdefd2d8b19e78fc17c06ae269623a18e1a33c4e2a3.jpg"
+    },
+    {
+      "filename": "3ced01cc5c47b6c808b226e1dfa87c1ea27f306362259041659b9b08600628ac.jpg",
+      "sha256": "3ced01cc5c47b6c808b226e1dfa87c1ea27f306362259041659b9b08600628ac",
+      "bytes": 22368,
+      "width": 178,
+      "height": 387,
+      "alt": "RS Aggarwal SurfaceAreas CombinationExample_22a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3ced01cc5c47b6c808b226e1dfa87c1ea27f306362259041659b9b08600628ac.jpg"
+    },
+    {
+      "filename": "b0065aacb0e562db7cc71bd309e9cb135cfbb790b743d4a1a9739f408c6731d9.jpg",
+      "sha256": "b0065aacb0e562db7cc71bd309e9cb135cfbb790b743d4a1a9739f408c6731d9",
+      "bytes": 9537,
+      "width": 218,
+      "height": 173,
+      "alt": "RS Aggarwal SurfaceAreas CombinationExample_23a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b0065aacb0e562db7cc71bd309e9cb135cfbb790b743d4a1a9739f408c6731d9.jpg"
+    },
+    {
+      "filename": "fb559ada938497e3e6f6d5b13a5c2b294691b2eafc3ed5b6eeddca5197e969fc.jpg",
+      "sha256": "fb559ada938497e3e6f6d5b13a5c2b294691b2eafc3ed5b6eeddca5197e969fc",
+      "bytes": 9211,
+      "width": 128,
+      "height": 199,
+      "alt": "RS Aggarwal SurfaceAreas Ex17A_20 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fb559ada938497e3e6f6d5b13a5c2b294691b2eafc3ed5b6eeddca5197e969fc.jpg"
+    },
+    {
+      "filename": "6911274da03726cc6ffacc0a44879c892ea48ee527779f51d62ac2f582cd43d6.jpg",
+      "sha256": "6911274da03726cc6ffacc0a44879c892ea48ee527779f51d62ac2f582cd43d6",
+      "bytes": 19915,
+      "width": 414,
+      "height": 197,
+      "alt": "RS Aggarwal SurfaceAreas Ex17A_27 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6911274da03726cc6ffacc0a44879c892ea48ee527779f51d62ac2f582cd43d6.jpg"
+    },
+    {
+      "filename": "b211f3dd88cafe6ba07eb0c8479b46261278c191e985c4085db34af0e8870874.jpg",
+      "sha256": "b211f3dd88cafe6ba07eb0c8479b46261278c191e985c4085db34af0e8870874",
+      "bytes": 7732,
+      "width": 141,
+      "height": 206,
+      "alt": "RS Aggarwal SurfaceAreas Ex17A_31a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b211f3dd88cafe6ba07eb0c8479b46261278c191e985c4085db34af0e8870874.jpg"
+    },
+    {
+      "filename": "7535f103920e04cb5f939e6e6419c9a054c5f1ae66173f1d393401b58ab088dd.jpg",
+      "sha256": "7535f103920e04cb5f939e6e6419c9a054c5f1ae66173f1d393401b58ab088dd",
+      "bytes": 12433,
+      "width": 157,
+      "height": 345,
+      "alt": "RS Aggarwal SurfaceAreas Ex17A_32a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7535f103920e04cb5f939e6e6419c9a054c5f1ae66173f1d393401b58ab088dd.jpg"
+    },
+    {
+      "filename": "d8740a7f885139155eddf4b558832c09b941e07de53901cf8a49850dd787a2b3.jpg",
+      "sha256": "d8740a7f885139155eddf4b558832c09b941e07de53901cf8a49850dd787a2b3",
+      "bytes": 22025,
+      "width": 333,
+      "height": 282,
+      "alt": "RS Aggarwal SurfaceAreas FrustumExample_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8740a7f885139155eddf4b558832c09b941e07de53901cf8a49850dd787a2b3.jpg"
+    },
+    {
+      "filename": "687fb47ad33195c558f0e15a4c19883a59069e84e6169ec8c6f123844f7ef1ef.jpg",
+      "sha256": "687fb47ad33195c558f0e15a4c19883a59069e84e6169ec8c6f123844f7ef1ef",
+      "bytes": 17683,
+      "width": 205,
+      "height": 301,
+      "alt": "RS Aggarwal SurfaceAreas FrustumExample_5a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/687fb47ad33195c558f0e15a4c19883a59069e84e6169ec8c6f123844f7ef1ef.jpg"
+    },
+    {
+      "filename": "86894f4a837082f96d4e78084e164cd3d5304254b5bea44b36e7135036090f9e.jpg",
+      "sha256": "86894f4a837082f96d4e78084e164cd3d5304254b5bea44b36e7135036090f9e",
+      "bytes": 14806,
+      "width": 232,
+      "height": 288,
+      "alt": "RS Aggarwal SurfaceAreas FrustumExample_6 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/86894f4a837082f96d4e78084e164cd3d5304254b5bea44b36e7135036090f9e.jpg"
+    },
+    {
+      "filename": "d0faf15b54b4428b474ff43950cef891693147fc6af57454cae2cc817e36e543.jpg",
+      "sha256": "d0faf15b54b4428b474ff43950cef891693147fc6af57454cae2cc817e36e543",
+      "bytes": 12802,
+      "width": 173,
+      "height": 165,
+      "alt": "RS Aggarwal SurfaceAreas Ex17C_20 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d0faf15b54b4428b474ff43950cef891693147fc6af57454cae2cc817e36e543.jpg"
+    },
+    {
+      "filename": "f28e19c0fd2d5ac41d71b32819bb32d835d0304c9b309053c22c997758ce2709.jpg",
+      "sha256": "f28e19c0fd2d5ac41d71b32819bb32d835d0304c9b309053c22c997758ce2709",
+      "bytes": 13558,
+      "width": 221,
+      "height": 242,
+      "alt": "RS Aggarwal SurfaceAreas Ex17C_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f28e19c0fd2d5ac41d71b32819bb32d835d0304c9b309053c22c997758ce2709.jpg"
+    },
+    {
+      "filename": "a0a794a05f586e68fe07d50df628966cb5b4e192665376a7676f9acb0dfbbe59.jpg",
+      "sha256": "a0a794a05f586e68fe07d50df628966cb5b4e192665376a7676f9acb0dfbbe59",
+      "bytes": 13725,
+      "width": 143,
+      "height": 191,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_2 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0a794a05f586e68fe07d50df628966cb5b4e192665376a7676f9acb0dfbbe59.jpg"
+    },
+    {
+      "filename": "0d2ed8d93db355a23932f8345a5c89ee107b6d0da34c4a735ecee801bc1f1f8f.jpg",
+      "sha256": "0d2ed8d93db355a23932f8345a5c89ee107b6d0da34c4a735ecee801bc1f1f8f",
+      "bytes": 6879,
+      "width": 137,
+      "height": 195,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_3 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0d2ed8d93db355a23932f8345a5c89ee107b6d0da34c4a735ecee801bc1f1f8f.jpg"
+    },
+    {
+      "filename": "5038e14ef675621a0c273ffc742af470f4412691b07057830272a4e68cf976ab.jpg",
+      "sha256": "5038e14ef675621a0c273ffc742af470f4412691b07057830272a4e68cf976ab",
+      "bytes": 5129,
+      "width": 95,
+      "height": 187,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5038e14ef675621a0c273ffc742af470f4412691b07057830272a4e68cf976ab.jpg"
+    },
+    {
+      "filename": "b2dfee0d02cab90ba55e54be1df49a459ab233b21131b15ab7b62d5fe8b7c1ad.jpg",
+      "sha256": "b2dfee0d02cab90ba55e54be1df49a459ab233b21131b15ab7b62d5fe8b7c1ad",
+      "bytes": 6638,
+      "width": 129,
+      "height": 190,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_5 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b2dfee0d02cab90ba55e54be1df49a459ab233b21131b15ab7b62d5fe8b7c1ad.jpg"
+    },
+    {
+      "filename": "d9490b134a86985a45c7229a05d8a95639c1e9c81190777287df651b9e7d4aae.jpg",
+      "sha256": "d9490b134a86985a45c7229a05d8a95639c1e9c81190777287df651b9e7d4aae",
+      "bytes": 4693,
+      "width": 252,
+      "height": 69,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_6 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d9490b134a86985a45c7229a05d8a95639c1e9c81190777287df651b9e7d4aae.jpg"
+    },
+    {
+      "filename": "cf0039918950dbe0368a1a89413a07dd231b46c27a1910536a07f557fc8f1796.jpg",
+      "sha256": "cf0039918950dbe0368a1a89413a07dd231b46c27a1910536a07f557fc8f1796",
+      "bytes": 8382,
+      "width": 123,
+      "height": 213,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cf0039918950dbe0368a1a89413a07dd231b46c27a1910536a07f557fc8f1796.jpg"
+    },
+    {
+      "filename": "4d6e0ee1bd3161f508cc042f55888435f33a4a0753ae57dfb1469d3d2c4da7a0.jpg",
+      "sha256": "4d6e0ee1bd3161f508cc042f55888435f33a4a0753ae57dfb1469d3d2c4da7a0",
+      "bytes": 5824,
+      "width": 144,
+      "height": 118,
+      "alt": "RS Aggarwal SurfaceAreas MCQ_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4d6e0ee1bd3161f508cc042f55888435f33a4a0753ae57dfb1469d3d2c4da7a0.jpg"
+    },
+    {
+      "filename": "4aebf9d5b37542f27e8006954705ce4c5c81b09314f22b8562491f7318895051.jpg",
+      "sha256": "4aebf9d5b37542f27e8006954705ce4c5c81b09314f22b8562491f7318895051",
+      "bytes": 9879,
+      "width": 153,
+      "height": 213,
+      "alt": "RS Aggarwal SurfaceAreas AdditionalAR_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4aebf9d5b37542f27e8006954705ce4c5c81b09314f22b8562491f7318895051.jpg"
+    },
+    {
+      "filename": "2fb763dfe9cf83d95e5389bb1c64b124cb03d482b93e3f327b8104f9f5545378.jpg",
+      "sha256": "2fb763dfe9cf83d95e5389bb1c64b124cb03d482b93e3f327b8104f9f5545378",
+      "bytes": 5701,
+      "width": 145,
+      "height": 86,
+      "alt": "RS Aggarwal SurfaceAreas AdditionalAR_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2fb763dfe9cf83d95e5389bb1c64b124cb03d482b93e3f327b8104f9f5545378.jpg"
+    },
+    {
+      "filename": "43eb5f46bb6a9651ba8ace3c5d3b9c2f260abe0045483aa51a3711efbc59374b.jpg",
+      "sha256": "43eb5f46bb6a9651ba8ace3c5d3b9c2f260abe0045483aa51a3711efbc59374b",
+      "bytes": 34732,
+      "width": 448,
+      "height": 185,
+      "alt": "RS Aggarwal SurfaceAreas Case_1a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/43eb5f46bb6a9651ba8ace3c5d3b9c2f260abe0045483aa51a3711efbc59374b.jpg"
+    },
+    {
+      "filename": "fae21ec8ddcf7a56d5a607848a1a995f33fcbfe89078df4e2934ce7d947af574.jpg",
+      "sha256": "fae21ec8ddcf7a56d5a607848a1a995f33fcbfe89078df4e2934ce7d947af574",
+      "bytes": 31994,
+      "width": 331,
+      "height": 207,
+      "alt": "RS Aggarwal SurfaceAreas Case_2a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fae21ec8ddcf7a56d5a607848a1a995f33fcbfe89078df4e2934ce7d947af574.jpg"
+    },
+    {
+      "filename": "5a6cd46ae2c39affcc57a604a4d763aa64dabff79a8fb75f5cadf0941d06af40.jpg",
+      "sha256": "5a6cd46ae2c39affcc57a604a4d763aa64dabff79a8fb75f5cadf0941d06af40",
+      "bytes": 10131,
+      "width": 195,
+      "height": 220,
+      "alt": "RS Aggarwal SurfaceAreas Case_3a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5a6cd46ae2c39affcc57a604a4d763aa64dabff79a8fb75f5cadf0941d06af40.jpg"
+    },
+    {
+      "filename": "fe78b0067fd4a6a5767dd3443f57fadb228d8cfe44bcf6405191e82f29d2f32c.jpg",
+      "sha256": "fe78b0067fd4a6a5767dd3443f57fadb228d8cfe44bcf6405191e82f29d2f32c",
+      "bytes": 14661,
+      "width": 431,
+      "height": 193,
+      "alt": "RS Aggarwal SurfaceAreas Case_5a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fe78b0067fd4a6a5767dd3443f57fadb228d8cfe44bcf6405191e82f29d2f32c.jpg"
+    },
+    {
+      "filename": "cbbec1af95aa8d40472451c6cbb10669da9778e6686716641b80c5b8a757303d.jpg",
+      "sha256": "cbbec1af95aa8d40472451c6cbb10669da9778e6686716641b80c5b8a757303d",
+      "bytes": 21209,
+      "width": 344,
+      "height": 169,
+      "alt": "RS Aggarwal SurfaceAreas Case_6a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cbbec1af95aa8d40472451c6cbb10669da9778e6686716641b80c5b8a757303d.jpg"
+    }
+  ]
+}

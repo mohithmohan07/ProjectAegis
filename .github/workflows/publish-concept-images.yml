@@ -10,6 +10,8 @@ on:
       - 'ops/concept-image-assets/2026-10-18-kalmadi/**'
       - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch01/**'
       - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch02/**'
+      - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch04/**'
+      - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch05/**'
       - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch03/**'
 
 permissions:
@@ -39,6 +41,10 @@ jobs:
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch02
           mv image-url-verification.json rs-aggarwal-batch02-image-url-verification.json
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch03
+          mv image-url-verification.json rs-aggarwal-batch03-image-url-verification.json
+          python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch04
+          mv image-url-verification.json rs-aggarwal-batch04-image-url-verification.json
+          python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch05
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:

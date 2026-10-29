@@ -1,0 +1,672 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "70f993f547260ea500b993e3b047cc9d01e52d84ee166b710706aad5c8423611.jpg",
+      "sha256": "70f993f547260ea500b993e3b047cc9d01e52d84ee166b710706aad5c8423611",
+      "bytes": 11780,
+      "width": 240,
+      "height": 255,
+      "alt": "RS Aggarwal RatioExample 16a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/70f993f547260ea500b993e3b047cc9d01e52d84ee166b710706aad5c8423611.jpg"
+    },
+    {
+      "filename": "1a1ce79f9434345b41377e8481c2230c708192c0d59b3b2a46c1ec5ceace68bc.jpg",
+      "sha256": "1a1ce79f9434345b41377e8481c2230c708192c0d59b3b2a46c1ec5ceace68bc",
+      "bytes": 8280,
+      "width": 175,
+      "height": 230,
+      "alt": "RS Aggarwal Ex10 23a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1a1ce79f9434345b41377e8481c2230c708192c0d59b3b2a46c1ec5ceace68bc.jpg"
+    },
+    {
+      "filename": "4a34a629b8c702ad9b3183db397be6ba09172159bdf1288af44c5b57dfcb15a3.jpg",
+      "sha256": "4a34a629b8c702ad9b3183db397be6ba09172159bdf1288af44c5b57dfcb15a3",
+      "bytes": 7477,
+      "width": 185,
+      "height": 175,
+      "alt": "RS Aggarwal Ex10 26a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4a34a629b8c702ad9b3183db397be6ba09172159bdf1288af44c5b57dfcb15a3.jpg"
+    },
+    {
+      "filename": "d21ae80c9ecda74e9f5df8c42df11f00e035a75732f681467b2cbbdc40aa23ba.jpg",
+      "sha256": "d21ae80c9ecda74e9f5df8c42df11f00e035a75732f681467b2cbbdc40aa23ba",
+      "bytes": 7027,
+      "width": 215,
+      "height": 170,
+      "alt": "RS Aggarwal AngleExample 13a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d21ae80c9ecda74e9f5df8c42df11f00e035a75732f681467b2cbbdc40aa23ba.jpg"
+    },
+    {
+      "filename": "10c1e94a10606fc6778f25b0ada83b5b40b6156bf4fc290e94b4d6b53648836a.jpg",
+      "sha256": "10c1e94a10606fc6778f25b0ada83b5b40b6156bf4fc290e94b4d6b53648836a",
+      "bytes": 6388,
+      "width": 225,
+      "height": 160,
+      "alt": "RS Aggarwal AngleExample 14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/10c1e94a10606fc6778f25b0ada83b5b40b6156bf4fc290e94b4d6b53648836a.jpg"
+    },
+    {
+      "filename": "a2d9e6697ef7f70c746c6ee98f9ff11255b33556941266327a854fb33eadcad0.jpg",
+      "sha256": "a2d9e6697ef7f70c746c6ee98f9ff11255b33556941266327a854fb33eadcad0",
+      "bytes": 7887,
+      "width": 185,
+      "height": 200,
+      "alt": "RS Aggarwal Exercise11 28a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a2d9e6697ef7f70c746c6ee98f9ff11255b33556941266327a854fb33eadcad0.jpg"
+    },
+    {
+      "filename": "d4e387a4ab93bf90340aaf58af71673e4f80c08a9be0f70148937b151e7e6b3b.jpg",
+      "sha256": "d4e387a4ab93bf90340aaf58af71673e4f80c08a9be0f70148937b151e7e6b3b",
+      "bytes": 7738,
+      "width": 215,
+      "height": 200,
+      "alt": "RS Aggarwal Exercise11 29a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d4e387a4ab93bf90340aaf58af71673e4f80c08a9be0f70148937b151e7e6b3b.jpg"
+    },
+    {
+      "filename": "a31c112ad83e1f961404035c50bb33bcb4f966aed8b7364abbb8583a5bb130fa.jpg",
+      "sha256": "a31c112ad83e1f961404035c50bb33bcb4f966aed8b7364abbb8583a5bb130fa",
+      "bytes": 8032,
+      "width": 175,
+      "height": 190,
+      "alt": "RS Aggarwal Exercise11 30a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a31c112ad83e1f961404035c50bb33bcb4f966aed8b7364abbb8583a5bb130fa.jpg"
+    },
+    {
+      "filename": "4efb3580a69ff15adfba4b60527b3f799e9a6bf6ee1ec84f3883e5db43ff367a.jpg",
+      "sha256": "4efb3580a69ff15adfba4b60527b3f799e9a6bf6ee1ec84f3883e5db43ff367a",
+      "bytes": 6265,
+      "width": 180,
+      "height": 125,
+      "alt": "RS Aggarwal AdditionalAR 13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4efb3580a69ff15adfba4b60527b3f799e9a6bf6ee1ec84f3883e5db43ff367a.jpg"
+    },
+    {
+      "filename": "f9a9b34d8e645fa5b27ac4bf084382403808344606486ddfe854736c39a3ad19.jpg",
+      "sha256": "f9a9b34d8e645fa5b27ac4bf084382403808344606486ddfe854736c39a3ad19",
+      "bytes": 5384,
+      "width": 100,
+      "height": 150,
+      "alt": "RS Aggarwal AdditionalAR 14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f9a9b34d8e645fa5b27ac4bf084382403808344606486ddfe854736c39a3ad19.jpg"
+    },
+    {
+      "filename": "cdb15f63d34021f95cfa7171a09b2e83368486f5fca36fda038e2c944f1ce4c5.jpg",
+      "sha256": "cdb15f63d34021f95cfa7171a09b2e83368486f5fca36fda038e2c944f1ce4c5",
+      "bytes": 16603,
+      "width": 358,
+      "height": 197,
+      "alt": "Jet receding horizontally from60 to30 degrees",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cdb15f63d34021f95cfa7171a09b2e83368486f5fca36fda038e2c944f1ce4c5.jpg"
+    },
+    {
+      "filename": "507166940d6ba83a19b13ae9de1217699c67881e3b883d7af854a125f41f14f6.jpg",
+      "sha256": "507166940d6ba83a19b13ae9de1217699c67881e3b883d7af854a125f41f14f6",
+      "bytes": 15701,
+      "width": 385,
+      "height": 213,
+      "alt": "Jet positions on the same side of observer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/507166940d6ba83a19b13ae9de1217699c67881e3b883d7af854a125f41f14f6.jpg"
+    },
+    {
+      "filename": "2a02bce43612e5c6c8a493de5ae4224cc1203a1859249004cc7a203ab1e5059d.jpg",
+      "sha256": "2a02bce43612e5c6c8a493de5ae4224cc1203a1859249004cc7a203ab1e5059d",
+      "bytes": 20135,
+      "width": 366,
+      "height": 304,
+      "alt": "Balloon tangents and centre elevation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2a02bce43612e5c6c8a493de5ae4224cc1203a1859249004cc7a203ab1e5059d.jpg"
+    },
+    {
+      "filename": "246d047cd5c625d70fe4a9d022bfb570e0a2b5774fcf3b6ce9c6fd392a8de3ae.jpg",
+      "sha256": "246d047cd5c625d70fe4a9d022bfb570e0a2b5774fcf3b6ce9c6fd392a8de3ae",
+      "bytes": 16574,
+      "width": 340,
+      "height": 228,
+      "alt": "Same-side receding aeroplane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/246d047cd5c625d70fe4a9d022bfb570e0a2b5774fcf3b6ce9c6fd392a8de3ae.jpg"
+    },
+    {
+      "filename": "d4b2a1a8fb850d83158ffdd5acc16a88504d505e443cc551816e8f71a9bd7531.jpg",
+      "sha256": "d4b2a1a8fb850d83158ffdd5acc16a88504d505e443cc551816e8f71a9bd7531",
+      "bytes": 6394,
+      "width": 192,
+      "height": 182,
+      "alt": "Tower AB and ground shadow BC",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d4b2a1a8fb850d83158ffdd5acc16a88504d505e443cc551816e8f71a9bd7531.jpg"
+    },
+    {
+      "filename": "6fb1b3dba6989538eadcbac037e7e0f21581b064b0896883f9fb327ad3ad57a7.jpg",
+      "sha256": "6fb1b3dba6989538eadcbac037e7e0f21581b064b0896883f9fb327ad3ad57a7",
+      "bytes": 28733,
+      "width": 396,
+      "height": 395,
+      "alt": "Radio tower positions A B P and wire anchor O",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6fb1b3dba6989538eadcbac037e7e0f21581b064b0896883f9fb327ad3ad57a7.jpg"
+    },
+    {
+      "filename": "8a86d01b3b4043e13cf55b7e4a3c29b41b07642087cb2e813c531c87185b634f.jpg",
+      "sha256": "8a86d01b3b4043e13cf55b7e4a3c29b41b07642087cb2e813c531c87185b634f",
+      "bytes": 39378,
+      "width": 562,
+      "height": 350,
+      "alt": "Original contradictory bird and ball diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8a86d01b3b4043e13cf55b7e4a3c29b41b07642087cb2e813c531c87185b634f.jpg"
+    },
+    {
+      "filename": "4135dabbf74f9e2c8f6e14cb60bf6b4d04437c8aa5a1049d8dbc0e2b13cb0ec7.jpg",
+      "sha256": "4135dabbf74f9e2c8f6e14cb60bf6b4d04437c8aa5a1049d8dbc0e2b13cb0ec7",
+      "bytes": 11076,
+      "width": 287,
+      "height": 179,
+      "alt": "RS Aggarwal Circles Example_3 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4135dabbf74f9e2c8f6e14cb60bf6b4d04437c8aa5a1049d8dbc0e2b13cb0ec7.jpg"
+    },
+    {
+      "filename": "10138e39120b3a26977b3e7ee78d08e990f272bc2e2eb9d413e5f58d751bed19.jpg",
+      "sha256": "10138e39120b3a26977b3e7ee78d08e990f272bc2e2eb9d413e5f58d751bed19",
+      "bytes": 12403,
+      "width": 225,
+      "height": 179,
+      "alt": "RS Aggarwal Circles Example_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/10138e39120b3a26977b3e7ee78d08e990f272bc2e2eb9d413e5f58d751bed19.jpg"
+    },
+    {
+      "filename": "57a26f2c35693d836f27d0421a7c58a2a55216de249cc4095925636a47410408.jpg",
+      "sha256": "57a26f2c35693d836f27d0421a7c58a2a55216de249cc4095925636a47410408",
+      "bytes": 10779,
+      "width": 233,
+      "height": 156,
+      "alt": "RS Aggarwal Circles Example_5 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/57a26f2c35693d836f27d0421a7c58a2a55216de249cc4095925636a47410408.jpg"
+    },
+    {
+      "filename": "1dc4d3fff365469db58b39bd7552a7b53cfc278abe174a3415a35fcd055efb3c.jpg",
+      "sha256": "1dc4d3fff365469db58b39bd7552a7b53cfc278abe174a3415a35fcd055efb3c",
+      "bytes": 12050,
+      "width": 171,
+      "height": 169,
+      "alt": "RS Aggarwal Circles Example_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1dc4d3fff365469db58b39bd7552a7b53cfc278abe174a3415a35fcd055efb3c.jpg"
+    },
+    {
+      "filename": "99b9814dafe0cb65117ee6dd08e1d02483411a7b9d600a34f37d39b8af300c01.jpg",
+      "sha256": "99b9814dafe0cb65117ee6dd08e1d02483411a7b9d600a34f37d39b8af300c01",
+      "bytes": 9221,
+      "width": 253,
+      "height": 163,
+      "alt": "RS Aggarwal Circles Example_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/99b9814dafe0cb65117ee6dd08e1d02483411a7b9d600a34f37d39b8af300c01.jpg"
+    },
+    {
+      "filename": "3d0a9c3f2b6851c9d696ba788156441495e45498d424c8d5714e981b461ecb7e.jpg",
+      "sha256": "3d0a9c3f2b6851c9d696ba788156441495e45498d424c8d5714e981b461ecb7e",
+      "bytes": 17912,
+      "width": 299,
+      "height": 228,
+      "alt": "RS Aggarwal Circles Example_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3d0a9c3f2b6851c9d696ba788156441495e45498d424c8d5714e981b461ecb7e.jpg"
+    },
+    {
+      "filename": "920c4a19877ac9cadc3120406a66b9a750cf39bcb20562fb57df026ac3b878e0.jpg",
+      "sha256": "920c4a19877ac9cadc3120406a66b9a750cf39bcb20562fb57df026ac3b878e0",
+      "bytes": 12971,
+      "width": 293,
+      "height": 215,
+      "alt": "RS Aggarwal Circles Example_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/920c4a19877ac9cadc3120406a66b9a750cf39bcb20562fb57df026ac3b878e0.jpg"
+    },
+    {
+      "filename": "fe1bd9a92b09f0b1c4c0926bff1ff9a37c4ad078b7ed62d277533317b40f08f8.jpg",
+      "sha256": "fe1bd9a92b09f0b1c4c0926bff1ff9a37c4ad078b7ed62d277533317b40f08f8",
+      "bytes": 8715,
+      "width": 187,
+      "height": 186,
+      "alt": "RS Aggarwal Circles Example_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fe1bd9a92b09f0b1c4c0926bff1ff9a37c4ad078b7ed62d277533317b40f08f8.jpg"
+    },
+    {
+      "filename": "1b79e268496f87b5043be707e053ba36e066330d2571a8dfd7aeab0284383582.jpg",
+      "sha256": "1b79e268496f87b5043be707e053ba36e066330d2571a8dfd7aeab0284383582",
+      "bytes": 9978,
+      "width": 234,
+      "height": 185,
+      "alt": "RS Aggarwal Circles Example_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1b79e268496f87b5043be707e053ba36e066330d2571a8dfd7aeab0284383582.jpg"
+    },
+    {
+      "filename": "638f8c437c12adce989d28b9c140c34c0fca2491278955ffb4e0e926b1f7f390.jpg",
+      "sha256": "638f8c437c12adce989d28b9c140c34c0fca2491278955ffb4e0e926b1f7f390",
+      "bytes": 9549,
+      "width": 188,
+      "height": 187,
+      "alt": "RS Aggarwal Circles Example_16 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/638f8c437c12adce989d28b9c140c34c0fca2491278955ffb4e0e926b1f7f390.jpg"
+    },
+    {
+      "filename": "611c7a1d365f2d2a0903b205a1d8b9bca8fdf6605465f28a6dbc75dff6ff6a2d.jpg",
+      "sha256": "611c7a1d365f2d2a0903b205a1d8b9bca8fdf6605465f28a6dbc75dff6ff6a2d",
+      "bytes": 10970,
+      "width": 212,
+      "height": 239,
+      "alt": "RS Aggarwal Circles Example_17 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/611c7a1d365f2d2a0903b205a1d8b9bca8fdf6605465f28a6dbc75dff6ff6a2d.jpg"
+    },
+    {
+      "filename": "66ef4fd76d6c4a738f1579bd756ff1222c2f1eecff066a4ee91802b7b31d984f.jpg",
+      "sha256": "66ef4fd76d6c4a738f1579bd756ff1222c2f1eecff066a4ee91802b7b31d984f",
+      "bytes": 9744,
+      "width": 238,
+      "height": 166,
+      "alt": "RS Aggarwal Circles Example_18 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/66ef4fd76d6c4a738f1579bd756ff1222c2f1eecff066a4ee91802b7b31d984f.jpg"
+    },
+    {
+      "filename": "da473acb780b714792d96ed4b3c50924b3672ad711b004a1b61ded24228dfc01.jpg",
+      "sha256": "da473acb780b714792d96ed4b3c50924b3672ad711b004a1b61ded24228dfc01",
+      "bytes": 13220,
+      "width": 312,
+      "height": 195,
+      "alt": "RS Aggarwal Circles Example_19 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/da473acb780b714792d96ed4b3c50924b3672ad711b004a1b61ded24228dfc01.jpg"
+    },
+    {
+      "filename": "49592420abf00241ba1389ea215f0d78400e46a8218ecaace3a3ef6f763e0634.jpg",
+      "sha256": "49592420abf00241ba1389ea215f0d78400e46a8218ecaace3a3ef6f763e0634",
+      "bytes": 13652,
+      "width": 236,
+      "height": 242,
+      "alt": "RS Aggarwal Circles Example_20a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49592420abf00241ba1389ea215f0d78400e46a8218ecaace3a3ef6f763e0634.jpg"
+    },
+    {
+      "filename": "b223d2f343014f250fa1ab23313b608124df93aca68fd48dc9f7989b131d99e5.jpg",
+      "sha256": "b223d2f343014f250fa1ab23313b608124df93aca68fd48dc9f7989b131d99e5",
+      "bytes": 18467,
+      "width": 210,
+      "height": 301,
+      "alt": "RS Aggarwal Circles Example_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b223d2f343014f250fa1ab23313b608124df93aca68fd48dc9f7989b131d99e5.jpg"
+    },
+    {
+      "filename": "c8319f63b0f21f6d6c458a6334b12f666982031e47f9d2b92d5d44790e3ed4c0.jpg",
+      "sha256": "c8319f63b0f21f6d6c458a6334b12f666982031e47f9d2b92d5d44790e3ed4c0",
+      "bytes": 16854,
+      "width": 300,
+      "height": 240,
+      "alt": "RS Aggarwal Circles Example_22 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c8319f63b0f21f6d6c458a6334b12f666982031e47f9d2b92d5d44790e3ed4c0.jpg"
+    },
+    {
+      "filename": "8526471f477c48369e8c30d3d4fa438e34dcf9f0f10c0cd0347b4258364b41ed.jpg",
+      "sha256": "8526471f477c48369e8c30d3d4fa438e34dcf9f0f10c0cd0347b4258364b41ed",
+      "bytes": 16938,
+      "width": 303,
+      "height": 241,
+      "alt": "RS Aggarwal Circles Example_23 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8526471f477c48369e8c30d3d4fa438e34dcf9f0f10c0cd0347b4258364b41ed.jpg"
+    },
+    {
+      "filename": "fa0fe7cc7175c2f34922137fbdb01d29c0e2dcbee99d7f1b445a45976d804dac.jpg",
+      "sha256": "fa0fe7cc7175c2f34922137fbdb01d29c0e2dcbee99d7f1b445a45976d804dac",
+      "bytes": 12605,
+      "width": 282,
+      "height": 199,
+      "alt": "RS Aggarwal Circles Example_24 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fa0fe7cc7175c2f34922137fbdb01d29c0e2dcbee99d7f1b445a45976d804dac.jpg"
+    },
+    {
+      "filename": "f9bffc109c62a6b029467277f481e5796e604e048ad0fb2397f806cc885c82c1.jpg",
+      "sha256": "f9bffc109c62a6b029467277f481e5796e604e048ad0fb2397f806cc885c82c1",
+      "bytes": 11964,
+      "width": 196,
+      "height": 198,
+      "alt": "RS Aggarwal Circles Example_27 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f9bffc109c62a6b029467277f481e5796e604e048ad0fb2397f806cc885c82c1.jpg"
+    },
+    {
+      "filename": "38950d3c8bf06b6ceca30925dade65c7db712a093f4c772fb1c44d61db5ec01f.jpg",
+      "sha256": "38950d3c8bf06b6ceca30925dade65c7db712a093f4c772fb1c44d61db5ec01f",
+      "bytes": 11518,
+      "width": 285,
+      "height": 153,
+      "alt": "RS Aggarwal Circles Example_30 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/38950d3c8bf06b6ceca30925dade65c7db712a093f4c772fb1c44d61db5ec01f.jpg"
+    },
+    {
+      "filename": "4442ec1132855dbc94bfcdaf4e8dac52fed3f6ccbb65356deea0bb337197b595.jpg",
+      "sha256": "4442ec1132855dbc94bfcdaf4e8dac52fed3f6ccbb65356deea0bb337197b595",
+      "bytes": 14583,
+      "width": 296,
+      "height": 183,
+      "alt": "RS Aggarwal Circles Example_32 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4442ec1132855dbc94bfcdaf4e8dac52fed3f6ccbb65356deea0bb337197b595.jpg"
+    },
+    {
+      "filename": "3781f078a32b65fff251f0ca7abc018ca9ac6681e25ecc50ab9d2ea36ec7e0d6.jpg",
+      "sha256": "3781f078a32b65fff251f0ca7abc018ca9ac6681e25ecc50ab9d2ea36ec7e0d6",
+      "bytes": 12409,
+      "width": 291,
+      "height": 223,
+      "alt": "RS Aggarwal Circles Ex8A_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3781f078a32b65fff251f0ca7abc018ca9ac6681e25ecc50ab9d2ea36ec7e0d6.jpg"
+    },
+    {
+      "filename": "64e3c5f669bcc56966eb171eeb200126fe9f2147c8f6bd82affbf64a703a9ab1.jpg",
+      "sha256": "64e3c5f669bcc56966eb171eeb200126fe9f2147c8f6bd82affbf64a703a9ab1",
+      "bytes": 9712,
+      "width": 272,
+      "height": 164,
+      "alt": "RS Aggarwal Circles Ex8A_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/64e3c5f669bcc56966eb171eeb200126fe9f2147c8f6bd82affbf64a703a9ab1.jpg"
+    },
+    {
+      "filename": "d8a54e2631b38733b96c2c990c2e38b8a4d58ebec63e4e7b58319c33469fdedf.jpg",
+      "sha256": "d8a54e2631b38733b96c2c990c2e38b8a4d58ebec63e4e7b58319c33469fdedf",
+      "bytes": 15631,
+      "width": 329,
+      "height": 169,
+      "alt": "RS Aggarwal Circles Ex8A_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8a54e2631b38733b96c2c990c2e38b8a4d58ebec63e4e7b58319c33469fdedf.jpg"
+    },
+    {
+      "filename": "5c5acc40aebcf45de7879280a772d9db5466dfebe84ab0de1104c8909e5d4464.jpg",
+      "sha256": "5c5acc40aebcf45de7879280a772d9db5466dfebe84ab0de1104c8909e5d4464",
+      "bytes": 16878,
+      "width": 297,
+      "height": 239,
+      "alt": "RS Aggarwal Circles Ex8A_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c5acc40aebcf45de7879280a772d9db5466dfebe84ab0de1104c8909e5d4464.jpg"
+    },
+    {
+      "filename": "ee40ffb5ace43ba58dc648c5f7c97a794da1a12e145bdb8a827a64b4eb0d5c2a.jpg",
+      "sha256": "ee40ffb5ace43ba58dc648c5f7c97a794da1a12e145bdb8a827a64b4eb0d5c2a",
+      "bytes": 11885,
+      "width": 268,
+      "height": 180,
+      "alt": "RS Aggarwal Circles Ex8A_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ee40ffb5ace43ba58dc648c5f7c97a794da1a12e145bdb8a827a64b4eb0d5c2a.jpg"
+    },
+    {
+      "filename": "1adbfaa4a16deb932c646e8f789f053aa2cf2abe4744672abad9ad95649690ae.jpg",
+      "sha256": "1adbfaa4a16deb932c646e8f789f053aa2cf2abe4744672abad9ad95649690ae",
+      "bytes": 12819,
+      "width": 200,
+      "height": 197,
+      "alt": "RS Aggarwal Circles Ex8A_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1adbfaa4a16deb932c646e8f789f053aa2cf2abe4744672abad9ad95649690ae.jpg"
+    },
+    {
+      "filename": "6c1ae9e599b9579b54109c8b3c4c673e14e28d6fa9591197f9b4323d801118b7.jpg",
+      "sha256": "6c1ae9e599b9579b54109c8b3c4c673e14e28d6fa9591197f9b4323d801118b7",
+      "bytes": 11138,
+      "width": 247,
+      "height": 184,
+      "alt": "RS Aggarwal Circles Ex8A_16 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6c1ae9e599b9579b54109c8b3c4c673e14e28d6fa9591197f9b4323d801118b7.jpg"
+    },
+    {
+      "filename": "2af0a5d0e26ea66f3960cea662a790521b13eab675c5e4bb3f4c2c9545fa615f.jpg",
+      "sha256": "2af0a5d0e26ea66f3960cea662a790521b13eab675c5e4bb3f4c2c9545fa615f",
+      "bytes": 11158,
+      "width": 217,
+      "height": 186,
+      "alt": "RS Aggarwal Circles Ex8B_3 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2af0a5d0e26ea66f3960cea662a790521b13eab675c5e4bb3f4c2c9545fa615f.jpg"
+    },
+    {
+      "filename": "b252061b47f91ff57cb1fe1d642aeac0d7876dc6cfa7537bad08f51a3cbee5d1.jpg",
+      "sha256": "b252061b47f91ff57cb1fe1d642aeac0d7876dc6cfa7537bad08f51a3cbee5d1",
+      "bytes": 16955,
+      "width": 398,
+      "height": 189,
+      "alt": "RS Aggarwal Circles Ex8B_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b252061b47f91ff57cb1fe1d642aeac0d7876dc6cfa7537bad08f51a3cbee5d1.jpg"
+    },
+    {
+      "filename": "a0a42b27e59819b47b06dff4ca281c536a45bcfcc4a5424b706ac4183d2ed2c7.jpg",
+      "sha256": "a0a42b27e59819b47b06dff4ca281c536a45bcfcc4a5424b706ac4183d2ed2c7",
+      "bytes": 9062,
+      "width": 204,
+      "height": 164,
+      "alt": "RS Aggarwal Circles Ex8B_5 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0a42b27e59819b47b06dff4ca281c536a45bcfcc4a5424b706ac4183d2ed2c7.jpg"
+    },
+    {
+      "filename": "6d4b62f2be818306721091f5756a7f62c9ce48a597b899e1cc40e0e5edc9bc56.jpg",
+      "sha256": "6d4b62f2be818306721091f5756a7f62c9ce48a597b899e1cc40e0e5edc9bc56",
+      "bytes": 10551,
+      "width": 229,
+      "height": 156,
+      "alt": "RS Aggarwal Circles Ex8B_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6d4b62f2be818306721091f5756a7f62c9ce48a597b899e1cc40e0e5edc9bc56.jpg"
+    },
+    {
+      "filename": "7bad383be46f9ab175c604d2015b4f3257f3dc7b6bfa5c38bbe61cd0c85a1528.jpg",
+      "sha256": "7bad383be46f9ab175c604d2015b4f3257f3dc7b6bfa5c38bbe61cd0c85a1528",
+      "bytes": 6872,
+      "width": 140,
+      "height": 155,
+      "alt": "RS Aggarwal Circles MCQ_2 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7bad383be46f9ab175c604d2015b4f3257f3dc7b6bfa5c38bbe61cd0c85a1528.jpg"
+    },
+    {
+      "filename": "f49ab7485ad1f9baa3d0de7f84994cc1c5f3be336e78fe6f30556b6fcea4edcc.jpg",
+      "sha256": "f49ab7485ad1f9baa3d0de7f84994cc1c5f3be336e78fe6f30556b6fcea4edcc",
+      "bytes": 9115,
+      "width": 196,
+      "height": 162,
+      "alt": "RS Aggarwal Circles MCQ_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f49ab7485ad1f9baa3d0de7f84994cc1c5f3be336e78fe6f30556b6fcea4edcc.jpg"
+    },
+    {
+      "filename": "c534274d614aa67db68e44c3ff70d05e39bc667ed5884488e3c460128a8ebae6.jpg",
+      "sha256": "c534274d614aa67db68e44c3ff70d05e39bc667ed5884488e3c460128a8ebae6",
+      "bytes": 9441,
+      "width": 219,
+      "height": 172,
+      "alt": "RS Aggarwal Circles MCQ_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c534274d614aa67db68e44c3ff70d05e39bc667ed5884488e3c460128a8ebae6.jpg"
+    },
+    {
+      "filename": "234493dac2e2df5ef80966e6907470c631fde12f4eef5a4c9c3b1f24560ead72.jpg",
+      "sha256": "234493dac2e2df5ef80966e6907470c631fde12f4eef5a4c9c3b1f24560ead72",
+      "bytes": 16715,
+      "width": 291,
+      "height": 215,
+      "alt": "RS Aggarwal Circles MCQ_17 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/234493dac2e2df5ef80966e6907470c631fde12f4eef5a4c9c3b1f24560ead72.jpg"
+    },
+    {
+      "filename": "396e6b36128d88877850fc4bc2a641bfe060b0ba4a9593137c4fb1553894c0e6.jpg",
+      "sha256": "396e6b36128d88877850fc4bc2a641bfe060b0ba4a9593137c4fb1553894c0e6",
+      "bytes": 17137,
+      "width": 321,
+      "height": 167,
+      "alt": "RS Aggarwal Circles MCQ_18 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/396e6b36128d88877850fc4bc2a641bfe060b0ba4a9593137c4fb1553894c0e6.jpg"
+    },
+    {
+      "filename": "84024cfb63afea89b96d3763799d16abac98cf5be2db076e2cdf166ba4aa9910.jpg",
+      "sha256": "84024cfb63afea89b96d3763799d16abac98cf5be2db076e2cdf166ba4aa9910",
+      "bytes": 13234,
+      "width": 349,
+      "height": 159,
+      "alt": "RS Aggarwal Circles MCQ_25 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/84024cfb63afea89b96d3763799d16abac98cf5be2db076e2cdf166ba4aa9910.jpg"
+    },
+    {
+      "filename": "4d8d8ba3e372f6b735067fa9fc3cc2185cf9b1690ebfbeca3ffb35b51ce2871e.jpg",
+      "sha256": "4d8d8ba3e372f6b735067fa9fc3cc2185cf9b1690ebfbeca3ffb35b51ce2871e",
+      "bytes": 11136,
+      "width": 255,
+      "height": 148,
+      "alt": "RS Aggarwal Circles MCQ_26 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4d8d8ba3e372f6b735067fa9fc3cc2185cf9b1690ebfbeca3ffb35b51ce2871e.jpg"
+    },
+    {
+      "filename": "407e28d72b116dfd24b789848eb78f08164f2ba42ef7038d116d6a02274f3c25.jpg",
+      "sha256": "407e28d72b116dfd24b789848eb78f08164f2ba42ef7038d116d6a02274f3c25",
+      "bytes": 11036,
+      "width": 250,
+      "height": 159,
+      "alt": "RS Aggarwal Circles MCQ_27 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/407e28d72b116dfd24b789848eb78f08164f2ba42ef7038d116d6a02274f3c25.jpg"
+    },
+    {
+      "filename": "4e721942071fac1d61edf1876aae6dd19534d8b88eb28fa87a97213051049b1e.jpg",
+      "sha256": "4e721942071fac1d61edf1876aae6dd19534d8b88eb28fa87a97213051049b1e",
+      "bytes": 15034,
+      "width": 333,
+      "height": 185,
+      "alt": "RS Aggarwal Circles MCQ_28 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4e721942071fac1d61edf1876aae6dd19534d8b88eb28fa87a97213051049b1e.jpg"
+    },
+    {
+      "filename": "20ecbf214e254cd686a981fd369560f3e83653c8dd965a1cf1723493020c2a46.jpg",
+      "sha256": "20ecbf214e254cd686a981fd369560f3e83653c8dd965a1cf1723493020c2a46",
+      "bytes": 11525,
+      "width": 230,
+      "height": 153,
+      "alt": "RS Aggarwal Circles MCQ_30 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/20ecbf214e254cd686a981fd369560f3e83653c8dd965a1cf1723493020c2a46.jpg"
+    },
+    {
+      "filename": "e04ea69125c79a51d72da97488bc5c411d5c12a7a52bab03ed3b5daf2c2e3463.jpg",
+      "sha256": "e04ea69125c79a51d72da97488bc5c411d5c12a7a52bab03ed3b5daf2c2e3463",
+      "bytes": 11276,
+      "width": 253,
+      "height": 155,
+      "alt": "RS Aggarwal Circles MCQ_32 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e04ea69125c79a51d72da97488bc5c411d5c12a7a52bab03ed3b5daf2c2e3463.jpg"
+    },
+    {
+      "filename": "f14fe5b4f8e1019efa96cef01843821b2bfbee31e76ef5d8e23689f595988847.jpg",
+      "sha256": "f14fe5b4f8e1019efa96cef01843821b2bfbee31e76ef5d8e23689f595988847",
+      "bytes": 9737,
+      "width": 177,
+      "height": 240,
+      "alt": "RS Aggarwal Circles MCQ_33 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f14fe5b4f8e1019efa96cef01843821b2bfbee31e76ef5d8e23689f595988847.jpg"
+    },
+    {
+      "filename": "d1b2df3fb0f820a7f54f6678185211acab652bc05c1ab012aef58930fd81e576.jpg",
+      "sha256": "d1b2df3fb0f820a7f54f6678185211acab652bc05c1ab012aef58930fd81e576",
+      "bytes": 17077,
+      "width": 314,
+      "height": 229,
+      "alt": "RS Aggarwal Circles MCQ_35 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d1b2df3fb0f820a7f54f6678185211acab652bc05c1ab012aef58930fd81e576.jpg"
+    },
+    {
+      "filename": "a3803d5bdd4331912994fb0870e6a3e72e666a5228a12f372462314c62f5f648.jpg",
+      "sha256": "a3803d5bdd4331912994fb0870e6a3e72e666a5228a12f372462314c62f5f648",
+      "bytes": 12358,
+      "width": 299,
+      "height": 224,
+      "alt": "RS Aggarwal Circles MCQ_36 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3803d5bdd4331912994fb0870e6a3e72e666a5228a12f372462314c62f5f648.jpg"
+    },
+    {
+      "filename": "3f8fe13c4558f3f80144a1ba8997450af4b4f5182ddf7f1251f13d8e86c8924f.jpg",
+      "sha256": "3f8fe13c4558f3f80144a1ba8997450af4b4f5182ddf7f1251f13d8e86c8924f",
+      "bytes": 13072,
+      "width": 302,
+      "height": 196,
+      "alt": "RS Aggarwal Circles MCQ_37 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3f8fe13c4558f3f80144a1ba8997450af4b4f5182ddf7f1251f13d8e86c8924f.jpg"
+    },
+    {
+      "filename": "efd3bbd03c98837801b8564dcc495a4f117c9afe2fbb64de5224a31daada7df5.jpg",
+      "sha256": "efd3bbd03c98837801b8564dcc495a4f117c9afe2fbb64de5224a31daada7df5",
+      "bytes": 10439,
+      "width": 191,
+      "height": 192,
+      "alt": "RS Aggarwal Circles MCQ_38 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/efd3bbd03c98837801b8564dcc495a4f117c9afe2fbb64de5224a31daada7df5.jpg"
+    },
+    {
+      "filename": "1ab0fd842a1ca6d4523b70b8bae9c4e63fc8f86352f959de73ecd2507a305992.jpg",
+      "sha256": "1ab0fd842a1ca6d4523b70b8bae9c4e63fc8f86352f959de73ecd2507a305992",
+      "bytes": 15278,
+      "width": 220,
+      "height": 246,
+      "alt": "RS Aggarwal Circles MCQ_39 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1ab0fd842a1ca6d4523b70b8bae9c4e63fc8f86352f959de73ecd2507a305992.jpg"
+    },
+    {
+      "filename": "c5cb43c1b04a66376201c3189a6f41688ad6143c386338813e88e926085fbd69.jpg",
+      "sha256": "c5cb43c1b04a66376201c3189a6f41688ad6143c386338813e88e926085fbd69",
+      "bytes": 10026,
+      "width": 235,
+      "height": 179,
+      "alt": "RS Aggarwal Circles MCQ_40 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c5cb43c1b04a66376201c3189a6f41688ad6143c386338813e88e926085fbd69.jpg"
+    },
+    {
+      "filename": "7fd1d2f2e309584c4f1f06d0db7dc646e2182bfc770d8acf6ab0623d0a06952e.jpg",
+      "sha256": "7fd1d2f2e309584c4f1f06d0db7dc646e2182bfc770d8acf6ab0623d0a06952e",
+      "bytes": 13666,
+      "width": 256,
+      "height": 224,
+      "alt": "RS Aggarwal Circles MCQ_42 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7fd1d2f2e309584c4f1f06d0db7dc646e2182bfc770d8acf6ab0623d0a06952e.jpg"
+    },
+    {
+      "filename": "3244d89eaa28e10f89fdf6003083ccab09cfa3bd2719299dc6f9436239ee966b.jpg",
+      "sha256": "3244d89eaa28e10f89fdf6003083ccab09cfa3bd2719299dc6f9436239ee966b",
+      "bytes": 10745,
+      "width": 172,
+      "height": 254,
+      "alt": "RS Aggarwal Circles MCQ_48 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3244d89eaa28e10f89fdf6003083ccab09cfa3bd2719299dc6f9436239ee966b.jpg"
+    },
+    {
+      "filename": "7963cc47ca58ee4cb7dcd446d4c42f01b04ded9e34c424f38d2c5d99fe8a26e7.jpg",
+      "sha256": "7963cc47ca58ee4cb7dcd446d4c42f01b04ded9e34c424f38d2c5d99fe8a26e7",
+      "bytes": 10937,
+      "width": 270,
+      "height": 156,
+      "alt": "RS Aggarwal Circles TestYourself_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7963cc47ca58ee4cb7dcd446d4c42f01b04ded9e34c424f38d2c5d99fe8a26e7.jpg"
+    },
+    {
+      "filename": "69313730f9f4e0cad99034b3f4de7d6cf44ea79fa2981a1aabdb084b63f51ed4.jpg",
+      "sha256": "69313730f9f4e0cad99034b3f4de7d6cf44ea79fa2981a1aabdb084b63f51ed4",
+      "bytes": 12667,
+      "width": 290,
+      "height": 180,
+      "alt": "RS Aggarwal Circles TestYourself_20 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/69313730f9f4e0cad99034b3f4de7d6cf44ea79fa2981a1aabdb084b63f51ed4.jpg"
+    },
+    {
+      "filename": "806418d0702c7d3c6825a5645ee541d335cfa11c701b56cfa2b703ef7d30ef23.jpg",
+      "sha256": "806418d0702c7d3c6825a5645ee541d335cfa11c701b56cfa2b703ef7d30ef23",
+      "bytes": 12497,
+      "width": 238,
+      "height": 155,
+      "alt": "RS Aggarwal Circles AdditionalAssertionReason_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/806418d0702c7d3c6825a5645ee541d335cfa11c701b56cfa2b703ef7d30ef23.jpg"
+    },
+    {
+      "filename": "24d6b12c1718a7f011a623155b2ff46954010fd54bdb3e0047f3c1fea8f294c4.jpg",
+      "sha256": "24d6b12c1718a7f011a623155b2ff46954010fd54bdb3e0047f3c1fea8f294c4",
+      "bytes": 8405,
+      "width": 236,
+      "height": 153,
+      "alt": "RS Aggarwal Circles AdditionalAssertionReason_5 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/24d6b12c1718a7f011a623155b2ff46954010fd54bdb3e0047f3c1fea8f294c4.jpg"
+    },
+    {
+      "filename": "da9804020fb38216fde850a89b6a7f8a78f38ec289c62b3ac029da072435a78b.jpg",
+      "sha256": "da9804020fb38216fde850a89b6a7f8a78f38ec289c62b3ac029da072435a78b",
+      "bytes": 10863,
+      "width": 177,
+      "height": 203,
+      "alt": "RS Aggarwal Circles AdditionalAssertionReason_6 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/da9804020fb38216fde850a89b6a7f8a78f38ec289c62b3ac029da072435a78b.jpg"
+    }
+  ]
+}
