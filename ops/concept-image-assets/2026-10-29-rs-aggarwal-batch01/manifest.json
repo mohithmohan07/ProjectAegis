@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "62efe84a46944592de229f3b67f92cc376442a6b7a8f4b1d313f400e521617c9.jpg",
+      "sha256": "62efe84a46944592de229f3b67f92cc376442a6b7a8f4b1d313f400e521617c9",
+      "bytes": 11152,
+      "width": 370,
+      "height": 245,
+      "alt": "Downward opening parabola crossing the horizontal axis twice, one crossing on each side of the vertical axis.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/62efe84a46944592de229f3b67f92cc376442a6b7a8f4b1d313f400e521617c9.jpg"
+    },
+    {
+      "filename": "07148ebc5cdad760a0894678d1100dd8ecf2498c041a15bae72545cedb4bc6ea.jpg",
+      "sha256": "07148ebc5cdad760a0894678d1100dd8ecf2498c041a15bae72545cedb4bc6ea",
+      "bytes": 218971,
+      "width": 430,
+      "height": 500,
+      "alt": "Upward opening parabola with horizontal-axis intersections labelled (-7,0) and (7,0).",
+      "url": "https://projectaegis.fly.dev/source-assets/0/07148ebc5cdad760a0894678d1100dd8ecf2498c041a15bae72545cedb4bc6ea.jpg"
+    },
+    {
+      "filename": "f18e97dca88d52020500e9a1d543d5e944865e248dd7fa6cac239a1e3b50a5e7.jpg",
+      "sha256": "f18e97dca88d52020500e9a1d543d5e944865e248dd7fa6cac239a1e3b50a5e7",
+      "bytes": 50080,
+      "width": 660,
+      "height": 495,
+      "alt": "Four candidate height-time graphs labelled (a), (b), (c), (d), with 5/4 marked at different positions.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f18e97dca88d52020500e9a1d543d5e944865e248dd7fa6cac239a1e3b50a5e7.jpg"
+    },
+    {
+      "filename": "60ceda45bcea11746522e6f4aaabb9add68abfd324cde6949746b0bf25d43839.jpg",
+      "sha256": "60ceda45bcea11746522e6f4aaabb9add68abfd324cde6949746b0bf25d43839",
+      "bytes": 18449,
+      "width": 244,
+      "height": 247,
+      "alt": "Spinner with twelve equally likely numbered sectors, 1 to 12",
+      "url": "https://projectaegis.fly.dev/source-assets/0/60ceda45bcea11746522e6f4aaabb9add68abfd324cde6949746b0bf25d43839.jpg"
+    },
+    {
+      "filename": "9e15cd9854d1b8c1a3c261dfbb76e7c91951bc22381e9a258658162f8d1d1816.jpg",
+      "sha256": "9e15cd9854d1b8c1a3c261dfbb76e7c91951bc22381e9a258658162f8d1d1816",
+      "bytes": 33182,
+      "width": 597,
+      "height": 311,
+      "alt": "Two equal-sector spinners: I red green yellow; II red blue green",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9e15cd9854d1b8c1a3c261dfbb76e7c91951bc22381e9a258658162f8d1d1816.jpg"
+    },
+    {
+      "filename": "1dc974240fb3a2e0617866e7ddd69fc39963127c1e02313a03ea13b68907daa2.jpg",
+      "sha256": "1dc974240fb3a2e0617866e7ddd69fc39963127c1e02313a03ea13b68907daa2",
+      "bytes": 25358,
+      "width": 355,
+      "height": 347,
+      "alt": "Favourite colours pie chart: green60\u00b0,blue60\u00b0,red30\u00b0,yellow90\u00b0,white120\u00b0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1dc974240fb3a2e0617866e7ddd69fc39963127c1e02313a03ea13b68907daa2.jpg"
+    },
+    {
+      "filename": "465d7322b074c6782e2618353a53ce215fac321fa0fe28ee3ca5e9799acc5adf.jpg",
+      "sha256": "465d7322b074c6782e2618353a53ce215fac321fa0fe28ee3ca5e9799acc5adf",
+      "bytes": 15584,
+      "width": 320,
+      "height": 300,
+      "alt": "Three road intersections labelled A, B and C in the source traffic-light question.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/465d7322b074c6782e2618353a53ce215fac321fa0fe28ee3ca5e9799acc5adf.jpg"
+    }
+  ]
+}
