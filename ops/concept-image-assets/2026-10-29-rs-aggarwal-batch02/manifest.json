@@ -1,0 +1,582 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "dde26025c9a2035d9b78046b00505715cd4af1f82302d98ef96dc5674aa2df8b.jpg",
+      "sha256": "dde26025c9a2035d9b78046b00505715cd4af1f82302d98ef96dc5674aa2df8b",
+      "bytes": 44688,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 1: 2*x + 3*y - 2=0 and x - 2*y - 8=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dde26025c9a2035d9b78046b00505715cd4af1f82302d98ef96dc5674aa2df8b.jpg"
+    },
+    {
+      "filename": "6d062fb939313643db46cae4e35ed7cf46fdab060ac084a05bf18dfc3700fa95.jpg",
+      "sha256": "6d062fb939313643db46cae4e35ed7cf46fdab060ac084a05bf18dfc3700fa95",
+      "bytes": 49408,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 2: 3*x + 2*y - 12=0 and x - y + 1=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6d062fb939313643db46cae4e35ed7cf46fdab060ac084a05bf18dfc3700fa95.jpg"
+    },
+    {
+      "filename": "fb8538fa9b683a2a28fd8f1b7f9e0d49ad80154093f827f408e70bd670aef7aa.jpg",
+      "sha256": "fb8538fa9b683a2a28fd8f1b7f9e0d49ad80154093f827f408e70bd670aef7aa",
+      "bytes": 47400,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 3: 2*x + 3*y - 8=0 and x - 2*y + 3=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fb8538fa9b683a2a28fd8f1b7f9e0d49ad80154093f827f408e70bd670aef7aa.jpg"
+    },
+    {
+      "filename": "b07b21ff87c13e42bcec8b74e0a82cf4a4f19da66a685322ab58000ca0bdfe96.jpg",
+      "sha256": "b07b21ff87c13e42bcec8b74e0a82cf4a4f19da66a685322ab58000ca0bdfe96",
+      "bytes": 47944,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 4: 2*x - 5*y + 4=0 and 2*x + y - 8=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b07b21ff87c13e42bcec8b74e0a82cf4a4f19da66a685322ab58000ca0bdfe96.jpg"
+    },
+    {
+      "filename": "02a8bdd607abfb6eaba381364f9bf5f884f0f49ef488f30961f2b6c282a21aed.jpg",
+      "sha256": "02a8bdd607abfb6eaba381364f9bf5f884f0f49ef488f30961f2b6c282a21aed",
+      "bytes": 47127,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 5: 3*x + 2*y - 12=0 and 5*x - 2*y - 4=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/02a8bdd607abfb6eaba381364f9bf5f884f0f49ef488f30961f2b6c282a21aed.jpg"
+    },
+    {
+      "filename": "87ff254827f73a0cb3b36b75759a6fed750482ccce75ddaa8a947e4c2095fafc.jpg",
+      "sha256": "87ff254827f73a0cb3b36b75759a6fed750482ccce75ddaa8a947e4c2095fafc",
+      "bytes": 47960,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 6: 3*x + y + 1=0 and 2*x - 3*y + 8=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/87ff254827f73a0cb3b36b75759a6fed750482ccce75ddaa8a947e4c2095fafc.jpg"
+    },
+    {
+      "filename": "50dacdce2ce0e35af86c3135be93b4746d97eb85bc5b09cc5cf1ae997ad2ad05.jpg",
+      "sha256": "50dacdce2ce0e35af86c3135be93b4746d97eb85bc5b09cc5cf1ae997ad2ad05",
+      "bytes": 45729,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 7: 2*x + 3*y + 5=0 and 3*x - 2*y - 12=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/50dacdce2ce0e35af86c3135be93b4746d97eb85bc5b09cc5cf1ae997ad2ad05.jpg"
+    },
+    {
+      "filename": "9941083e70d202ddaa53b5134b9918078c69e2ff292331d89a1e117a33885d94.jpg",
+      "sha256": "9941083e70d202ddaa53b5134b9918078c69e2ff292331d89a1e117a33885d94",
+      "bytes": 49111,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 8: 2*x - 3*y + 13=0 and 3*x - 2*y + 12=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9941083e70d202ddaa53b5134b9918078c69e2ff292331d89a1e117a33885d94.jpg"
+    },
+    {
+      "filename": "9273fd331ff0bd7fb223fb286ef2cddfe3866836eeb9dca0119678cd212d0bec.jpg",
+      "sha256": "9273fd331ff0bd7fb223fb286ef2cddfe3866836eeb9dca0119678cd212d0bec",
+      "bytes": 44527,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 9: 2*x + 3*y - 4=0 and 3*x - y + 5=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9273fd331ff0bd7fb223fb286ef2cddfe3866836eeb9dca0119678cd212d0bec.jpg"
+    },
+    {
+      "filename": "bf3034f83378c67196df35373447a10d4b9dea5d3a83c6b0e46a05b77fd4238c.jpg",
+      "sha256": "bf3034f83378c67196df35373447a10d4b9dea5d3a83c6b0e46a05b77fd4238c",
+      "bytes": 45395,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 10: x + 2*y + 2=0 and 3*x + 2*y - 2=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf3034f83378c67196df35373447a10d4b9dea5d3a83c6b0e46a05b77fd4238c.jpg"
+    },
+    {
+      "filename": "f5b68beceeccf37932549e78b43eb3de1874fcfb1422fa122b1f397e4d3fb748.jpg",
+      "sha256": "f5b68beceeccf37932549e78b43eb3de1874fcfb1422fa122b1f397e4d3fb748",
+      "bytes": 45708,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 11: x - y + 3=0 and 2*x + 3*y - 4=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f5b68beceeccf37932549e78b43eb3de1874fcfb1422fa122b1f397e4d3fb748.jpg"
+    },
+    {
+      "filename": "5d37a8bf695b1bbf44bbdf5d03bbf6a8c6e9e024db40bb727fc40ba0423528ec.jpg",
+      "sha256": "5d37a8bf695b1bbf44bbdf5d03bbf6a8c6e9e024db40bb727fc40ba0423528ec",
+      "bytes": 45522,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 12: 2*x - 3*y + 4=0 and x + 2*y - 5=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5d37a8bf695b1bbf44bbdf5d03bbf6a8c6e9e024db40bb727fc40ba0423528ec.jpg"
+    },
+    {
+      "filename": "5c526d1371f9691bc5c5f6f9b5ccc1b75162d193e1655be36c06fe59e6a067e4.jpg",
+      "sha256": "5c526d1371f9691bc5c5f6f9b5ccc1b75162d193e1655be36c06fe59e6a067e4",
+      "bytes": 48380,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 13: 4*x - 3*y + 4=0 and 4*x + 3*y - 20=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c526d1371f9691bc5c5f6f9b5ccc1b75162d193e1655be36c06fe59e6a067e4.jpg"
+    },
+    {
+      "filename": "3e1bb36728d9803095315f92625ff4fea7fe74e56029de577fcb39902d75ce0c.jpg",
+      "sha256": "3e1bb36728d9803095315f92625ff4fea7fe74e56029de577fcb39902d75ce0c",
+      "bytes": 48856,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 14: x - y + 1=0 and 3*x + 2*y - 12=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3e1bb36728d9803095315f92625ff4fea7fe74e56029de577fcb39902d75ce0c.jpg"
+    },
+    {
+      "filename": "e5e656ca77d41f717cd94cd20c518662821d0b484597a8cfb5c804d4f4864f83.jpg",
+      "sha256": "e5e656ca77d41f717cd94cd20c518662821d0b484597a8cfb5c804d4f4864f83",
+      "bytes": 46516,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 15: x - 2*y + 2=0 and 2*x + y - 6=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e5e656ca77d41f717cd94cd20c518662821d0b484597a8cfb5c804d4f4864f83.jpg"
+    },
+    {
+      "filename": "6b03b238afae4ab0ccc43f10378462b3bc42e04e655e0b944d8cf29a329237b3.jpg",
+      "sha256": "6b03b238afae4ab0ccc43f10378462b3bc42e04e655e0b944d8cf29a329237b3",
+      "bytes": 46238,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 16: 2*x - 3*y + 6=0 and 2*x + 3*y - 18=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6b03b238afae4ab0ccc43f10378462b3bc42e04e655e0b944d8cf29a329237b3.jpg"
+    },
+    {
+      "filename": "ad39e9b6a26f679cf890e04c501ccd42ee7372779fc1200f48bc09d9c4c46946.jpg",
+      "sha256": "ad39e9b6a26f679cf890e04c501ccd42ee7372779fc1200f48bc09d9c4c46946",
+      "bytes": 49022,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 17: 4*x - y - 4=0 and 3*x + 2*y - 14=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ad39e9b6a26f679cf890e04c501ccd42ee7372779fc1200f48bc09d9c4c46946.jpg"
+    },
+    {
+      "filename": "fc197e7d135dd61ad59ff1995270f727a507caef7c0b25bd09d9d3ea497f9c1e.jpg",
+      "sha256": "fc197e7d135dd61ad59ff1995270f727a507caef7c0b25bd09d9d3ea497f9c1e",
+      "bytes": 48625,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 18: x - y - 5=0 and 3*x + 5*y - 15=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fc197e7d135dd61ad59ff1995270f727a507caef7c0b25bd09d9d3ea497f9c1e.jpg"
+    },
+    {
+      "filename": "ef26bb5a82580dc1bca1f08c93f7d5659bcd31619752523705760df5280e4b49.jpg",
+      "sha256": "ef26bb5a82580dc1bca1f08c93f7d5659bcd31619752523705760df5280e4b49",
+      "bytes": 48879,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 19: 2*x - 5*y + 4=0 and 2*x + y - 8=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ef26bb5a82580dc1bca1f08c93f7d5659bcd31619752523705760df5280e4b49.jpg"
+    },
+    {
+      "filename": "67973dc7434c8054b5fe8a34ee4f5d0b66b3744944a7c7d990cb546bc42c488e.jpg",
+      "sha256": "67973dc7434c8054b5fe8a34ee4f5d0b66b3744944a7c7d990cb546bc42c488e",
+      "bytes": 48309,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 20: 5*x - y - 7=0 and x - y + 1=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/67973dc7434c8054b5fe8a34ee4f5d0b66b3744944a7c7d990cb546bc42c488e.jpg"
+    },
+    {
+      "filename": "5451b1394d08b4f1b4acb3862711969a643754bee0086e955bf9da079dfb06b5.jpg",
+      "sha256": "5451b1394d08b4f1b4acb3862711969a643754bee0086e955bf9da079dfb06b5",
+      "bytes": 44462,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 21: 2*x - 3*y - 12=0 and x + 3*y - 6=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5451b1394d08b4f1b4acb3862711969a643754bee0086e955bf9da079dfb06b5.jpg"
+    },
+    {
+      "filename": "8338f51de5a36428a813ce45924932a7de93f67a9650e4b2efe094a1b8dda8a8.jpg",
+      "sha256": "8338f51de5a36428a813ce45924932a7de93f67a9650e4b2efe094a1b8dda8a8",
+      "bytes": 41826,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 22: 2*x + 3*y - 6=0 and 4*x + 6*y - 12=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8338f51de5a36428a813ce45924932a7de93f67a9650e4b2efe094a1b8dda8a8.jpg"
+    },
+    {
+      "filename": "58a9ab051c257b009282f3844305fbdf6565d370ab48faa9dd622752b2e19832.jpg",
+      "sha256": "58a9ab051c257b009282f3844305fbdf6565d370ab48faa9dd622752b2e19832",
+      "bytes": 45967,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 23: 3*x - y - 5=0 and 6*x - 2*y - 10=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/58a9ab051c257b009282f3844305fbdf6565d370ab48faa9dd622752b2e19832.jpg"
+    },
+    {
+      "filename": "784072e375c348c374834e22b635ccaecb64aee1515c3fa683ebc9d728dc558c.jpg",
+      "sha256": "784072e375c348c374834e22b635ccaecb64aee1515c3fa683ebc9d728dc558c",
+      "bytes": 44697,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 24: 2*x + y - 6=0 and 6*x + 3*y - 18=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/784072e375c348c374834e22b635ccaecb64aee1515c3fa683ebc9d728dc558c.jpg"
+    },
+    {
+      "filename": "cad02d37ff8d233fafe2f28c556b12b621122da712a1b40d5f3be3442c846b4b.jpg",
+      "sha256": "cad02d37ff8d233fafe2f28c556b12b621122da712a1b40d5f3be3442c846b4b",
+      "bytes": 39870,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 25: x - 2*y - 5=0 and 3*x - 6*y - 15=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cad02d37ff8d233fafe2f28c556b12b621122da712a1b40d5f3be3442c846b4b.jpg"
+    },
+    {
+      "filename": "c01c99b6163a4b260fcc4353516d840c62681624db4dc80eb590ccfa98d4f917.jpg",
+      "sha256": "c01c99b6163a4b260fcc4353516d840c62681624db4dc80eb590ccfa98d4f917",
+      "bytes": 43747,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 26: x - 2*y - 6=0 and 3*x - 6*y=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c01c99b6163a4b260fcc4353516d840c62681624db4dc80eb590ccfa98d4f917.jpg"
+    },
+    {
+      "filename": "b5c4961851b98e0dc164dd438314364e640ffa63f21435c6cf89f510b910e587.jpg",
+      "sha256": "b5c4961851b98e0dc164dd438314364e640ffa63f21435c6cf89f510b910e587",
+      "bytes": 46854,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 27: 2*x + 3*y - 4=0 and 4*x + 6*y - 12=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b5c4961851b98e0dc164dd438314364e640ffa63f21435c6cf89f510b910e587.jpg"
+    },
+    {
+      "filename": "4fd6df8b8e3091c4ae4cd3d11f8b054a1488dbaab7581681ea26bfa99fbd0b61.jpg",
+      "sha256": "4fd6df8b8e3091c4ae4cd3d11f8b054a1488dbaab7581681ea26bfa99fbd0b61",
+      "bytes": 48273,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of Ex3A question 28: 2*x + y - 6=0 and 6*x + 3*y - 20=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4fd6df8b8e3091c4ae4cd3d11f8b054a1488dbaab7581681ea26bfa99fbd0b61.jpg"
+    },
+    {
+      "filename": "4df93951187b9621d809767c42c97c553c47d3ffd1592fb29fa43164e483f891.jpg",
+      "sha256": "4df93951187b9621d809767c42c97c553c47d3ffd1592fb29fa43164e483f891",
+      "bytes": 43484,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 1: x + 2*y - 3=0 and 4*x + 3*y - 2=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4df93951187b9621d809767c42c97c553c47d3ffd1592fb29fa43164e483f891.jpg"
+    },
+    {
+      "filename": "052a873362bd38f63d7775ee90f053af4e294f062ebea0fef5b9df9dd8360319.jpg",
+      "sha256": "052a873362bd38f63d7775ee90f053af4e294f062ebea0fef5b9df9dd8360319",
+      "bytes": 49024,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 2: 4*x - 5*y + 16=0 and 2*x + y - 6=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/052a873362bd38f63d7775ee90f053af4e294f062ebea0fef5b9df9dd8360319.jpg"
+    },
+    {
+      "filename": "5b38b93c15deb33d19991cf10ad61dfe4e96bd5265375d4a8c7a5aa81a234ef6.jpg",
+      "sha256": "5b38b93c15deb33d19991cf10ad61dfe4e96bd5265375d4a8c7a5aa81a234ef6",
+      "bytes": 48900,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 3: 4*x - 5*y - 20=0 and 3*x + 5*y - 15=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5b38b93c15deb33d19991cf10ad61dfe4e96bd5265375d4a8c7a5aa81a234ef6.jpg"
+    },
+    {
+      "filename": "c0ad07b99e164a51b43f7d144a153647fce51f8e7985f406928df93336608670.jpg",
+      "sha256": "c0ad07b99e164a51b43f7d144a153647fce51f8e7985f406928df93336608670",
+      "bytes": 44955,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 4: 3*x + 2*y - 11=0 and 2*x - 3*y + 10=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c0ad07b99e164a51b43f7d144a153647fce51f8e7985f406928df93336608670.jpg"
+    },
+    {
+      "filename": "956820721e114bfdf001427f45e8ac1f3a35cfa27392ef1bcf24f5233c11d5dc.jpg",
+      "sha256": "956820721e114bfdf001427f45e8ac1f3a35cfa27392ef1bcf24f5233c11d5dc",
+      "bytes": 47265,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 5: 3*x + y - 11=0 and x - y - 1=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/956820721e114bfdf001427f45e8ac1f3a35cfa27392ef1bcf24f5233c11d5dc.jpg"
+    },
+    {
+      "filename": "220dd07218a08188bbafde7a80a4c8bfcc449163d2d8cd9e469960d204acc430.jpg",
+      "sha256": "220dd07218a08188bbafde7a80a4c8bfcc449163d2d8cd9e469960d204acc430",
+      "bytes": 45494,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 6: 3*x - y - 2=0 and 9*x - 3*y - 6=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/220dd07218a08188bbafde7a80a4c8bfcc449163d2d8cd9e469960d204acc430.jpg"
+    },
+    {
+      "filename": "7e927f20d7017e8f6c042e539d72df8d7d8728559a771ae8e134f37f9ca3624d.jpg",
+      "sha256": "7e927f20d7017e8f6c042e539d72df8d7d8728559a771ae8e134f37f9ca3624d",
+      "bytes": 49290,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 7: 2*x - 3*y - 5=0 and -4*x + 6*y - 3=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7e927f20d7017e8f6c042e539d72df8d7d8728559a771ae8e134f37f9ca3624d.jpg"
+    },
+    {
+      "filename": "ad9d76969c39e948796e00744ca803388f819d89bf6bab7a61069dc03044d9c1.jpg",
+      "sha256": "ad9d76969c39e948796e00744ca803388f819d89bf6bab7a61069dc03044d9c1",
+      "bytes": 45962,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of GraphExample question 8: x - y - 8=0 and 3*x - 3*y - 16=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ad9d76969c39e948796e00744ca803388f819d89bf6bab7a61069dc03044d9c1.jpg"
+    },
+    {
+      "filename": "e88c99097262ee4f4467fd45ee9e56892c709a79ff9122291c80d34e215cd38b.jpg",
+      "sha256": "e88c99097262ee4f4467fd45ee9e56892c709a79ff9122291c80d34e215cd38b",
+      "bytes": 45093,
+      "width": 980,
+      "height": 840,
+      "alt": "Graph of TestYourself question 16: 2*x - 3*y - 1=0 and 4*x - 3*y + 1=0",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e88c99097262ee4f4467fd45ee9e56892c709a79ff9122291c80d34e215cd38b.jpg"
+    },
+    {
+      "filename": "5de1097fe8b607a2457fee35ec9ae81b25d1e75508b4dd31aaf0dff4c370e593.jpg",
+      "sha256": "5de1097fe8b607a2457fee35ec9ae81b25d1e75508b4dd31aaf0dff4c370e593",
+      "bytes": 43958,
+      "width": 840,
+      "height": 840,
+      "alt": "Trapezium between 2x+y=2, 2x+y=6 and coordinate axes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5de1097fe8b607a2457fee35ec9ae81b25d1e75508b4dd31aaf0dff4c370e593.jpg"
+    },
+    {
+      "filename": "7d2eabe47f8404435f16952643fa1bd182d4d06c4939a33e0862131553902a13.jpg",
+      "sha256": "7d2eabe47f8404435f16952643fa1bd182d4d06c4939a33e0862131553902a13",
+      "bytes": 63746,
+      "width": 1280,
+      "height": 800,
+      "alt": "OgiveExample 1 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d2eabe47f8404435f16952643fa1bd182d4d06c4939a33e0862131553902a13.jpg"
+    },
+    {
+      "filename": "cc0847b39635e7274018803d6d817c922c73e20be2a960fcfae36d04090aec34.jpg",
+      "sha256": "cc0847b39635e7274018803d6d817c922c73e20be2a960fcfae36d04090aec34",
+      "bytes": 61257,
+      "width": 1280,
+      "height": 800,
+      "alt": "OgiveExample 2 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cc0847b39635e7274018803d6d817c922c73e20be2a960fcfae36d04090aec34.jpg"
+    },
+    {
+      "filename": "0a2a02a88daf1d75b1e5023fe29abada437d3cdb99a8fe643c69395b0a157d3f.jpg",
+      "sha256": "0a2a02a88daf1d75b1e5023fe29abada437d3cdb99a8fe643c69395b0a157d3f",
+      "bytes": 56524,
+      "width": 1280,
+      "height": 800,
+      "alt": "OgiveExample 3 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0a2a02a88daf1d75b1e5023fe29abada437d3cdb99a8fe643c69395b0a157d3f.jpg"
+    },
+    {
+      "filename": "6e7e6e2b28863332e71e78442401e2783505780454daee00ff35622af856f2ea.jpg",
+      "sha256": "6e7e6e2b28863332e71e78442401e2783505780454daee00ff35622af856f2ea",
+      "bytes": 72051,
+      "width": 1280,
+      "height": 800,
+      "alt": "OgiveExample 4 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6e7e6e2b28863332e71e78442401e2783505780454daee00ff35622af856f2ea.jpg"
+    },
+    {
+      "filename": "75311e2224a2637f3cd14e069e658e9029a6f314f53e84a2ed89c2d713a8c65a.jpg",
+      "sha256": "75311e2224a2637f3cd14e069e658e9029a6f314f53e84a2ed89c2d713a8c65a",
+      "bytes": 73907,
+      "width": 1280,
+      "height": 800,
+      "alt": "OgiveExample 5 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/75311e2224a2637f3cd14e069e658e9029a6f314f53e84a2ed89c2d713a8c65a.jpg"
+    },
+    {
+      "filename": "99ed28f9e76a27e5630faaf49d474935946c520412e833f6df2eeaf1912056da.jpg",
+      "sha256": "99ed28f9e76a27e5630faaf49d474935946c520412e833f6df2eeaf1912056da",
+      "bytes": 59309,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 1 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/99ed28f9e76a27e5630faaf49d474935946c520412e833f6df2eeaf1912056da.jpg"
+    },
+    {
+      "filename": "bf24ed827299c82436490f8930d8e18d530bb933ce48aa3544cfcda0834b25eb.jpg",
+      "sha256": "bf24ed827299c82436490f8930d8e18d530bb933ce48aa3544cfcda0834b25eb",
+      "bytes": 62167,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 2 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf24ed827299c82436490f8930d8e18d530bb933ce48aa3544cfcda0834b25eb.jpg"
+    },
+    {
+      "filename": "fee4859a3bb74a439691144fe4a31a03e3bab4256a3a2eba69f60b90790d4fdc.jpg",
+      "sha256": "fee4859a3bb74a439691144fe4a31a03e3bab4256a3a2eba69f60b90790d4fdc",
+      "bytes": 56376,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 3 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fee4859a3bb74a439691144fe4a31a03e3bab4256a3a2eba69f60b90790d4fdc.jpg"
+    },
+    {
+      "filename": "5ed7d9982b5c2f2b06abbf13a41a2490995d36b5896bd3197b1899ad6b65e889.jpg",
+      "sha256": "5ed7d9982b5c2f2b06abbf13a41a2490995d36b5896bd3197b1899ad6b65e889",
+      "bytes": 55616,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 4 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5ed7d9982b5c2f2b06abbf13a41a2490995d36b5896bd3197b1899ad6b65e889.jpg"
+    },
+    {
+      "filename": "90186e2a300544d08e1a6c8c99b0fd8d1d069ffbaf7f2fcf3e04d26fd1b1453d.jpg",
+      "sha256": "90186e2a300544d08e1a6c8c99b0fd8d1d069ffbaf7f2fcf3e04d26fd1b1453d",
+      "bytes": 60935,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 5 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/90186e2a300544d08e1a6c8c99b0fd8d1d069ffbaf7f2fcf3e04d26fd1b1453d.jpg"
+    },
+    {
+      "filename": "6e387c2c025a7261e8903d87201f9d8f5d4df77569ddc1fb5afa514e3c1223d2.jpg",
+      "sha256": "6e387c2c025a7261e8903d87201f9d8f5d4df77569ddc1fb5afa514e3c1223d2",
+      "bytes": 59314,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 6 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6e387c2c025a7261e8903d87201f9d8f5d4df77569ddc1fb5afa514e3c1223d2.jpg"
+    },
+    {
+      "filename": "b8d7da90ca02ca5c8a0c0057050a8d8caf5644335cc355155b0b26e07406882b.jpg",
+      "sha256": "b8d7da90ca02ca5c8a0c0057050a8d8caf5644335cc355155b0b26e07406882b",
+      "bytes": 53687,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 7 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b8d7da90ca02ca5c8a0c0057050a8d8caf5644335cc355155b0b26e07406882b.jpg"
+    },
+    {
+      "filename": "06bfbe8e6bc7fc4814cc9b250134484f2b546f9d3c172f24050a85fa5d8b9c92.jpg",
+      "sha256": "06bfbe8e6bc7fc4814cc9b250134484f2b546f9d3c172f24050a85fa5d8b9c92",
+      "bytes": 61234,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 8 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/06bfbe8e6bc7fc4814cc9b250134484f2b546f9d3c172f24050a85fa5d8b9c92.jpg"
+    },
+    {
+      "filename": "ddf4c98021335547b5df9c698093fee3da2490a519a27f5d30e8deaf7a1b27af.jpg",
+      "sha256": "ddf4c98021335547b5df9c698093fee3da2490a519a27f5d30e8deaf7a1b27af",
+      "bytes": 66044,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 9 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ddf4c98021335547b5df9c698093fee3da2490a519a27f5d30e8deaf7a1b27af.jpg"
+    },
+    {
+      "filename": "4081033296496e49e9012edefa02fe9f3938b40acc781f37d055b3de5151a1f0.jpg",
+      "sha256": "4081033296496e49e9012edefa02fe9f3938b40acc781f37d055b3de5151a1f0",
+      "bytes": 69721,
+      "width": 1280,
+      "height": 800,
+      "alt": "18E 10 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4081033296496e49e9012edefa02fe9f3938b40acc781f37d055b3de5151a1f0.jpg"
+    },
+    {
+      "filename": "b66f8b8eb34dd760d67b08fa2bc1dbb50cf0379b80f44ac4c76d569e762e87fc.jpg",
+      "sha256": "b66f8b8eb34dd760d67b08fa2bc1dbb50cf0379b80f44ac4c76d569e762e87fc",
+      "bytes": 57532,
+      "width": 1280,
+      "height": 800,
+      "alt": "TestYourself 13 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b66f8b8eb34dd760d67b08fa2bc1dbb50cf0379b80f44ac4c76d569e762e87fc.jpg"
+    },
+    {
+      "filename": "7d1a00e435b68c526bc2ff9c9efbfacae097c7f15192350b153866e03c8f82b4.jpg",
+      "sha256": "7d1a00e435b68c526bc2ff9c9efbfacae097c7f15192350b153866e03c8f82b4",
+      "bytes": 59490,
+      "width": 1280,
+      "height": 800,
+      "alt": "TestYourself 15 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d1a00e435b68c526bc2ff9c9efbfacae097c7f15192350b153866e03c8f82b4.jpg"
+    },
+    {
+      "filename": "3fe5a4ff9eb406f9f9ef063780e9dd73a66fb8ad6cdeb3c33f1a38f160acd3b9.jpg",
+      "sha256": "3fe5a4ff9eb406f9f9ef063780e9dd73a66fb8ad6cdeb3c33f1a38f160acd3b9",
+      "bytes": 69134,
+      "width": 1280,
+      "height": 800,
+      "alt": "TestYourself 20 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3fe5a4ff9eb406f9f9ef063780e9dd73a66fb8ad6cdeb3c33f1a38f160acd3b9.jpg"
+    },
+    {
+      "filename": "9e5f22a466d90751dd3ae9d60b99c166fb90671ce577bedef8538186f87b8d05.jpg",
+      "sha256": "9e5f22a466d90751dd3ae9d60b99c166fb90671ce577bedef8538186f87b8d05",
+      "bytes": 65142,
+      "width": 1280,
+      "height": 800,
+      "alt": "TestYourself 21 ogive",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9e5f22a466d90751dd3ae9d60b99c166fb90671ce577bedef8538186f87b8d05.jpg"
+    },
+    {
+      "filename": "35742c19a7fcd3e88571c5e0090da7addad4f6f909120729196efdb7dc06ae6b.jpg",
+      "sha256": "35742c19a7fcd3e88571c5e0090da7addad4f6f909120729196efdb7dc06ae6b",
+      "bytes": 6007,
+      "width": 331,
+      "height": 83,
+      "alt": "Trisection points in the order A P Q B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/35742c19a7fcd3e88571c5e0090da7addad4f6f909120729196efdb7dc06ae6b.jpg"
+    },
+    {
+      "filename": "83cb7370b13c47556cf860af324374863f04dbf60f1ecdf224b66ae9be0a9c55.jpg",
+      "sha256": "83cb7370b13c47556cf860af324374863f04dbf60f1ecdf224b66ae9be0a9c55",
+      "bytes": 20793,
+      "width": 420,
+      "height": 310,
+      "alt": "Square PQRS inside triangle AQC with marked coordinate axes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/83cb7370b13c47556cf860af324374863f04dbf60f1ecdf224b66ae9be0a9c55.jpg"
+    },
+    {
+      "filename": "be20403c19ea45d6cb2283db872df1cffef71a47d2632360eda0268070155c20.jpg",
+      "sha256": "be20403c19ea45d6cb2283db872df1cffef71a47d2632360eda0268070155c20",
+      "bytes": 48363,
+      "width": 355,
+      "height": 555,
+      "alt": "School ground with vertical running lines and flags W and R",
+      "url": "https://projectaegis.fly.dev/source-assets/0/be20403c19ea45d6cb2283db872df1cffef71a47d2632360eda0268070155c20.jpg"
+    },
+    {
+      "filename": "00ebf333159a5db0eac5c108d73e595d441a8fa89c68a3a7a27bc739a8b94511.jpg",
+      "sha256": "00ebf333159a5db0eac5c108d73e595d441a8fa89c68a3a7a27bc739a8b94511",
+      "bytes": 21219,
+      "width": 425,
+      "height": 280,
+      "alt": "Rectangular campaign board ABCD with coordinates",
+      "url": "https://projectaegis.fly.dev/source-assets/0/00ebf333159a5db0eac5c108d73e595d441a8fa89c68a3a7a27bc739a8b94511.jpg"
+    },
+    {
+      "filename": "9a48cbd15ac844a1a22d34a79dd75a96f8af2bf95a15ac1a2cf0ab90eed02369.jpg",
+      "sha256": "9a48cbd15ac844a1a22d34a79dd75a96f8af2bf95a15ac1a2cf0ab90eed02369",
+      "bytes": 401956,
+      "width": 791,
+      "height": 543,
+      "alt": "Hockey field player positions on a coordinate grid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9a48cbd15ac844a1a22d34a79dd75a96f8af2bf95a15ac1a2cf0ab90eed02369.jpg"
+    },
+    {
+      "filename": "a124c20a5f9823398f6ef6b3cc3b4471202ec4581bc50dfb0b4c9989631697d3.jpg",
+      "sha256": "a124c20a5f9823398f6ef6b3cc3b4471202ec4581bc50dfb0b4c9989631697d3",
+      "bytes": 18689,
+      "width": 425,
+      "height": 302,
+      "alt": "Photograph dimensions for the quadratic-equations case",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a124c20a5f9823398f6ef6b3cc3b4471202ec4581bc50dfb0b4c9989631697d3.jpg"
+    },
+    {
+      "filename": "e2de8ed15aa29ec3968d0ed8ba29b0f5da6736b947cbb54768b6e00c51dfa182.jpg",
+      "sha256": "e2de8ed15aa29ec3968d0ed8ba29b0f5da6736b947cbb54768b6e00c51dfa182",
+      "bytes": 22578,
+      "width": 410,
+      "height": 322,
+      "alt": "Rectangular land with a uniform inside border",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e2de8ed15aa29ec3968d0ed8ba29b0f5da6736b947cbb54768b6e00c51dfa182.jpg"
+    }
+  ]
+}

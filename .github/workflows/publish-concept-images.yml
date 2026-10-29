@@ -9,6 +9,7 @@ on:
       - 'ops/concept-image-assets/2026-09-18/**'
       - 'ops/concept-image-assets/2026-10-18-kalmadi/**'
       - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch01/**'
+      - 'ops/concept-image-assets/2026-10-29-rs-aggarwal-batch02/**'
 
 permissions:
   contents: read
@@ -33,6 +34,8 @@ jobs:
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-18-kalmadi
           mv image-url-verification.json kalmadi-image-url-verification.json
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch01
+          mv image-url-verification.json rs-aggarwal-batch01-image-url-verification.json
+          python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-10-29-rs-aggarwal-batch02
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
