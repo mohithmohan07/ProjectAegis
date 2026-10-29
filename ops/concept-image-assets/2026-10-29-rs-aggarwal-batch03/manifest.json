@@ -1,0 +1,1419 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "11667b43963423c241ba0876197107ba5da38cea0cb1ff45424a2a831228019a.jpg",
+      "sha256": "11667b43963423c241ba0876197107ba5da38cea0cb1ff45424a2a831228019a",
+      "bytes": 9702,
+      "width": 340,
+      "height": 180,
+      "alt": "RS Aggarwal Triangles BPTExample_1 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/11667b43963423c241ba0876197107ba5da38cea0cb1ff45424a2a831228019a.jpg"
+    },
+    {
+      "filename": "faa91587c6a7f3b8c7e74d7d3c027e143f2a605b68e17e543618f6cf82a7c711.jpg",
+      "sha256": "faa91587c6a7f3b8c7e74d7d3c027e143f2a605b68e17e543618f6cf82a7c711",
+      "bytes": 7224,
+      "width": 192,
+      "height": 193,
+      "alt": "RS Aggarwal Triangles BPTExample_2 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/faa91587c6a7f3b8c7e74d7d3c027e143f2a605b68e17e543618f6cf82a7c711.jpg"
+    },
+    {
+      "filename": "8386b317b3d272fd1661100bfe4334ee137496fe21dfc948dce2f36ecfeaf511.jpg",
+      "sha256": "8386b317b3d272fd1661100bfe4334ee137496fe21dfc948dce2f36ecfeaf511",
+      "bytes": 6203,
+      "width": 191,
+      "height": 152,
+      "alt": "RS Aggarwal Triangles BPTExample_3 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8386b317b3d272fd1661100bfe4334ee137496fe21dfc948dce2f36ecfeaf511.jpg"
+    },
+    {
+      "filename": "47de271d326311b4720a9fa222756b88cf0d93f4b5461d9c23c9a51ac16a2874.jpg",
+      "sha256": "47de271d326311b4720a9fa222756b88cf0d93f4b5461d9c23c9a51ac16a2874",
+      "bytes": 7259,
+      "width": 223,
+      "height": 153,
+      "alt": "RS Aggarwal Triangles BPTExample_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/47de271d326311b4720a9fa222756b88cf0d93f4b5461d9c23c9a51ac16a2874.jpg"
+    },
+    {
+      "filename": "77b2770e54af95b393e78d57323b127e6f27acc74bdf1b05619aaa064bb96005.jpg",
+      "sha256": "77b2770e54af95b393e78d57323b127e6f27acc74bdf1b05619aaa064bb96005",
+      "bytes": 11860,
+      "width": 281,
+      "height": 175,
+      "alt": "RS Aggarwal Triangles BPTExample_5a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/77b2770e54af95b393e78d57323b127e6f27acc74bdf1b05619aaa064bb96005.jpg"
+    },
+    {
+      "filename": "1c0366311d2ad06fdacc7ce9ac2435840aae7253a08267b24aa0a3a57411848c.jpg",
+      "sha256": "1c0366311d2ad06fdacc7ce9ac2435840aae7253a08267b24aa0a3a57411848c",
+      "bytes": 7722,
+      "width": 205,
+      "height": 180,
+      "alt": "RS Aggarwal Triangles BPTExample_6 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c0366311d2ad06fdacc7ce9ac2435840aae7253a08267b24aa0a3a57411848c.jpg"
+    },
+    {
+      "filename": "e787f96c85e27bfd2ce456803aca8738a25d6b0c4587968684151a9c00917c98.jpg",
+      "sha256": "e787f96c85e27bfd2ce456803aca8738a25d6b0c4587968684151a9c00917c98",
+      "bytes": 10540,
+      "width": 302,
+      "height": 167,
+      "alt": "RS Aggarwal Triangles BPTExample_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e787f96c85e27bfd2ce456803aca8738a25d6b0c4587968684151a9c00917c98.jpg"
+    },
+    {
+      "filename": "01c0fb648f7f5faa16124fe37a1813b2040c0ed0f96fd3ca98a4581dc8e0b619.jpg",
+      "sha256": "01c0fb648f7f5faa16124fe37a1813b2040c0ed0f96fd3ca98a4581dc8e0b619",
+      "bytes": 11907,
+      "width": 263,
+      "height": 190,
+      "alt": "RS Aggarwal Triangles BPTExample_9 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/01c0fb648f7f5faa16124fe37a1813b2040c0ed0f96fd3ca98a4581dc8e0b619.jpg"
+    },
+    {
+      "filename": "cf59510a8d6c37cc067389f54497d3f3cdf52164e9e6e67d2a1214aaed2af684.jpg",
+      "sha256": "cf59510a8d6c37cc067389f54497d3f3cdf52164e9e6e67d2a1214aaed2af684",
+      "bytes": 11266,
+      "width": 211,
+      "height": 246,
+      "alt": "RS Aggarwal Triangles BPTExample_10 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cf59510a8d6c37cc067389f54497d3f3cdf52164e9e6e67d2a1214aaed2af684.jpg"
+    },
+    {
+      "filename": "9a521788b9e430f92ffd3c07b065fd494fef116d5f1256f7eb829ac1679ff0e3.jpg",
+      "sha256": "9a521788b9e430f92ffd3c07b065fd494fef116d5f1256f7eb829ac1679ff0e3",
+      "bytes": 10215,
+      "width": 188,
+      "height": 216,
+      "alt": "RS Aggarwal Triangles BPTExample_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9a521788b9e430f92ffd3c07b065fd494fef116d5f1256f7eb829ac1679ff0e3.jpg"
+    },
+    {
+      "filename": "569684c9821d64932af013855394e04ecb2f343e791772651b9418b308fd65bc.jpg",
+      "sha256": "569684c9821d64932af013855394e04ecb2f343e791772651b9418b308fd65bc",
+      "bytes": 12348,
+      "width": 239,
+      "height": 177,
+      "alt": "RS Aggarwal Triangles BPTExample_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/569684c9821d64932af013855394e04ecb2f343e791772651b9418b308fd65bc.jpg"
+    },
+    {
+      "filename": "25ab73900d0a61eb9ebf21326eeb4e9f12efa04a068db6acb9d72ed49e4dc222.jpg",
+      "sha256": "25ab73900d0a61eb9ebf21326eeb4e9f12efa04a068db6acb9d72ed49e4dc222",
+      "bytes": 8288,
+      "width": 240,
+      "height": 183,
+      "alt": "RS Aggarwal Triangles BPTExample_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/25ab73900d0a61eb9ebf21326eeb4e9f12efa04a068db6acb9d72ed49e4dc222.jpg"
+    },
+    {
+      "filename": "d1daf7ac1c16ad6523e4d572b2a820fa61325e255eda95132e87b044807e3e30.jpg",
+      "sha256": "d1daf7ac1c16ad6523e4d572b2a820fa61325e255eda95132e87b044807e3e30",
+      "bytes": 9823,
+      "width": 242,
+      "height": 201,
+      "alt": "RS Aggarwal Triangles BPTExample_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d1daf7ac1c16ad6523e4d572b2a820fa61325e255eda95132e87b044807e3e30.jpg"
+    },
+    {
+      "filename": "0d68d161b6b5f6a55ae6beed45846004a9e848e7746d9344a8c54c3b8a724322.jpg",
+      "sha256": "0d68d161b6b5f6a55ae6beed45846004a9e848e7746d9344a8c54c3b8a724322",
+      "bytes": 15635,
+      "width": 277,
+      "height": 266,
+      "alt": "RS Aggarwal Triangles BPTExample_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0d68d161b6b5f6a55ae6beed45846004a9e848e7746d9344a8c54c3b8a724322.jpg"
+    },
+    {
+      "filename": "c01853f707b1231e25c92777c0a5391bf1d33c916a4a376783deef2139bce2a7.jpg",
+      "sha256": "c01853f707b1231e25c92777c0a5391bf1d33c916a4a376783deef2139bce2a7",
+      "bytes": 13346,
+      "width": 230,
+      "height": 195,
+      "alt": "RS Aggarwal Triangles BPTExample_16 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c01853f707b1231e25c92777c0a5391bf1d33c916a4a376783deef2139bce2a7.jpg"
+    },
+    {
+      "filename": "eb1f0b8d0c646f4e0729b6ad5ab32c9cebd9d2c6b18391d560d69afb07bce1d2.jpg",
+      "sha256": "eb1f0b8d0c646f4e0729b6ad5ab32c9cebd9d2c6b18391d560d69afb07bce1d2",
+      "bytes": 9087,
+      "width": 224,
+      "height": 152,
+      "alt": "RS Aggarwal Triangles BPTExample_17 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/eb1f0b8d0c646f4e0729b6ad5ab32c9cebd9d2c6b18391d560d69afb07bce1d2.jpg"
+    },
+    {
+      "filename": "98b669d5c30676cd8dc140dfb0947f75d06b3fec540085bfaf9d64b555d24e64.jpg",
+      "sha256": "98b669d5c30676cd8dc140dfb0947f75d06b3fec540085bfaf9d64b555d24e64",
+      "bytes": 10855,
+      "width": 255,
+      "height": 155,
+      "alt": "RS Aggarwal Triangles BPTExample_18 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/98b669d5c30676cd8dc140dfb0947f75d06b3fec540085bfaf9d64b555d24e64.jpg"
+    },
+    {
+      "filename": "9e9d0a3ca243e728000395add11d491d5736ae1601d68ec720e05091e84396dc.jpg",
+      "sha256": "9e9d0a3ca243e728000395add11d491d5736ae1601d68ec720e05091e84396dc",
+      "bytes": 11266,
+      "width": 234,
+      "height": 147,
+      "alt": "RS Aggarwal Triangles BPTExample_19 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9e9d0a3ca243e728000395add11d491d5736ae1601d68ec720e05091e84396dc.jpg"
+    },
+    {
+      "filename": "629b42e3da45fa477d61014eb978dbea84a1acc60907d1c72ec322669387b5ca.jpg",
+      "sha256": "629b42e3da45fa477d61014eb978dbea84a1acc60907d1c72ec322669387b5ca",
+      "bytes": 10018,
+      "width": 242,
+      "height": 159,
+      "alt": "RS Aggarwal Triangles BPTExample_20 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/629b42e3da45fa477d61014eb978dbea84a1acc60907d1c72ec322669387b5ca.jpg"
+    },
+    {
+      "filename": "81437844548689b85e469992d98e649dc9dae3141808acf3018c903d6cf8fe6c.jpg",
+      "sha256": "81437844548689b85e469992d98e649dc9dae3141808acf3018c903d6cf8fe6c",
+      "bytes": 7334,
+      "width": 209,
+      "height": 169,
+      "alt": "RS Aggarwal Triangles BPTExample_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/81437844548689b85e469992d98e649dc9dae3141808acf3018c903d6cf8fe6c.jpg"
+    },
+    {
+      "filename": "b557de2d14ef43b4ac3194fc103aeee1b67e8007cc74d6abf97c1045423235bf.jpg",
+      "sha256": "b557de2d14ef43b4ac3194fc103aeee1b67e8007cc74d6abf97c1045423235bf",
+      "bytes": 7580,
+      "width": 202,
+      "height": 200,
+      "alt": "RS Aggarwal Triangles BPTExample_22 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b557de2d14ef43b4ac3194fc103aeee1b67e8007cc74d6abf97c1045423235bf.jpg"
+    },
+    {
+      "filename": "959bcb98ab5f00cd89e00c082a843c6a21a5d0aa497fae56945808008c56bfc4.jpg",
+      "sha256": "959bcb98ab5f00cd89e00c082a843c6a21a5d0aa497fae56945808008c56bfc4",
+      "bytes": 11034,
+      "width": 243,
+      "height": 195,
+      "alt": "RS Aggarwal Triangles BPTExample_23 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/959bcb98ab5f00cd89e00c082a843c6a21a5d0aa497fae56945808008c56bfc4.jpg"
+    },
+    {
+      "filename": "806f5cf648326b55d2d7e6d217f6c5a22a286a984bb974e57c096cb85adda802.jpg",
+      "sha256": "806f5cf648326b55d2d7e6d217f6c5a22a286a984bb974e57c096cb85adda802",
+      "bytes": 14067,
+      "width": 273,
+      "height": 169,
+      "alt": "RS Aggarwal Triangles BPTExample_24 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/806f5cf648326b55d2d7e6d217f6c5a22a286a984bb974e57c096cb85adda802.jpg"
+    },
+    {
+      "filename": "e1c43746731b3cdf45d2d30bdb52a70db2a593bae192d06b264a66eaf84da538.jpg",
+      "sha256": "e1c43746731b3cdf45d2d30bdb52a70db2a593bae192d06b264a66eaf84da538",
+      "bytes": 11836,
+      "width": 244,
+      "height": 198,
+      "alt": "RS Aggarwal Triangles BPTExample_25 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e1c43746731b3cdf45d2d30bdb52a70db2a593bae192d06b264a66eaf84da538.jpg"
+    },
+    {
+      "filename": "4828015eb225f91b70cd17d9384a24e3754ea8ecddef8625647d94d2b630514d.jpg",
+      "sha256": "4828015eb225f91b70cd17d9384a24e3754ea8ecddef8625647d94d2b630514d",
+      "bytes": 10090,
+      "width": 209,
+      "height": 205,
+      "alt": "RS Aggarwal Triangles BPTExample_26 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4828015eb225f91b70cd17d9384a24e3754ea8ecddef8625647d94d2b630514d.jpg"
+    },
+    {
+      "filename": "6adbd228263135c9edc24ca1e6b465f6f1be963069af2268d4860c73414dc603.jpg",
+      "sha256": "6adbd228263135c9edc24ca1e6b465f6f1be963069af2268d4860c73414dc603",
+      "bytes": 12612,
+      "width": 249,
+      "height": 190,
+      "alt": "RS Aggarwal Triangles BPTExample_27 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6adbd228263135c9edc24ca1e6b465f6f1be963069af2268d4860c73414dc603.jpg"
+    },
+    {
+      "filename": "4463e4e32e17bbdf24c8e6b9ef7723faca648be7eb6240244c311e1784bf5751.jpg",
+      "sha256": "4463e4e32e17bbdf24c8e6b9ef7723faca648be7eb6240244c311e1784bf5751",
+      "bytes": 7832,
+      "width": 215,
+      "height": 187,
+      "alt": "RS Aggarwal Triangles BPTExample_28 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4463e4e32e17bbdf24c8e6b9ef7723faca648be7eb6240244c311e1784bf5751.jpg"
+    },
+    {
+      "filename": "749263a3cb7c56147257296a235934e468a0e0dc24221a7f20d8588db4394a6b.jpg",
+      "sha256": "749263a3cb7c56147257296a235934e468a0e0dc24221a7f20d8588db4394a6b",
+      "bytes": 8756,
+      "width": 185,
+      "height": 160,
+      "alt": "RS Aggarwal Triangles BPTExample_29 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/749263a3cb7c56147257296a235934e468a0e0dc24221a7f20d8588db4394a6b.jpg"
+    },
+    {
+      "filename": "20013a5182cdfb269390116b9edc67dd02345b908f5382321880cfbe02e70313.jpg",
+      "sha256": "20013a5182cdfb269390116b9edc67dd02345b908f5382321880cfbe02e70313",
+      "bytes": 9079,
+      "width": 256,
+      "height": 155,
+      "alt": "RS Aggarwal Triangles Ex7A_5a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/20013a5182cdfb269390116b9edc67dd02345b908f5382321880cfbe02e70313.jpg"
+    },
+    {
+      "filename": "e98db37728e076fbabed104c2ded5b731c2001aef4c542360243d157185c70ac.jpg",
+      "sha256": "e98db37728e076fbabed104c2ded5b731c2001aef4c542360243d157185c70ac",
+      "bytes": 10423,
+      "width": 250,
+      "height": 148,
+      "alt": "RS Aggarwal Triangles Ex7A_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e98db37728e076fbabed104c2ded5b731c2001aef4c542360243d157185c70ac.jpg"
+    },
+    {
+      "filename": "1ed0202cf7957a7cdee13f8a7e8c89ecbc2bc97345fc3ae7bb13d0597bd493d0.jpg",
+      "sha256": "1ed0202cf7957a7cdee13f8a7e8c89ecbc2bc97345fc3ae7bb13d0597bd493d0",
+      "bytes": 11212,
+      "width": 191,
+      "height": 156,
+      "alt": "RS Aggarwal Triangles Ex7A_9 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1ed0202cf7957a7cdee13f8a7e8c89ecbc2bc97345fc3ae7bb13d0597bd493d0.jpg"
+    },
+    {
+      "filename": "531f18179bc1bea9acefe755f97a34ca0d717cbc40866e7c118257be9ee7c401.jpg",
+      "sha256": "531f18179bc1bea9acefe755f97a34ca0d717cbc40866e7c118257be9ee7c401",
+      "bytes": 9560,
+      "width": 172,
+      "height": 203,
+      "alt": "RS Aggarwal Triangles Ex7A_10 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/531f18179bc1bea9acefe755f97a34ca0d717cbc40866e7c118257be9ee7c401.jpg"
+    },
+    {
+      "filename": "228206ce91b13be755c553418e499c4b4265ac68e1679e9a0b4b0ed215152c76.jpg",
+      "sha256": "228206ce91b13be755c553418e499c4b4265ac68e1679e9a0b4b0ed215152c76",
+      "bytes": 10127,
+      "width": 247,
+      "height": 149,
+      "alt": "RS Aggarwal Triangles Ex7A_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/228206ce91b13be755c553418e499c4b4265ac68e1679e9a0b4b0ed215152c76.jpg"
+    },
+    {
+      "filename": "5e11325a77da36bc5e0383d06dcae7728e1b3d0f7ebd32a7cf8428c52ce21f3e.jpg",
+      "sha256": "5e11325a77da36bc5e0383d06dcae7728e1b3d0f7ebd32a7cf8428c52ce21f3e",
+      "bytes": 8264,
+      "width": 211,
+      "height": 211,
+      "alt": "RS Aggarwal Triangles Ex7A_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5e11325a77da36bc5e0383d06dcae7728e1b3d0f7ebd32a7cf8428c52ce21f3e.jpg"
+    },
+    {
+      "filename": "74ec3f2f1d582626e3733553e420943012d25c0b75275e4530b7051a652ecfe0.jpg",
+      "sha256": "74ec3f2f1d582626e3733553e420943012d25c0b75275e4530b7051a652ecfe0",
+      "bytes": 10552,
+      "width": 229,
+      "height": 185,
+      "alt": "RS Aggarwal Triangles Ex7A_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/74ec3f2f1d582626e3733553e420943012d25c0b75275e4530b7051a652ecfe0.jpg"
+    },
+    {
+      "filename": "75aed26c970bfc4ac6cd30bbda7b7edb5b1cb99aa5e056ffce98753c515f594b.jpg",
+      "sha256": "75aed26c970bfc4ac6cd30bbda7b7edb5b1cb99aa5e056ffce98753c515f594b",
+      "bytes": 8194,
+      "width": 274,
+      "height": 206,
+      "alt": "RS Aggarwal Triangles SimilarityExample_1 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/75aed26c970bfc4ac6cd30bbda7b7edb5b1cb99aa5e056ffce98753c515f594b.jpg"
+    },
+    {
+      "filename": "2d018d184912f04852169f39d5e92fffa96909d32184840f81eae9ef9bba9d4e.jpg",
+      "sha256": "2d018d184912f04852169f39d5e92fffa96909d32184840f81eae9ef9bba9d4e",
+      "bytes": 7550,
+      "width": 166,
+      "height": 191,
+      "alt": "RS Aggarwal Triangles SimilarityExample_2 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2d018d184912f04852169f39d5e92fffa96909d32184840f81eae9ef9bba9d4e.jpg"
+    },
+    {
+      "filename": "d389f52e7b3732f6e51246fd7b70d70496d6fcdd53ce2676bb92328fafabaf5f.jpg",
+      "sha256": "d389f52e7b3732f6e51246fd7b70d70496d6fcdd53ce2676bb92328fafabaf5f",
+      "bytes": 8632,
+      "width": 282,
+      "height": 124,
+      "alt": "RS Aggarwal Triangles SimilarityExample_3 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d389f52e7b3732f6e51246fd7b70d70496d6fcdd53ce2676bb92328fafabaf5f.jpg"
+    },
+    {
+      "filename": "f6ca0b7dadd05e76cffce24b1c62d3f6f8a16e7e1afe82713b46f40656dad5e7.jpg",
+      "sha256": "f6ca0b7dadd05e76cffce24b1c62d3f6f8a16e7e1afe82713b46f40656dad5e7",
+      "bytes": 8692,
+      "width": 273,
+      "height": 124,
+      "alt": "RS Aggarwal Triangles SimilarityExample_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f6ca0b7dadd05e76cffce24b1c62d3f6f8a16e7e1afe82713b46f40656dad5e7.jpg"
+    },
+    {
+      "filename": "cbd6467bb222cad6d87af642d690ffb7ec48cf09961d11850042c53315e66ffc.jpg",
+      "sha256": "cbd6467bb222cad6d87af642d690ffb7ec48cf09961d11850042c53315e66ffc",
+      "bytes": 17817,
+      "width": 496,
+      "height": 191,
+      "alt": "RS Aggarwal Triangles SimilarityExample_5 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cbd6467bb222cad6d87af642d690ffb7ec48cf09961d11850042c53315e66ffc.jpg"
+    },
+    {
+      "filename": "581601165aceeceab103feb883afb491a322a365709a9366f5c427ca0ac2f42e.jpg",
+      "sha256": "581601165aceeceab103feb883afb491a322a365709a9366f5c427ca0ac2f42e",
+      "bytes": 10955,
+      "width": 238,
+      "height": 225,
+      "alt": "RS Aggarwal Triangles SimilarityExample_6 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/581601165aceeceab103feb883afb491a322a365709a9366f5c427ca0ac2f42e.jpg"
+    },
+    {
+      "filename": "1036425f60effa41873c7c5beb2d25d8cfe0017cc163e29aeafcadf030220998.jpg",
+      "sha256": "1036425f60effa41873c7c5beb2d25d8cfe0017cc163e29aeafcadf030220998",
+      "bytes": 7702,
+      "width": 222,
+      "height": 164,
+      "alt": "RS Aggarwal Triangles SimilarityExample_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1036425f60effa41873c7c5beb2d25d8cfe0017cc163e29aeafcadf030220998.jpg"
+    },
+    {
+      "filename": "fb3845ba45937bdce179a7e22dc035f6b66fb6975459b7667e7f99e601848bb0.jpg",
+      "sha256": "fb3845ba45937bdce179a7e22dc035f6b66fb6975459b7667e7f99e601848bb0",
+      "bytes": 9157,
+      "width": 254,
+      "height": 192,
+      "alt": "RS Aggarwal Triangles SimilarityExample_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fb3845ba45937bdce179a7e22dc035f6b66fb6975459b7667e7f99e601848bb0.jpg"
+    },
+    {
+      "filename": "3a9b42eaa0dd86bfe16784c68e5976b739f0018e2a8073369a53c1dbb464442a.jpg",
+      "sha256": "3a9b42eaa0dd86bfe16784c68e5976b739f0018e2a8073369a53c1dbb464442a",
+      "bytes": 7846,
+      "width": 212,
+      "height": 190,
+      "alt": "RS Aggarwal Triangles SimilarityExample_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3a9b42eaa0dd86bfe16784c68e5976b739f0018e2a8073369a53c1dbb464442a.jpg"
+    },
+    {
+      "filename": "ce32510fed332dfcdba2ec354d467a6bc5a5052bba355ace7697aadbf6ce5e17.jpg",
+      "sha256": "ce32510fed332dfcdba2ec354d467a6bc5a5052bba355ace7697aadbf6ce5e17",
+      "bytes": 10154,
+      "width": 196,
+      "height": 223,
+      "alt": "RS Aggarwal Triangles SimilarityExample_13 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ce32510fed332dfcdba2ec354d467a6bc5a5052bba355ace7697aadbf6ce5e17.jpg"
+    },
+    {
+      "filename": "ce191753256cf0f3b99300b7703ec457030a5f52ead76f7deac51959c2f51606.jpg",
+      "sha256": "ce191753256cf0f3b99300b7703ec457030a5f52ead76f7deac51959c2f51606",
+      "bytes": 10013,
+      "width": 240,
+      "height": 191,
+      "alt": "RS Aggarwal Triangles SimilarityExample_14a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ce191753256cf0f3b99300b7703ec457030a5f52ead76f7deac51959c2f51606.jpg"
+    },
+    {
+      "filename": "8e545a9de027e2f99c838d61f917811308e659a12bcc2161086b9cd154ee035c.jpg",
+      "sha256": "8e545a9de027e2f99c838d61f917811308e659a12bcc2161086b9cd154ee035c",
+      "bytes": 11649,
+      "width": 265,
+      "height": 160,
+      "alt": "RS Aggarwal Triangles SimilarityExample_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8e545a9de027e2f99c838d61f917811308e659a12bcc2161086b9cd154ee035c.jpg"
+    },
+    {
+      "filename": "b11762976c3ce4e4d8f1a13c1d5928af24b8d509829c613512dbd0e844db03d6.jpg",
+      "sha256": "b11762976c3ce4e4d8f1a13c1d5928af24b8d509829c613512dbd0e844db03d6",
+      "bytes": 9290,
+      "width": 278,
+      "height": 189,
+      "alt": "RS Aggarwal Triangles SimilarityExample_16 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b11762976c3ce4e4d8f1a13c1d5928af24b8d509829c613512dbd0e844db03d6.jpg"
+    },
+    {
+      "filename": "139e0ef4bd4e582ebf4d25d52c63c75a9878300a9b1203ff541b1efa57ee6092.jpg",
+      "sha256": "139e0ef4bd4e582ebf4d25d52c63c75a9878300a9b1203ff541b1efa57ee6092",
+      "bytes": 10967,
+      "width": 239,
+      "height": 179,
+      "alt": "RS Aggarwal Triangles SimilarityExample_17 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/139e0ef4bd4e582ebf4d25d52c63c75a9878300a9b1203ff541b1efa57ee6092.jpg"
+    },
+    {
+      "filename": "48778853d6da594b359fc2bce8c311573adafaefb721d1194e64f788354762d8.jpg",
+      "sha256": "48778853d6da594b359fc2bce8c311573adafaefb721d1194e64f788354762d8",
+      "bytes": 8625,
+      "width": 204,
+      "height": 192,
+      "alt": "RS Aggarwal Triangles SimilarityExample_18 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/48778853d6da594b359fc2bce8c311573adafaefb721d1194e64f788354762d8.jpg"
+    },
+    {
+      "filename": "c7e36700d93bb2f90e75fb99adf7f129539a31d9fdad2ed8520c52bcd89ddd42.jpg",
+      "sha256": "c7e36700d93bb2f90e75fb99adf7f129539a31d9fdad2ed8520c52bcd89ddd42",
+      "bytes": 8784,
+      "width": 234,
+      "height": 154,
+      "alt": "RS Aggarwal Triangles SimilarityExample_19 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c7e36700d93bb2f90e75fb99adf7f129539a31d9fdad2ed8520c52bcd89ddd42.jpg"
+    },
+    {
+      "filename": "bee09b0a3910183076c67d6ea43e38ea61fd5d2b10d4b0acc26f8280110f22cf.jpg",
+      "sha256": "bee09b0a3910183076c67d6ea43e38ea61fd5d2b10d4b0acc26f8280110f22cf",
+      "bytes": 8817,
+      "width": 237,
+      "height": 203,
+      "alt": "RS Aggarwal Triangles SimilarityExample_20a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bee09b0a3910183076c67d6ea43e38ea61fd5d2b10d4b0acc26f8280110f22cf.jpg"
+    },
+    {
+      "filename": "8b27d7dd3e24b2e908b0efe60925673dcc8c376b7628bfaac9efb905f08e350b.jpg",
+      "sha256": "8b27d7dd3e24b2e908b0efe60925673dcc8c376b7628bfaac9efb905f08e350b",
+      "bytes": 9595,
+      "width": 200,
+      "height": 229,
+      "alt": "RS Aggarwal Triangles SimilarityExample_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8b27d7dd3e24b2e908b0efe60925673dcc8c376b7628bfaac9efb905f08e350b.jpg"
+    },
+    {
+      "filename": "bf97f98accc05411549ad95ff2a94b08de46968132cf3afe280ab368ed7e6a0e.jpg",
+      "sha256": "bf97f98accc05411549ad95ff2a94b08de46968132cf3afe280ab368ed7e6a0e",
+      "bytes": 17614,
+      "width": 507,
+      "height": 193,
+      "alt": "RS Aggarwal Triangles SimilarityExample_22 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf97f98accc05411549ad95ff2a94b08de46968132cf3afe280ab368ed7e6a0e.jpg"
+    },
+    {
+      "filename": "4372be7ebebb64f93761b6d836963525520db2dbc31cf40c4f890bb83bb2f933.jpg",
+      "sha256": "4372be7ebebb64f93761b6d836963525520db2dbc31cf40c4f890bb83bb2f933",
+      "bytes": 17236,
+      "width": 358,
+      "height": 305,
+      "alt": "RS Aggarwal Triangles SimilarityExample_23a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4372be7ebebb64f93761b6d836963525520db2dbc31cf40c4f890bb83bb2f933.jpg"
+    },
+    {
+      "filename": "3676a397fcf78b536ad167efb9ed7e7b4949ab3ab784b97f968adc46f48d93de.jpg",
+      "sha256": "3676a397fcf78b536ad167efb9ed7e7b4949ab3ab784b97f968adc46f48d93de",
+      "bytes": 8330,
+      "width": 199,
+      "height": 159,
+      "alt": "RS Aggarwal Triangles SimilarityExample_24 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3676a397fcf78b536ad167efb9ed7e7b4949ab3ab784b97f968adc46f48d93de.jpg"
+    },
+    {
+      "filename": "689a8337e9d6a59843e03ce88723d4760c9714cc8afa1dc8a5eb7a6418ad6b49.jpg",
+      "sha256": "689a8337e9d6a59843e03ce88723d4760c9714cc8afa1dc8a5eb7a6418ad6b49",
+      "bytes": 10245,
+      "width": 265,
+      "height": 206,
+      "alt": "RS Aggarwal Triangles SimilarityExample_25 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/689a8337e9d6a59843e03ce88723d4760c9714cc8afa1dc8a5eb7a6418ad6b49.jpg"
+    },
+    {
+      "filename": "97b14af52ef8f6525d264f0c0ac26d04b35d67e4ec40618a881a8a020a94f5fa.jpg",
+      "sha256": "97b14af52ef8f6525d264f0c0ac26d04b35d67e4ec40618a881a8a020a94f5fa",
+      "bytes": 11736,
+      "width": 261,
+      "height": 232,
+      "alt": "RS Aggarwal Triangles SimilarityExample_26 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/97b14af52ef8f6525d264f0c0ac26d04b35d67e4ec40618a881a8a020a94f5fa.jpg"
+    },
+    {
+      "filename": "2c2df97c19bd424486756bdfabb9f6dfd49fea5fff94322895fc38e02a491f45.jpg",
+      "sha256": "2c2df97c19bd424486756bdfabb9f6dfd49fea5fff94322895fc38e02a491f45",
+      "bytes": 11448,
+      "width": 357,
+      "height": 168,
+      "alt": "RS Aggarwal Triangles SimilarityExample_27a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2c2df97c19bd424486756bdfabb9f6dfd49fea5fff94322895fc38e02a491f45.jpg"
+    },
+    {
+      "filename": "68f36705f6cd5bacc0fef7535429ba3f08a98fe63381372962ce6ce730824090.jpg",
+      "sha256": "68f36705f6cd5bacc0fef7535429ba3f08a98fe63381372962ce6ce730824090",
+      "bytes": 10571,
+      "width": 270,
+      "height": 166,
+      "alt": "RS Aggarwal Triangles SimilarityExample_28 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/68f36705f6cd5bacc0fef7535429ba3f08a98fe63381372962ce6ce730824090.jpg"
+    },
+    {
+      "filename": "d86ed6553a31506774027e788296c9c4a1f06caeddae6dcaa76aa75031f0f410.jpg",
+      "sha256": "d86ed6553a31506774027e788296c9c4a1f06caeddae6dcaa76aa75031f0f410",
+      "bytes": 13712,
+      "width": 307,
+      "height": 166,
+      "alt": "RS Aggarwal Triangles SimilarityExample_29 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d86ed6553a31506774027e788296c9c4a1f06caeddae6dcaa76aa75031f0f410.jpg"
+    },
+    {
+      "filename": "9c7713771de9c90a7eea661b83add9d2515e9c550296b8dad172d1a7782880f2.jpg",
+      "sha256": "9c7713771de9c90a7eea661b83add9d2515e9c550296b8dad172d1a7782880f2",
+      "bytes": 13976,
+      "width": 412,
+      "height": 186,
+      "alt": "RS Aggarwal Triangles SimilarityExample_31 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9c7713771de9c90a7eea661b83add9d2515e9c550296b8dad172d1a7782880f2.jpg"
+    },
+    {
+      "filename": "15545c0723edac409a8532c0672e6b2a64ccb79b610a407b4351c056d4344074.jpg",
+      "sha256": "15545c0723edac409a8532c0672e6b2a64ccb79b610a407b4351c056d4344074",
+      "bytes": 15103,
+      "width": 416,
+      "height": 193,
+      "alt": "RS Aggarwal Triangles SimilarityExample_32 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/15545c0723edac409a8532c0672e6b2a64ccb79b610a407b4351c056d4344074.jpg"
+    },
+    {
+      "filename": "ca4114ed9a115caa840ea286a1721ae5a641d22e2841cd92d35c241e8f4af3e7.jpg",
+      "sha256": "ca4114ed9a115caa840ea286a1721ae5a641d22e2841cd92d35c241e8f4af3e7",
+      "bytes": 18200,
+      "width": 461,
+      "height": 223,
+      "alt": "RS Aggarwal Triangles Ex7B_1_i source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ca4114ed9a115caa840ea286a1721ae5a641d22e2841cd92d35c241e8f4af3e7.jpg"
+    },
+    {
+      "filename": "270edf061b8f3c588b0c0bd127bec6b0022959d0bd9a0d7fa37e2b764be657a2.jpg",
+      "sha256": "270edf061b8f3c588b0c0bd127bec6b0022959d0bd9a0d7fa37e2b764be657a2",
+      "bytes": 17867,
+      "width": 433,
+      "height": 212,
+      "alt": "RS Aggarwal Triangles Ex7B_1_ii source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/270edf061b8f3c588b0c0bd127bec6b0022959d0bd9a0d7fa37e2b764be657a2.jpg"
+    },
+    {
+      "filename": "c531efd65f9cd5c84f889ed022ae9dd6147056f24e1eebc510ea5c4211f3b6f7.jpg",
+      "sha256": "c531efd65f9cd5c84f889ed022ae9dd6147056f24e1eebc510ea5c4211f3b6f7",
+      "bytes": 21307,
+      "width": 514,
+      "height": 272,
+      "alt": "RS Aggarwal Triangles Ex7B_1_iii source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c531efd65f9cd5c84f889ed022ae9dd6147056f24e1eebc510ea5c4211f3b6f7.jpg"
+    },
+    {
+      "filename": "7f5e880b77f6e0bdb295c94bd09e08cd1b6d0053976be9552412c72ee1971c86.jpg",
+      "sha256": "7f5e880b77f6e0bdb295c94bd09e08cd1b6d0053976be9552412c72ee1971c86",
+      "bytes": 20105,
+      "width": 569,
+      "height": 241,
+      "alt": "RS Aggarwal Triangles Ex7B_1_iv source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7f5e880b77f6e0bdb295c94bd09e08cd1b6d0053976be9552412c72ee1971c86.jpg"
+    },
+    {
+      "filename": "9fd55831f7805b75dc028b9e07e278172879ed7a6295a460b952a0503a4b9a8a.jpg",
+      "sha256": "9fd55831f7805b75dc028b9e07e278172879ed7a6295a460b952a0503a4b9a8a",
+      "bytes": 15133,
+      "width": 492,
+      "height": 148,
+      "alt": "RS Aggarwal Triangles Ex7B_1_v source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9fd55831f7805b75dc028b9e07e278172879ed7a6295a460b952a0503a4b9a8a.jpg"
+    },
+    {
+      "filename": "ca7d7a0b7311694b2e064ff291953fc56c5a0964d693e089398b40a95615a02f.jpg",
+      "sha256": "ca7d7a0b7311694b2e064ff291953fc56c5a0964d693e089398b40a95615a02f",
+      "bytes": 11239,
+      "width": 166,
+      "height": 257,
+      "alt": "RS Aggarwal Triangles Ex7B_2a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ca7d7a0b7311694b2e064ff291953fc56c5a0964d693e089398b40a95615a02f.jpg"
+    },
+    {
+      "filename": "8c278417eecb9569156d3d1559a3bacb8e9ba4ae79b82f9ce46170b245dfb759.jpg",
+      "sha256": "8c278417eecb9569156d3d1559a3bacb8e9ba4ae79b82f9ce46170b245dfb759",
+      "bytes": 7351,
+      "width": 196,
+      "height": 189,
+      "alt": "RS Aggarwal Triangles Ex7B_3a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c278417eecb9569156d3d1559a3bacb8e9ba4ae79b82f9ce46170b245dfb759.jpg"
+    },
+    {
+      "filename": "4df35f2d2641222fe713e140df832b8f9821619568a032abd4c1b8d0d7caa3bf.jpg",
+      "sha256": "4df35f2d2641222fe713e140df832b8f9821619568a032abd4c1b8d0d7caa3bf",
+      "bytes": 8568,
+      "width": 187,
+      "height": 196,
+      "alt": "RS Aggarwal Triangles Ex7B_4 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4df35f2d2641222fe713e140df832b8f9821619568a032abd4c1b8d0d7caa3bf.jpg"
+    },
+    {
+      "filename": "05cf3d961d3f21a227c0325972ab97914a43b62ec86a9ca4264387f5cadf1a2f.jpg",
+      "sha256": "05cf3d961d3f21a227c0325972ab97914a43b62ec86a9ca4264387f5cadf1a2f",
+      "bytes": 14754,
+      "width": 282,
+      "height": 220,
+      "alt": "RS Aggarwal Triangles Ex7B_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/05cf3d961d3f21a227c0325972ab97914a43b62ec86a9ca4264387f5cadf1a2f.jpg"
+    },
+    {
+      "filename": "96e909ef2dd91e597dec1948fe3daa073e0a8fb8169a1ce09543fc0ccb4a840d.jpg",
+      "sha256": "96e909ef2dd91e597dec1948fe3daa073e0a8fb8169a1ce09543fc0ccb4a840d",
+      "bytes": 12418,
+      "width": 276,
+      "height": 213,
+      "alt": "RS Aggarwal Triangles Ex7B_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96e909ef2dd91e597dec1948fe3daa073e0a8fb8169a1ce09543fc0ccb4a840d.jpg"
+    },
+    {
+      "filename": "c957f980cb949d664488365a560801392556e68a2f9d62e2e3f2eb4342ef4292.jpg",
+      "sha256": "c957f980cb949d664488365a560801392556e68a2f9d62e2e3f2eb4342ef4292",
+      "bytes": 10504,
+      "width": 264,
+      "height": 209,
+      "alt": "RS Aggarwal Triangles Ex7B_9 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c957f980cb949d664488365a560801392556e68a2f9d62e2e3f2eb4342ef4292.jpg"
+    },
+    {
+      "filename": "7b6a5fda5df5d6969ed3896af478956e01462a129ea9263cd52037c377ee434b.jpg",
+      "sha256": "7b6a5fda5df5d6969ed3896af478956e01462a129ea9263cd52037c377ee434b",
+      "bytes": 10437,
+      "width": 246,
+      "height": 168,
+      "alt": "RS Aggarwal Triangles Ex7B_11 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7b6a5fda5df5d6969ed3896af478956e01462a129ea9263cd52037c377ee434b.jpg"
+    },
+    {
+      "filename": "11814d9b5a86db96481f678f76e00fe6467a5ac6f76ea0396644a306ce2dbbe3.jpg",
+      "sha256": "11814d9b5a86db96481f678f76e00fe6467a5ac6f76ea0396644a306ce2dbbe3",
+      "bytes": 7805,
+      "width": 234,
+      "height": 167,
+      "alt": "RS Aggarwal Triangles Ex7B_12 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/11814d9b5a86db96481f678f76e00fe6467a5ac6f76ea0396644a306ce2dbbe3.jpg"
+    },
+    {
+      "filename": "bad5478cce3293910d164359fb8d81dd4d4b9bddc0201ebb2546bdf5ab58d712.jpg",
+      "sha256": "bad5478cce3293910d164359fb8d81dd4d4b9bddc0201ebb2546bdf5ab58d712",
+      "bytes": 10116,
+      "width": 242,
+      "height": 178,
+      "alt": "RS Aggarwal Triangles Ex7B_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bad5478cce3293910d164359fb8d81dd4d4b9bddc0201ebb2546bdf5ab58d712.jpg"
+    },
+    {
+      "filename": "7f99c445ae9b4fc029fa71a3e20e3f0cab51d686cbbabee15d2fb10d50b0fe2f.jpg",
+      "sha256": "7f99c445ae9b4fc029fa71a3e20e3f0cab51d686cbbabee15d2fb10d50b0fe2f",
+      "bytes": 10767,
+      "width": 233,
+      "height": 192,
+      "alt": "RS Aggarwal Triangles Ex7B_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7f99c445ae9b4fc029fa71a3e20e3f0cab51d686cbbabee15d2fb10d50b0fe2f.jpg"
+    },
+    {
+      "filename": "a6bdd8ab30f801c9ab6d5727f0baedfb094c65ed42b0bd37fee791a2f707225b.jpg",
+      "sha256": "a6bdd8ab30f801c9ab6d5727f0baedfb094c65ed42b0bd37fee791a2f707225b",
+      "bytes": 13869,
+      "width": 243,
+      "height": 180,
+      "alt": "RS Aggarwal Triangles Ex7B_16 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a6bdd8ab30f801c9ab6d5727f0baedfb094c65ed42b0bd37fee791a2f707225b.jpg"
+    },
+    {
+      "filename": "3d67d4ec7d08bba1aae8b46adcd5a5ef3aa6701caaee2e5afb7dee6d47c410b7.jpg",
+      "sha256": "3d67d4ec7d08bba1aae8b46adcd5a5ef3aa6701caaee2e5afb7dee6d47c410b7",
+      "bytes": 11229,
+      "width": 188,
+      "height": 174,
+      "alt": "RS Aggarwal Triangles Ex7B_17a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3d67d4ec7d08bba1aae8b46adcd5a5ef3aa6701caaee2e5afb7dee6d47c410b7.jpg"
+    },
+    {
+      "filename": "895e2aea60d5dcc678214fb5431fd022463c14d05a8efbf61bd34d5cd1dd6788.jpg",
+      "sha256": "895e2aea60d5dcc678214fb5431fd022463c14d05a8efbf61bd34d5cd1dd6788",
+      "bytes": 12338,
+      "width": 269,
+      "height": 176,
+      "alt": "RS Aggarwal Triangles Ex7B_18a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/895e2aea60d5dcc678214fb5431fd022463c14d05a8efbf61bd34d5cd1dd6788.jpg"
+    },
+    {
+      "filename": "dd623fba34b838d4af1dc22390fb181b9be8a9d9dde6cf2213803feacb54440e.jpg",
+      "sha256": "dd623fba34b838d4af1dc22390fb181b9be8a9d9dde6cf2213803feacb54440e",
+      "bytes": 9332,
+      "width": 198,
+      "height": 228,
+      "alt": "RS Aggarwal Triangles Ex7B_19a source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dd623fba34b838d4af1dc22390fb181b9be8a9d9dde6cf2213803feacb54440e.jpg"
+    },
+    {
+      "filename": "c1d9a41becf044396295c6e909c8b4e5110a38c5545dd43a98868b3d6eb573d8.jpg",
+      "sha256": "c1d9a41becf044396295c6e909c8b4e5110a38c5545dd43a98868b3d6eb573d8",
+      "bytes": 16113,
+      "width": 398,
+      "height": 182,
+      "alt": "RS Aggarwal Triangles Ex7B_21 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c1d9a41becf044396295c6e909c8b4e5110a38c5545dd43a98868b3d6eb573d8.jpg"
+    },
+    {
+      "filename": "5098466c25f99a32c3c70c8a3e8b0016b4a7652ba3a466991b9e5c0ffc2fc09a.jpg",
+      "sha256": "5098466c25f99a32c3c70c8a3e8b0016b4a7652ba3a466991b9e5c0ffc2fc09a",
+      "bytes": 7594,
+      "width": 215,
+      "height": 189,
+      "alt": "RS Aggarwal Triangles AreaExample_2 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5098466c25f99a32c3c70c8a3e8b0016b4a7652ba3a466991b9e5c0ffc2fc09a.jpg"
+    },
+    {
+      "filename": "7edc44d117ebcb61485076b7dfd56ac0c56d8b6cf9bb7baaa51e578d65177c1f.jpg",
+      "sha256": "7edc44d117ebcb61485076b7dfd56ac0c56d8b6cf9bb7baaa51e578d65177c1f",
+      "bytes": 9782,
+      "width": 250,
+      "height": 210,
+      "alt": "RS Aggarwal Triangles AreaExample_7 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7edc44d117ebcb61485076b7dfd56ac0c56d8b6cf9bb7baaa51e578d65177c1f.jpg"
+    },
+    {
+      "filename": "ec26ed39abe5e1108f0d5ecabf794606e16eef880ff08eef4c411fb2cd97d5a9.jpg",
+      "sha256": "ec26ed39abe5e1108f0d5ecabf794606e16eef880ff08eef4c411fb2cd97d5a9",
+      "bytes": 9975,
+      "width": 204,
+      "height": 237,
+      "alt": "RS Aggarwal Triangles AreaExample_8 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ec26ed39abe5e1108f0d5ecabf794606e16eef880ff08eef4c411fb2cd97d5a9.jpg"
+    },
+    {
+      "filename": "6ac859df4b7e01867f48ecfc2694601e0fbbaff2cb395bacba49c7876615d4a1.jpg",
+      "sha256": "6ac859df4b7e01867f48ecfc2694601e0fbbaff2cb395bacba49c7876615d4a1",
+      "bytes": 8695,
+      "width": 209,
+      "height": 221,
+      "alt": "RS Aggarwal Triangles AreaExample_14 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6ac859df4b7e01867f48ecfc2694601e0fbbaff2cb395bacba49c7876615d4a1.jpg"
+    },
+    {
+      "filename": "8c415e708252f39c583853898442f09cc4eabb23d601c10d4e2d58d352b08921.jpg",
+      "sha256": "8c415e708252f39c583853898442f09cc4eabb23d601c10d4e2d58d352b08921",
+      "bytes": 11078,
+      "width": 209,
+      "height": 204,
+      "alt": "RS Aggarwal Triangles AreaExample_15 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c415e708252f39c583853898442f09cc4eabb23d601c10d4e2d58d352b08921.jpg"
+    },
+    {
+      "filename": "219879e06b6aca4b6249023439d369bd2239e2754ff0c30d43116e4d324b942c.jpg",
+      "sha256": "219879e06b6aca4b6249023439d369bd2239e2754ff0c30d43116e4d324b942c",
+      "bytes": 11044,
+      "width": 243,
+      "height": 205,
+      "alt": "RS Aggarwal Triangles Ex7C_9 source diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/219879e06b6aca4b6249023439d369bd2239e2754ff0c30d43116e4d324b942c.jpg"
+    },
+    {
+      "filename": "4646e593736316b667bbe2cb400e666070b9676f876cd831c124f12091e5b084.jpg",
+      "sha256": "4646e593736316b667bbe2cb400e666070b9676f876cd831c124f12091e5b084",
+      "bytes": 12434,
+      "width": 256,
+      "height": 183,
+      "alt": "PQR with internal right triangle POR",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4646e593736316b667bbe2cb400e666070b9676f876cd831c124f12091e5b084.jpg"
+    },
+    {
+      "filename": "a39b66e3dc840126436240d16f0bd24cfe35649119debbd75881403bf3a218e1.jpg",
+      "sha256": "a39b66e3dc840126436240d16f0bd24cfe35649119debbd75881403bf3a218e1",
+      "bytes": 7817,
+      "width": 266,
+      "height": 152,
+      "alt": "Altitude CD to hypotenuse AB",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a39b66e3dc840126436240d16f0bd24cfe35649119debbd75881403bf3a218e1.jpg"
+    },
+    {
+      "filename": "0f2e03e022c044c2b8870075fb43bd969392f5e694bbd884e318b14c584a7d38.jpg",
+      "sha256": "0f2e03e022c044c2b8870075fb43bd969392f5e694bbd884e318b14c584a7d38",
+      "bytes": 13455,
+      "width": 266,
+      "height": 198,
+      "alt": "Median AD and altitude AE with E between B and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0f2e03e022c044c2b8870075fb43bd969392f5e694bbd884e318b14c584a7d38.jpg"
+    },
+    {
+      "filename": "dc5167fa79ad47542992d05adaf1020c8575898dec1f95b5980721de08662b11.jpg",
+      "sha256": "dc5167fa79ad47542992d05adaf1020c8575898dec1f95b5980721de08662b11",
+      "bytes": 11586,
+      "width": 220,
+      "height": 273,
+      "alt": "Similar constructed triangles on legs and hypotenuse",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dc5167fa79ad47542992d05adaf1020c8575898dec1f95b5980721de08662b11.jpg"
+    },
+    {
+      "filename": "652bba3d597a99f7056dc42265eb520c3a3a22365e1c6f3119423555951e570f.jpg",
+      "sha256": "652bba3d597a99f7056dc42265eb520c3a3a22365e1c6f3119423555951e570f",
+      "bytes": 9981,
+      "width": 311,
+      "height": 183,
+      "alt": "Median AD and perpendicular AL",
+      "url": "https://projectaegis.fly.dev/source-assets/0/652bba3d597a99f7056dc42265eb520c3a3a22365e1c6f3119423555951e570f.jpg"
+    },
+    {
+      "filename": "a0e4660b30b260c736b853de62b7367d34cdea5e801551a83d1a7fdb5d7699e2.jpg",
+      "sha256": "a0e4660b30b260c736b853de62b7367d34cdea5e801551a83d1a7fdb5d7699e2",
+      "bytes": 19607,
+      "width": 385,
+      "height": 228,
+      "alt": "Fishing rod and initial taut-string geometry",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0e4660b30b260c736b853de62b7367d34cdea5e801551a83d1a7fdb5d7699e2.jpg"
+    },
+    {
+      "filename": "298b8d763a8ce69c45a6f62817483a9b8676bf5c39ab2b81cbf5179767da59f0.jpg",
+      "sha256": "298b8d763a8ce69c45a6f62817483a9b8676bf5c39ab2b81cbf5179767da59f0",
+      "bytes": 14736,
+      "width": 257,
+      "height": 258,
+      "alt": "Parallel MN and BC with length parameters",
+      "url": "https://projectaegis.fly.dev/source-assets/0/298b8d763a8ce69c45a6f62817483a9b8676bf5c39ab2b81cbf5179767da59f0.jpg"
+    },
+    {
+      "filename": "a19d67f9ed45838720bab79c614cca011cff77619d94b63ac29ccc5acf55710f.jpg",
+      "sha256": "a19d67f9ed45838720bab79c614cca011cff77619d94b63ac29ccc5acf55710f",
+      "bytes": 10976,
+      "width": 302,
+      "height": 152,
+      "alt": "Triangle MNP with internal right triangle MOP",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a19d67f9ed45838720bab79c614cca011cff77619d94b63ac29ccc5acf55710f.jpg"
+    },
+    {
+      "filename": "a631ee309d7b06f79144708f185916ec14ae59cc2388c9f6ae74ccc88aa47b9c.jpg",
+      "sha256": "a631ee309d7b06f79144708f185916ec14ae59cc2388c9f6ae74ccc88aa47b9c",
+      "bytes": 14969,
+      "width": 338,
+      "height": 182,
+      "alt": "Intersecting segments AC and BD at P",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a631ee309d7b06f79144708f185916ec14ae59cc2388c9f6ae74ccc88aa47b9c.jpg"
+    },
+    {
+      "filename": "f8ed28b651f4168bfe681c3ba4b28121ba3da60d753570d3492e3255d88eb3ff.jpg",
+      "sha256": "f8ed28b651f4168bfe681c3ba4b28121ba3da60d753570d3492e3255d88eb3ff",
+      "bytes": 11661,
+      "width": 202,
+      "height": 198,
+      "alt": "Intersecting chords AB and CD at O",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f8ed28b651f4168bfe681c3ba4b28121ba3da60d753570d3492e3255d88eb3ff.jpg"
+    },
+    {
+      "filename": "1724ce4b2a7bba733c7e5140507a5f6b27da05bfa5730aaab367615c2e626e0c.jpg",
+      "sha256": "1724ce4b2a7bba733c7e5140507a5f6b27da05bfa5730aaab367615c2e626e0c",
+      "bytes": 17094,
+      "width": 338,
+      "height": 168,
+      "alt": "Trapezium AB parallel CD with diagonal segment lengths",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1724ce4b2a7bba733c7e5140507a5f6b27da05bfa5730aaab367615c2e626e0c.jpg"
+    },
+    {
+      "filename": "011df57557c6678330d9112a8f399ec97ba485ab654ed373ea6fc1dc869ae7c8.jpg",
+      "sha256": "011df57557c6678330d9112a8f399ec97ba485ab654ed373ea6fc1dc869ae7c8",
+      "bytes": 12268,
+      "width": 266,
+      "height": 274,
+      "alt": "LM parallel CB and LN parallel CD",
+      "url": "https://projectaegis.fly.dev/source-assets/0/011df57557c6678330d9112a8f399ec97ba485ab654ed373ea6fc1dc869ae7c8.jpg"
+    },
+    {
+      "filename": "e6d4383230b94979c014abdc40586873633001067b5ef8415c9f1ef8de32e902.jpg",
+      "sha256": "e6d4383230b94979c014abdc40586873633001067b5ef8415c9f1ef8de32e902",
+      "bytes": 10628,
+      "width": 238,
+      "height": 259,
+      "alt": "Triangles on common base BC",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e6d4383230b94979c014abdc40586873633001067b5ef8415c9f1ef8de32e902.jpg"
+    },
+    {
+      "filename": "f6132c41e441c08b7503515443e3f74a12b2ad3cd7df26181455000f36503286.jpg",
+      "sha256": "f6132c41e441c08b7503515443e3f74a12b2ad3cd7df26181455000f36503286",
+      "bytes": 8217,
+      "width": 238,
+      "height": 197,
+      "alt": "Equal-area cut XY parallel AC",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f6132c41e441c08b7503515443e3f74a12b2ad3cd7df26181455000f36503286.jpg"
+    },
+    {
+      "filename": "e8653a1bb92f1e86bf09a93d230ec996b404711827af3d0041bc97be59cb9a69.jpg",
+      "sha256": "e8653a1bb92f1e86bf09a93d230ec996b404711827af3d0041bc97be59cb9a69",
+      "bytes": 8138,
+      "width": 247,
+      "height": 182,
+      "alt": "Obtuse triangle with exterior perpendicular AD",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e8653a1bb92f1e86bf09a93d230ec996b404711827af3d0041bc97be59cb9a69.jpg"
+    },
+    {
+      "filename": "06b1aa5722f68967031040b827e377b409cf099fc3763f2452ad4f177429d1bb.jpg",
+      "sha256": "06b1aa5722f68967031040b827e377b409cf099fc3763f2452ad4f177429d1bb",
+      "bytes": 11385,
+      "width": 239,
+      "height": 197,
+      "alt": "Crossing segments PC and AR above perpendicular bases",
+      "url": "https://projectaegis.fly.dev/source-assets/0/06b1aa5722f68967031040b827e377b409cf099fc3763f2452ad4f177429d1bb.jpg"
+    },
+    {
+      "filename": "68aa98ef4cbaf6e186fb1567e01058c2886832bcec89b9e5ba5bac2d21281f77.jpg",
+      "sha256": "68aa98ef4cbaf6e186fb1567e01058c2886832bcec89b9e5ba5bac2d21281f77",
+      "bytes": 17815,
+      "width": 397,
+      "height": 184,
+      "alt": "Source triangle lengths causing a degenerate forced solution",
+      "url": "https://projectaegis.fly.dev/source-assets/0/68aa98ef4cbaf6e186fb1567e01058c2886832bcec89b9e5ba5bac2d21281f77.jpg"
+    },
+    {
+      "filename": "b7b2d98aa9ea4eca9cbd44b739458aa00819097dfc3fb7d47e519c5d07f8f959.jpg",
+      "sha256": "b7b2d98aa9ea4eca9cbd44b739458aa00819097dfc3fb7d47e519c5d07f8f959",
+      "bytes": 8754,
+      "width": 304,
+      "height": 168,
+      "alt": "Lamp,person and shadow on level ground",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b7b2d98aa9ea4eca9cbd44b739458aa00819097dfc3fb7d47e519c5d07f8f959.jpg"
+    },
+    {
+      "filename": "9d0f48cc8df606091aa0b3b48bfcb1fd8f6b9f24a2e7e9e65328fedf57a90dc0.jpg",
+      "sha256": "9d0f48cc8df606091aa0b3b48bfcb1fd8f6b9f24a2e7e9e65328fedf57a90dc0",
+      "bytes": 20183,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9d0f48cc8df606091aa0b3b48bfcb1fd8f6b9f24a2e7e9e65328fedf57a90dc0.jpg"
+    },
+    {
+      "filename": "d991be3a370c58adb23c30c25f7172f2328a22f8fedb0cb93fa03277d5e97407.jpg",
+      "sha256": "d991be3a370c58adb23c30c25f7172f2328a22f8fedb0cb93fa03277d5e97407",
+      "bytes": 17676,
+      "width": 433,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d991be3a370c58adb23c30c25f7172f2328a22f8fedb0cb93fa03277d5e97407.jpg"
+    },
+    {
+      "filename": "6d0d83271e4b0225ae798df20fbf225b7d2792bf9e9f4cd09127a26a7596d8c9.jpg",
+      "sha256": "6d0d83271e4b0225ae798df20fbf225b7d2792bf9e9f4cd09127a26a7596d8c9",
+      "bytes": 19510,
+      "width": 483,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 5/7",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6d0d83271e4b0225ae798df20fbf225b7d2792bf9e9f4cd09127a26a7596d8c9.jpg"
+    },
+    {
+      "filename": "08118d8eee04cd2a5048a2adfb17756e398c829fb96d5108fcdbb2276cb6ab08.jpg",
+      "sha256": "08118d8eee04cd2a5048a2adfb17756e398c829fb96d5108fcdbb2276cb6ab08",
+      "bytes": 22897,
+      "width": 727,
+      "height": 531,
+      "alt": "Similar triangle construction: scale 4/3",
+      "url": "https://projectaegis.fly.dev/source-assets/0/08118d8eee04cd2a5048a2adfb17756e398c829fb96d5108fcdbb2276cb6ab08.jpg"
+    },
+    {
+      "filename": "842c86b9c344c0a28c754f7e661b5fa7d208a236876ed766d744958842920450.jpg",
+      "sha256": "842c86b9c344c0a28c754f7e661b5fa7d208a236876ed766d744958842920450",
+      "bytes": 19068,
+      "width": 506,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/842c86b9c344c0a28c754f7e661b5fa7d208a236876ed766d744958842920450.jpg"
+    },
+    {
+      "filename": "1cbbd5f6668f47ce51ae851ed0d37566b2345337751e6f5a5fc9b54b5d330eaf.jpg",
+      "sha256": "1cbbd5f6668f47ce51ae851ed0d37566b2345337751e6f5a5fc9b54b5d330eaf",
+      "bytes": 20162,
+      "width": 707,
+      "height": 575,
+      "alt": "Similar triangle enlarged from vertex A",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1cbbd5f6668f47ce51ae851ed0d37566b2345337751e6f5a5fc9b54b5d330eaf.jpg"
+    },
+    {
+      "filename": "ccb28cb7878689d367ab98e0cab46c8c3ddef13ebcf888e703d934b8485f710f.jpg",
+      "sha256": "ccb28cb7878689d367ab98e0cab46c8c3ddef13ebcf888e703d934b8485f710f",
+      "bytes": 19767,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ccb28cb7878689d367ab98e0cab46c8c3ddef13ebcf888e703d934b8485f710f.jpg"
+    },
+    {
+      "filename": "ba2efca23481435c3215012d2bcd1d9124d72c12876a0f128c559e7c396b22a1.jpg",
+      "sha256": "ba2efca23481435c3215012d2bcd1d9124d72c12876a0f128c559e7c396b22a1",
+      "bytes": 20294,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ba2efca23481435c3215012d2bcd1d9124d72c12876a0f128c559e7c396b22a1.jpg"
+    },
+    {
+      "filename": "04d575ad4500aa24d9687db667d872710f72b1b227003b6a0c065b92e5576ac1.jpg",
+      "sha256": "04d575ad4500aa24d9687db667d872710f72b1b227003b6a0c065b92e5576ac1",
+      "bytes": 21174,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/04d575ad4500aa24d9687db667d872710f72b1b227003b6a0c065b92e5576ac1.jpg"
+    },
+    {
+      "filename": "aab52c90d131ac38d44d22c17032d78dbcf26855626391f6cfd71f131d23ce64.jpg",
+      "sha256": "aab52c90d131ac38d44d22c17032d78dbcf26855626391f6cfd71f131d23ce64",
+      "bytes": 18857,
+      "width": 443,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 4/5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aab52c90d131ac38d44d22c17032d78dbcf26855626391f6cfd71f131d23ce64.jpg"
+    },
+    {
+      "filename": "9873853c62ca8e0c8c74e45d89fd495e5210985742db58e9a30f693143e621a5.jpg",
+      "sha256": "9873853c62ca8e0c8c74e45d89fd495e5210985742db58e9a30f693143e621a5",
+      "bytes": 20333,
+      "width": 491,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 7/5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9873853c62ca8e0c8c74e45d89fd495e5210985742db58e9a30f693143e621a5.jpg"
+    },
+    {
+      "filename": "faab2549c2509c1eca03d720cdf5956d1b66ef10a9e7551cfbc565f1145c0f55.jpg",
+      "sha256": "faab2549c2509c1eca03d720cdf5956d1b66ef10a9e7551cfbc565f1145c0f55",
+      "bytes": 19242,
+      "width": 483,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/faab2549c2509c1eca03d720cdf5956d1b66ef10a9e7551cfbc565f1145c0f55.jpg"
+    },
+    {
+      "filename": "ffcc04dbc9d1d8e4dc54ba11b4a94d38dca56f03090d433a5e79827cb7c1914b.jpg",
+      "sha256": "ffcc04dbc9d1d8e4dc54ba11b4a94d38dca56f03090d433a5e79827cb7c1914b",
+      "bytes": 16618,
+      "width": 727,
+      "height": 368,
+      "alt": "Similar triangle enlarged from vertex A",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ffcc04dbc9d1d8e4dc54ba11b4a94d38dca56f03090d433a5e79827cb7c1914b.jpg"
+    },
+    {
+      "filename": "4fcfafed7ce7a65d7568e0856b8258d9530eec6f93360feb808d93eabb6ece0e.jpg",
+      "sha256": "4fcfafed7ce7a65d7568e0856b8258d9530eec6f93360feb808d93eabb6ece0e",
+      "bytes": 19225,
+      "width": 521,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4fcfafed7ce7a65d7568e0856b8258d9530eec6f93360feb808d93eabb6ece0e.jpg"
+    },
+    {
+      "filename": "3260dde1a33eb744685503187373bffa70c254ae51dc0a73380448e717bdab30.jpg",
+      "sha256": "3260dde1a33eb744685503187373bffa70c254ae51dc0a73380448e717bdab30",
+      "bytes": 22290,
+      "width": 692,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/2",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3260dde1a33eb744685503187373bffa70c254ae51dc0a73380448e717bdab30.jpg"
+    },
+    {
+      "filename": "a1f864cb4c93fc4df26e4748f92d52a96142619f157106f5b138a6f20ff0fda3.jpg",
+      "sha256": "a1f864cb4c93fc4df26e4748f92d52a96142619f157106f5b138a6f20ff0fda3",
+      "bytes": 16900,
+      "width": 433,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 5/3",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a1f864cb4c93fc4df26e4748f92d52a96142619f157106f5b138a6f20ff0fda3.jpg"
+    },
+    {
+      "filename": "6b20e05b1d0fc0ccce68d1a5f9a9cc439e4a260022e50fee0d63b1220dd4a7a1.jpg",
+      "sha256": "6b20e05b1d0fc0ccce68d1a5f9a9cc439e4a260022e50fee0d63b1220dd4a7a1",
+      "bytes": 17606,
+      "width": 538,
+      "height": 575,
+      "alt": "Tangent construction at specified contact point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6b20e05b1d0fc0ccce68d1a5f9a9cc439e4a260022e50fee0d63b1220dd4a7a1.jpg"
+    },
+    {
+      "filename": "cf352ca854f371245405bda1234f7360e964e0f4adf411792e0c34bddd51a82d.jpg",
+      "sha256": "cf352ca854f371245405bda1234f7360e964e0f4adf411792e0c34bddd51a82d",
+      "bytes": 24092,
+      "width": 690,
+      "height": 575,
+      "alt": "Tangent construction at specified contact point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cf352ca854f371245405bda1234f7360e964e0f4adf411792e0c34bddd51a82d.jpg"
+    },
+    {
+      "filename": "12e68cb26dfda7bb4a177aacaf44dcce8af74a9b73963f14a9a9dc821488fd5a.jpg",
+      "sha256": "12e68cb26dfda7bb4a177aacaf44dcce8af74a9b73963f14a9a9dc821488fd5a",
+      "bytes": 25679,
+      "width": 727,
+      "height": 555,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/12e68cb26dfda7bb4a177aacaf44dcce8af74a9b73963f14a9a9dc821488fd5a.jpg"
+    },
+    {
+      "filename": "f769aa8d9cd9989ff2bd6ef2edb707e1b56f43c34cef4e19cf300adc4ad635d5.jpg",
+      "sha256": "f769aa8d9cd9989ff2bd6ef2edb707e1b56f43c34cef4e19cf300adc4ad635d5",
+      "bytes": 25150,
+      "width": 719,
+      "height": 575,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f769aa8d9cd9989ff2bd6ef2edb707e1b56f43c34cef4e19cf300adc4ad635d5.jpg"
+    },
+    {
+      "filename": "b01cbc9995ee3ce8743109b827a25861f738da2ba3cbe4c52b6a4c8a0be04252.jpg",
+      "sha256": "b01cbc9995ee3ce8743109b827a25861f738da2ba3cbe4c52b6a4c8a0be04252",
+      "bytes": 26515,
+      "width": 727,
+      "height": 473,
+      "alt": "Tangents to each circle from the other centre",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b01cbc9995ee3ce8743109b827a25861f738da2ba3cbe4c52b6a4c8a0be04252.jpg"
+    },
+    {
+      "filename": "7d58f7cac4fe21f6b662d27d10bb00b150f9841da55b73ee55f633e120978d14.jpg",
+      "sha256": "7d58f7cac4fe21f6b662d27d10bb00b150f9841da55b73ee55f633e120978d14",
+      "bytes": 24669,
+      "width": 727,
+      "height": 567,
+      "alt": "Centre-free construction using a secant and geometric mean",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d58f7cac4fe21f6b662d27d10bb00b150f9841da55b73ee55f633e120978d14.jpg"
+    },
+    {
+      "filename": "7f647e8c4087dd5a8da675db1f49dcd2af7aa03f8f81cfad73263cb1aa2b6501.jpg",
+      "sha256": "7f647e8c4087dd5a8da675db1f49dcd2af7aa03f8f81cfad73263cb1aa2b6501",
+      "bytes": 21545,
+      "width": 727,
+      "height": 531,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7f647e8c4087dd5a8da675db1f49dcd2af7aa03f8f81cfad73263cb1aa2b6501.jpg"
+    },
+    {
+      "filename": "d6b1e3247a2bb7179b2e96bb8ccade0fd6e5396a59585da5e60e0488404ec7a3.jpg",
+      "sha256": "d6b1e3247a2bb7179b2e96bb8ccade0fd6e5396a59585da5e60e0488404ec7a3",
+      "bytes": 20803,
+      "width": 643,
+      "height": 575,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d6b1e3247a2bb7179b2e96bb8ccade0fd6e5396a59585da5e60e0488404ec7a3.jpg"
+    },
+    {
+      "filename": "3a6ce0210c5bb7337756af474ba3ca975df4d19f05f5200e95a14cd450e8b8d1.jpg",
+      "sha256": "3a6ce0210c5bb7337756af474ba3ca975df4d19f05f5200e95a14cd450e8b8d1",
+      "bytes": 21067,
+      "width": 538,
+      "height": 575,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3a6ce0210c5bb7337756af474ba3ca975df4d19f05f5200e95a14cd450e8b8d1.jpg"
+    },
+    {
+      "filename": "567670ad25b0fc3acc26693e2139e28c9dae9d2a29c63418d009cc92c6dcf4cf.jpg",
+      "sha256": "567670ad25b0fc3acc26693e2139e28c9dae9d2a29c63418d009cc92c6dcf4cf",
+      "bytes": 25098,
+      "width": 591,
+      "height": 575,
+      "alt": "Tangents from A to circle on diameter BC",
+      "url": "https://projectaegis.fly.dev/source-assets/0/567670ad25b0fc3acc26693e2139e28c9dae9d2a29c63418d009cc92c6dcf4cf.jpg"
+    },
+    {
+      "filename": "23bb71415be201a6d5a295e67bd62de3baca0fd95789b6cf41143d60260ab775.jpg",
+      "sha256": "23bb71415be201a6d5a295e67bd62de3baca0fd95789b6cf41143d60260ab775",
+      "bytes": 26258,
+      "width": 727,
+      "height": 570,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/23bb71415be201a6d5a295e67bd62de3baca0fd95789b6cf41143d60260ab775.jpg"
+    },
+    {
+      "filename": "e64b460d3933410b03714a39c158498cd7c3cb44990708a647bf1fe83da8a9a9.jpg",
+      "sha256": "e64b460d3933410b03714a39c158498cd7c3cb44990708a647bf1fe83da8a9a9",
+      "bytes": 23427,
+      "width": 727,
+      "height": 415,
+      "alt": "Four tangents from opposite exterior points",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e64b460d3933410b03714a39c158498cd7c3cb44990708a647bf1fe83da8a9a9.jpg"
+    },
+    {
+      "filename": "767c0c8a7737fa5a4287e2f4287b274f73b39d83b54435b24d2696fa8feeff6b.jpg",
+      "sha256": "767c0c8a7737fa5a4287e2f4287b274f73b39d83b54435b24d2696fa8feeff6b",
+      "bytes": 19054,
+      "width": 538,
+      "height": 575,
+      "alt": "Tangent construction at specified contact point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/767c0c8a7737fa5a4287e2f4287b274f73b39d83b54435b24d2696fa8feeff6b.jpg"
+    },
+    {
+      "filename": "df45004cf08662b6f6503dc4baae192d5ffbe7f9a5a088a8445826a83835cfcf.jpg",
+      "sha256": "df45004cf08662b6f6503dc4baae192d5ffbe7f9a5a088a8445826a83835cfcf",
+      "bytes": 24709,
+      "width": 727,
+      "height": 567,
+      "alt": "Centre-free construction using a secant and geometric mean",
+      "url": "https://projectaegis.fly.dev/source-assets/0/df45004cf08662b6f6503dc4baae192d5ffbe7f9a5a088a8445826a83835cfcf.jpg"
+    },
+    {
+      "filename": "c8e90e832c652e9956a8816f0ee99945f9f86fdd9127fe47065c4202164da7aa.jpg",
+      "sha256": "c8e90e832c652e9956a8816f0ee99945f9f86fdd9127fe47065c4202164da7aa",
+      "bytes": 25432,
+      "width": 727,
+      "height": 438,
+      "alt": "Tangents to each circle from the other centre",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c8e90e832c652e9956a8816f0ee99945f9f86fdd9127fe47065c4202164da7aa.jpg"
+    },
+    {
+      "filename": "7c94deccecd8c470f1903e8efe27f83a2cd573a53ea4fe1bb3154f173ab05606.jpg",
+      "sha256": "7c94deccecd8c470f1903e8efe27f83a2cd573a53ea4fe1bb3154f173ab05606",
+      "bytes": 19998,
+      "width": 727,
+      "height": 452,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7c94deccecd8c470f1903e8efe27f83a2cd573a53ea4fe1bb3154f173ab05606.jpg"
+    },
+    {
+      "filename": "96ef01c1ce9cbf7d4e7fd330b5faeba2f37a141e62e634516fe94cabb7fc60c7.jpg",
+      "sha256": "96ef01c1ce9cbf7d4e7fd330b5faeba2f37a141e62e634516fe94cabb7fc60c7",
+      "bytes": 19268,
+      "width": 727,
+      "height": 531,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96ef01c1ce9cbf7d4e7fd330b5faeba2f37a141e62e634516fe94cabb7fc60c7.jpg"
+    },
+    {
+      "filename": "886c6d441469d6824c0a68c9de7201376ac7b5b529b14e019e42413cf7a6a73d.jpg",
+      "sha256": "886c6d441469d6824c0a68c9de7201376ac7b5b529b14e019e42413cf7a6a73d",
+      "bytes": 21793,
+      "width": 538,
+      "height": 575,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/886c6d441469d6824c0a68c9de7201376ac7b5b529b14e019e42413cf7a6a73d.jpg"
+    },
+    {
+      "filename": "073bab03d4dd4af80e1a143a85be798f6dcc779ac9af0842f73b202d91fe5986.jpg",
+      "sha256": "073bab03d4dd4af80e1a143a85be798f6dcc779ac9af0842f73b202d91fe5986",
+      "bytes": 21365,
+      "width": 538,
+      "height": 575,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/073bab03d4dd4af80e1a143a85be798f6dcc779ac9af0842f73b202d91fe5986.jpg"
+    },
+    {
+      "filename": "332d8941b46b0fe1611a609b04a410eba57e727f687f5a53be685cda610a8921.jpg",
+      "sha256": "332d8941b46b0fe1611a609b04a410eba57e727f687f5a53be685cda610a8921",
+      "bytes": 24728,
+      "width": 727,
+      "height": 531,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/332d8941b46b0fe1611a609b04a410eba57e727f687f5a53be685cda610a8921.jpg"
+    },
+    {
+      "filename": "335b2d9f392019eb9506e98c45efa3a24e507b5927223d0ecc45e91264c3c18d.jpg",
+      "sha256": "335b2d9f392019eb9506e98c45efa3a24e507b5927223d0ecc45e91264c3c18d",
+      "bytes": 24868,
+      "width": 727,
+      "height": 544,
+      "alt": "Tangents from an exterior point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/335b2d9f392019eb9506e98c45efa3a24e507b5927223d0ecc45e91264c3c18d.jpg"
+    },
+    {
+      "filename": "856e062cb7ff7232e9f902525e2fd9611be7dc703c7d5f2bbdd3a55f5d70c1ae.jpg",
+      "sha256": "856e062cb7ff7232e9f902525e2fd9611be7dc703c7d5f2bbdd3a55f5d70c1ae",
+      "bytes": 25740,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/856e062cb7ff7232e9f902525e2fd9611be7dc703c7d5f2bbdd3a55f5d70c1ae.jpg"
+    },
+    {
+      "filename": "0f31c65fe167d443957d4b865f49774b8556966bc9e91a0fda87e738e98c0c1c.jpg",
+      "sha256": "0f31c65fe167d443957d4b865f49774b8556966bc9e91a0fda87e738e98c0c1c",
+      "bytes": 20541,
+      "width": 727,
+      "height": 485,
+      "alt": "Equal-step ray and parallel-line construction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0f31c65fe167d443957d4b865f49774b8556966bc9e91a0fda87e738e98c0c1c.jpg"
+    },
+    {
+      "filename": "fad1f044ae927728ae2477392049e8f2135be13c9c876c86f6b10f9b9ff78ddd.jpg",
+      "sha256": "fad1f044ae927728ae2477392049e8f2135be13c9c876c86f6b10f9b9ff78ddd",
+      "bytes": 20516,
+      "width": 538,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fad1f044ae927728ae2477392049e8f2135be13c9c876c86f6b10f9b9ff78ddd.jpg"
+    },
+    {
+      "filename": "208e26ddde9cda1a376b9e42517327a7307211fc7ddab1af40481b1392f78352.jpg",
+      "sha256": "208e26ddde9cda1a376b9e42517327a7307211fc7ddab1af40481b1392f78352",
+      "bytes": 18310,
+      "width": 727,
+      "height": 485,
+      "alt": "Similar triangle enlarged from vertex A",
+      "url": "https://projectaegis.fly.dev/source-assets/0/208e26ddde9cda1a376b9e42517327a7307211fc7ddab1af40481b1392f78352.jpg"
+    },
+    {
+      "filename": "aadbe03028cad52458de52a0fc09339c06b3856389766eba456bea772b54150a.jpg",
+      "sha256": "aadbe03028cad52458de52a0fc09339c06b3856389766eba456bea772b54150a",
+      "bytes": 20471,
+      "width": 561,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 3/4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aadbe03028cad52458de52a0fc09339c06b3856389766eba456bea772b54150a.jpg"
+    },
+    {
+      "filename": "6f3639bf1f1d30cc59ad8951a90bc69acd569939ea847ea679eb80006fcd7efa.jpg",
+      "sha256": "6f3639bf1f1d30cc59ad8951a90bc69acd569939ea847ea679eb80006fcd7efa",
+      "bytes": 20845,
+      "width": 520,
+      "height": 575,
+      "alt": "Similar triangle construction: scale 7/5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6f3639bf1f1d30cc59ad8951a90bc69acd569939ea847ea679eb80006fcd7efa.jpg"
+    },
+    {
+      "filename": "afb0341303c7d4bd9e545bd3919c4412119aa8cf1e6a6e4b45d1fa1569c2eca7.jpg",
+      "sha256": "afb0341303c7d4bd9e545bd3919c4412119aa8cf1e6a6e4b45d1fa1569c2eca7",
+      "bytes": 24112,
+      "width": 690,
+      "height": 575,
+      "alt": "Tangent construction at specified contact point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/afb0341303c7d4bd9e545bd3919c4412119aa8cf1e6a6e4b45d1fa1569c2eca7.jpg"
+    },
+    {
+      "filename": "7be7c0a7d94ab60f62d2a8f80f02eb85cad4f5fc730e62289926c803e30c590b.jpg",
+      "sha256": "7be7c0a7d94ab60f62d2a8f80f02eb85cad4f5fc730e62289926c803e30c590b",
+      "bytes": 21476,
+      "width": 727,
+      "height": 531,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7be7c0a7d94ab60f62d2a8f80f02eb85cad4f5fc730e62289926c803e30c590b.jpg"
+    },
+    {
+      "filename": "1fb3ae319f3f9d8aea4601997f0d0ec395777d4ac888287b040c1d62bb7eddb3.jpg",
+      "sha256": "1fb3ae319f3f9d8aea4601997f0d0ec395777d4ac888287b040c1d62bb7eddb3",
+      "bytes": 17646,
+      "width": 577,
+      "height": 575,
+      "alt": "Tangents with prescribed angle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1fb3ae319f3f9d8aea4601997f0d0ec395777d4ac888287b040c1d62bb7eddb3.jpg"
+    },
+    {
+      "filename": "178e5d8f359dad0476d2993bd61b2da19adde715a25f90ec4905263a3bb3b840.jpg",
+      "sha256": "178e5d8f359dad0476d2993bd61b2da19adde715a25f90ec4905263a3bb3b840",
+      "bytes": 10321,
+      "width": 205,
+      "height": 175,
+      "alt": "Spiral made from alternating semicircles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/178e5d8f359dad0476d2993bd61b2da19adde715a25f90ec4905263a3bb3b840.jpg"
+    },
+    {
+      "filename": "78b85b0787273d7311bce4149ef6984c20732e55e819e2dbc1b18f2aecdd8fa3.jpg",
+      "sha256": "78b85b0787273d7311bce4149ef6984c20732e55e819e2dbc1b18f2aecdd8fa3",
+      "bytes": 19275,
+      "width": 240,
+      "height": 420,
+      "alt": "Ladder rungs with varying lengths",
+      "url": "https://projectaegis.fly.dev/source-assets/0/78b85b0787273d7311bce4149ef6984c20732e55e819e2dbc1b18f2aecdd8fa3.jpg"
+    },
+    {
+      "filename": "2fa3f736c3ce2ae0744b91235ec17efca3f3303c0fd2a61c4c72f3a59a16a43f.jpg",
+      "sha256": "2fa3f736c3ce2ae0744b91235ec17efca3f3303c0fd2a61c4c72f3a59a16a43f",
+      "bytes": 53245,
+      "width": 605,
+      "height": 235,
+      "alt": "Fabric square and triangle row pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2fa3f736c3ce2ae0744b91235ec17efca3f3303c0fd2a61c4c72f3a59a16a43f.jpg"
+    },
+    {
+      "filename": "115cac140ffa1631d89a418748db498ae525b73f160294a0c80ab41f9126e686.jpg",
+      "sha256": "115cac140ffa1631d89a418748db498ae525b73f160294a0c80ab41f9126e686",
+      "bytes": 25980,
+      "width": 705,
+      "height": 160,
+      "alt": "Matchstick pattern figures",
+      "url": "https://projectaegis.fly.dev/source-assets/0/115cac140ffa1631d89a418748db498ae525b73f160294a0c80ab41f9126e686.jpg"
+    }
+  ]
+}
