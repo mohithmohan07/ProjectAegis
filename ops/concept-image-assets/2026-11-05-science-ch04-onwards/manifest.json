@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916.jpg",
+      "sha256": "b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916",
+      "bytes": 83255,
+      "width": 1234,
+      "height": 301,
+      "alt": "Source Q152 complete seven-blank table",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916.jpg"
+    },
+    {
+      "filename": "584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10.jpg",
+      "sha256": "584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10",
+      "bytes": 76732,
+      "width": 617,
+      "height": 360,
+      "alt": "Developing fetus, placenta and umbilical vessels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10.jpg"
+    },
+    {
+      "filename": "bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2.jpg",
+      "sha256": "bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2",
+      "bytes": 84794,
+      "width": 569,
+      "height": 542,
+      "alt": "Banana plant with labelled suckers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2.jpg"
+    },
+    {
+      "filename": "3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018.jpg",
+      "sha256": "3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018",
+      "bytes": 50104,
+      "width": 279,
+      "height": 274,
+      "alt": "Single-cell organism showing multiple fission",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018.jpg"
+    },
+    {
+      "filename": "6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068.jpg",
+      "sha256": "6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068",
+      "bytes": 16966,
+      "width": 263,
+      "height": 218,
+      "alt": "Gametes P and Q fusing into R and producing S T U V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068.jpg"
+    },
+    {
+      "filename": "2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38.jpg",
+      "sha256": "2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38",
+      "bytes": 60667,
+      "width": 708,
+      "height": 345,
+      "alt": "Fleming's left-hand rule and directions of current, magnetic field and force",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38.jpg"
+    },
+    {
+      "filename": "c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661.jpg",
+      "sha256": "c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661",
+      "bytes": 48728,
+      "width": 606,
+      "height": 222,
+      "alt": "Right-hand grip rule and circular magnetic field lines around a straight current-carrying wire",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661.jpg"
+    },
+    {
+      "filename": "7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d.jpg",
+      "sha256": "7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d",
+      "bytes": 19942,
+      "width": 399,
+      "height": 177,
+      "alt": "Uniform conductor labelled A = area, L = length, and rho = resistivity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d.jpg"
+    },
+    {
+      "filename": "b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da.jpg",
+      "sha256": "b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da",
+      "bytes": 40515,
+      "width": 654,
+      "height": 312,
+      "alt": "Electricity meter readings: Monday 53712 kWh and Tuesday 53725 kWh",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da.jpg"
+    }
+  ]
+}
