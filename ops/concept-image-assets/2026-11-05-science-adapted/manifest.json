@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "5d0feaf162f1256347918f879bc229ae0b4e8bdc06db2f638ec9b5c87d34a4bb.jpg",
+      "sha256": "5d0feaf162f1256347918f879bc229ae0b4e8bdc06db2f638ec9b5c87d34a4bb",
+      "bytes": 16122,
+      "width": 315,
+      "height": 272,
+      "alt": "Textbook carbon network model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5d0feaf162f1256347918f879bc229ae0b4e8bdc06db2f638ec9b5c87d34a4bb.jpg"
+    },
+    {
+      "filename": "f4d81aa3076c42660e3369ce4fed86e346d0edd190f03a79c62dbaafff66f19e.jpg",
+      "sha256": "f4d81aa3076c42660e3369ce4fed86e346d0edd190f03a79c62dbaafff66f19e",
+      "bytes": 58163,
+      "width": 659,
+      "height": 223,
+      "alt": "Textbook carbon allotrope models",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f4d81aa3076c42660e3369ce4fed86e346d0edd190f03a79c62dbaafff66f19e.jpg"
+    },
+    {
+      "filename": "112fd30b045c22bfa253ed5484486320236031a0d2e26339872573fc1fd12fcc.jpg",
+      "sha256": "112fd30b045c22bfa253ed5484486320236031a0d2e26339872573fc1fd12fcc",
+      "bytes": 15853,
+      "width": 179,
+      "height": 196,
+      "alt": "Textbook diamond structure model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/112fd30b045c22bfa253ed5484486320236031a0d2e26339872573fc1fd12fcc.jpg"
+    },
+    {
+      "filename": "c35c927b1870a085c23c0bba7bc76851d80a59e985611c07bbb36f66d6d2850e.jpg",
+      "sha256": "c35c927b1870a085c23c0bba7bc76851d80a59e985611c07bbb36f66d6d2850e",
+      "bytes": 17372,
+      "width": 225,
+      "height": 191,
+      "alt": "Textbook graphite structure model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c35c927b1870a085c23c0bba7bc76851d80a59e985611c07bbb36f66d6d2850e.jpg"
+    },
+    {
+      "filename": "dd053bf1e0bd2358012417c840d2df7ffd9e6f1862d3dad210943a55db673ff7.jpg",
+      "sha256": "dd053bf1e0bd2358012417c840d2df7ffd9e6f1862d3dad210943a55db673ff7",
+      "bytes": 25506,
+      "width": 241,
+      "height": 227,
+      "alt": "Textbook fullerene structure model",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dd053bf1e0bd2358012417c840d2df7ffd9e6f1862d3dad210943a55db673ff7.jpg"
+    },
+    {
+      "filename": "d8202d35fc9e26e611a1b9ed3cb56dfa3dc4e7f218141bf7a3c7b4c5a116b0bc.jpg",
+      "sha256": "d8202d35fc9e26e611a1b9ed3cb56dfa3dc4e7f218141bf7a3c7b4c5a116b0bc",
+      "bytes": 114823,
+      "width": 2400,
+      "height": 1440,
+      "alt": "Authored propanal electron-dot model answer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8202d35fc9e26e611a1b9ed3cb56dfa3dc4e7f218141bf7a3c7b4c5a116b0bc.jpg"
+    },
+    {
+      "filename": "b40e0f2c7592f0124d66eaf4de3812d04e4b686b2cdd548d7fcffd91464820b9.jpg",
+      "sha256": "b40e0f2c7592f0124d66eaf4de3812d04e4b686b2cdd548d7fcffd91464820b9",
+      "bytes": 116583,
+      "width": 2400,
+      "height": 1440,
+      "alt": "Authored propanone electron-dot model answer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b40e0f2c7592f0124d66eaf4de3812d04e4b686b2cdd548d7fcffd91464820b9.jpg"
+    },
+    {
+      "filename": "104b94f86f2f6db947da8a926e9b2ceb532afba36e6f925ccf20af8939d49566.jpg",
+      "sha256": "104b94f86f2f6db947da8a926e9b2ceb532afba36e6f925ccf20af8939d49566",
+      "bytes": 183470,
+      "width": 1440,
+      "height": 660,
+      "alt": "Adapted on-axis parallel rays reflect from a concave mirror and converge at F",
+      "url": "https://projectaegis.fly.dev/source-assets/0/104b94f86f2f6db947da8a926e9b2ceb532afba36e6f925ccf20af8939d49566.jpg"
+    }
+  ]
+}
