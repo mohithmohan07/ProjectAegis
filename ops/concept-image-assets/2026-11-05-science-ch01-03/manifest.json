@@ -1,0 +1,294 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "7c8c01bed22c085bf20efde4f92fec9b2a9010443b861eb73ebce78cc6847136.jpg",
+      "sha256": "7c8c01bed22c085bf20efde4f92fec9b2a9010443b861eb73ebce78cc6847136",
+      "bytes": 20884,
+      "width": 400,
+      "height": 175,
+      "alt": "Silver chloride exposed to sunlight",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7c8c01bed22c085bf20efde4f92fec9b2a9010443b861eb73ebce78cc6847136.jpg"
+    },
+    {
+      "filename": "2d9f08d8599becb9b5300f79c7d9378794d4bbddbd99a192e5b6989ebe506030.jpg",
+      "sha256": "2d9f08d8599becb9b5300f79c7d9378794d4bbddbd99a192e5b6989ebe506030",
+      "bytes": 28424,
+      "width": 455,
+      "height": 235,
+      "alt": "MnO2 and hydrochloric acid reaction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2d9f08d8599becb9b5300f79c7d9378794d4bbddbd99a192e5b6989ebe506030.jpg"
+    },
+    {
+      "filename": "14cf412fb04e75de1747fb173b144c85c43db929f27e694cd57ac074c12a8bbb.jpg",
+      "sha256": "14cf412fb04e75de1747fb173b144c85c43db929f27e694cd57ac074c12a8bbb",
+      "bytes": 14220,
+      "width": 295,
+      "height": 205,
+      "alt": "Silver chloride photodecomposition diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/14cf412fb04e75de1747fb173b144c85c43db929f27e694cd57ac074c12a8bbb.jpg"
+    },
+    {
+      "filename": "7ea2e57e975c8d87fd723a136ffdf2c84260d1ecffd0ba995b28bdff47d9525e.jpg",
+      "sha256": "7ea2e57e975c8d87fd723a136ffdf2c84260d1ecffd0ba995b28bdff47d9525e",
+      "bytes": 25175,
+      "width": 350,
+      "height": 263,
+      "alt": "Source circuit with dilute sodium hydroxide",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7ea2e57e975c8d87fd723a136ffdf2c84260d1ecffd0ba995b28bdff47d9525e.jpg"
+    },
+    {
+      "filename": "28097c759eef00811e188cf94ac128b4006fb1711e33cec4c3d26dcbfd847f46.jpg",
+      "sha256": "28097c759eef00811e188cf94ac128b4006fb1711e33cec4c3d26dcbfd847f46",
+      "bytes": 7949,
+      "width": 215,
+      "height": 157,
+      "alt": "Source response graph a",
+      "url": "https://projectaegis.fly.dev/source-assets/0/28097c759eef00811e188cf94ac128b4006fb1711e33cec4c3d26dcbfd847f46.jpg"
+    },
+    {
+      "filename": "01de41ba9663e347b7392385d9dcfc21f6ed5f66e274c65e78f498cbdd2d8f66.jpg",
+      "sha256": "01de41ba9663e347b7392385d9dcfc21f6ed5f66e274c65e78f498cbdd2d8f66",
+      "bytes": 8928,
+      "width": 215,
+      "height": 157,
+      "alt": "Source response graph b",
+      "url": "https://projectaegis.fly.dev/source-assets/0/01de41ba9663e347b7392385d9dcfc21f6ed5f66e274c65e78f498cbdd2d8f66.jpg"
+    },
+    {
+      "filename": "07f599a039b2a9a8055326f5bd9edd534ac5ce4ded472cc9dee21c4d33ba7948.jpg",
+      "sha256": "07f599a039b2a9a8055326f5bd9edd534ac5ce4ded472cc9dee21c4d33ba7948",
+      "bytes": 6357,
+      "width": 219,
+      "height": 157,
+      "alt": "Source response graph c",
+      "url": "https://projectaegis.fly.dev/source-assets/0/07f599a039b2a9a8055326f5bd9edd534ac5ce4ded472cc9dee21c4d33ba7948.jpg"
+    },
+    {
+      "filename": "47ae5e828ea149c7e1a6b5efe1a87c2d0d0d502054a7d01f64df702d67999ef0.jpg",
+      "sha256": "47ae5e828ea149c7e1a6b5efe1a87c2d0d0d502054a7d01f64df702d67999ef0",
+      "bytes": 8016,
+      "width": 219,
+      "height": 157,
+      "alt": "Source response graph d",
+      "url": "https://projectaegis.fly.dev/source-assets/0/47ae5e828ea149c7e1a6b5efe1a87c2d0d0d502054a7d01f64df702d67999ef0.jpg"
+    },
+    {
+      "filename": "684fff6a6a6be5a06778059d0b2b0436158cb87c19e602b39dddafe1e17b6658.jpg",
+      "sha256": "684fff6a6a6be5a06778059d0b2b0436158cb87c19e602b39dddafe1e17b6658",
+      "bytes": 20230,
+      "width": 488,
+      "height": 95,
+      "alt": "Source pH scale and ion-concentration schematic",
+      "url": "https://projectaegis.fly.dev/source-assets/0/684fff6a6a6be5a06778059d0b2b0436158cb87c19e602b39dddafe1e17b6658.jpg"
+    },
+    {
+      "filename": "4f3d937e7362523de73efb939903788ff7c4c71bb9142cb99568df4f3c84c73e.jpg",
+      "sha256": "4f3d937e7362523de73efb939903788ff7c4c71bb9142cb99568df4f3c84c73e",
+      "bytes": 28134,
+      "width": 489,
+      "height": 292,
+      "alt": "Source pH versus logarithmically spaced hydrogen-ion concentration graph",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4f3d937e7362523de73efb939903788ff7c4c71bb9142cb99568df4f3c84c73e.jpg"
+    },
+    {
+      "filename": "bca37ed49d262ee7cb7c32b5faca3194e7a8d563cde2f266209e6d10d241a47b.jpg",
+      "sha256": "bca37ed49d262ee7cb7c32b5faca3194e7a8d563cde2f266209e6d10d241a47b",
+      "bytes": 53307,
+      "width": 475,
+      "height": 344,
+      "alt": "Source hydrogen chloride preparation apparatus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bca37ed49d262ee7cb7c32b5faca3194e7a8d563cde2f266209e6d10d241a47b.jpg"
+    },
+    {
+      "filename": "fddfab7a9e1b3f019f52f5187894abb3f1de6a2dd61d6e5530185c9d1ac1727c.jpg",
+      "sha256": "fddfab7a9e1b3f019f52f5187894abb3f1de6a2dd61d6e5530185c9d1ac1727c",
+      "bytes": 52889,
+      "width": 305,
+      "height": 228,
+      "alt": "Source marble building photograph",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fddfab7a9e1b3f019f52f5187894abb3f1de6a2dd61d6e5530185c9d1ac1727c.jpg"
+    },
+    {
+      "filename": "3eb3e8b234da9b66b49b8c7b5cf333364c83f19795ac3a27f43d0a5c0369e764.jpg",
+      "sha256": "3eb3e8b234da9b66b49b8c7b5cf333364c83f19795ac3a27f43d0a5c0369e764",
+      "bytes": 28817,
+      "width": 346,
+      "height": 248,
+      "alt": "Source pressure graph with missing time-axis labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3eb3e8b234da9b66b49b8c7b5cf333364c83f19795ac3a27f43d0a5c0369e764.jpg"
+    },
+    {
+      "filename": "2d154d98ebfe06348389ce5136c644f3609d115a0ec80efa87850a72824e5d95.jpg",
+      "sha256": "2d154d98ebfe06348389ce5136c644f3609d115a0ec80efa87850a72824e5d95",
+      "bytes": 62334,
+      "width": 324,
+      "height": 223,
+      "alt": "Source comparison of statues in 1908 and 1969",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2d154d98ebfe06348389ce5136c644f3609d115a0ec80efa87850a72824e5d95.jpg"
+    },
+    {
+      "filename": "89e0a86ad2ba1944bb2294d829b4bd8ae56d25ebfe876a22db6a319e0ae3085f.jpg",
+      "sha256": "89e0a86ad2ba1944bb2294d829b4bd8ae56d25ebfe876a22db6a319e0ae3085f",
+      "bytes": 33193,
+      "width": 462,
+      "height": 286,
+      "alt": "Source porosity and expansion plotted against water:plaster ratio",
+      "url": "https://projectaegis.fly.dev/source-assets/0/89e0a86ad2ba1944bb2294d829b4bd8ae56d25ebfe876a22db6a319e0ae3085f.jpg"
+    },
+    {
+      "filename": "02faf191a41768d3e96700dfe63661a889e4d0cde65a9f3adbced9d7d62e381d.jpg",
+      "sha256": "02faf191a41768d3e96700dfe63661a889e4d0cde65a9f3adbced9d7d62e381d",
+      "bytes": 15476,
+      "width": 466,
+      "height": 175,
+      "alt": "Original source schematic, retained for critical interpretation; molecular HCl model corrected in text",
+      "url": "https://projectaegis.fly.dev/source-assets/0/02faf191a41768d3e96700dfe63661a889e4d0cde65a9f3adbced9d7d62e381d.jpg"
+    },
+    {
+      "filename": "b10ed3d93f17dc036aaffef8fa25df0a2abaa394f2027133510c73492a834a89.jpg",
+      "sha256": "b10ed3d93f17dc036aaffef8fa25df0a2abaa394f2027133510c73492a834a89",
+      "bytes": 42489,
+      "width": 479,
+      "height": 225,
+      "alt": "Source zinc/acid hydrogen generation and gas-test apparatus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b10ed3d93f17dc036aaffef8fa25df0a2abaa394f2027133510c73492a834a89.jpg"
+    },
+    {
+      "filename": "133289ac1c52fce54814f0ecf707822eae81cc6d92e080e68765d5588fa9c169.jpg",
+      "sha256": "133289ac1c52fce54814f0ecf707822eae81cc6d92e080e68765d5588fa9c169",
+      "bytes": 80979,
+      "width": 426,
+      "height": 290,
+      "alt": "Source plaster decorative objects photograph",
+      "url": "https://projectaegis.fly.dev/source-assets/0/133289ac1c52fce54814f0ecf707822eae81cc6d92e080e68765d5588fa9c169.jpg"
+    },
+    {
+      "filename": "ee5c70d1a7df6063278f65ccd6281fdddbf3dc24e96bf3d3962f810358a35bfe.jpg",
+      "sha256": "ee5c70d1a7df6063278f65ccd6281fdddbf3dc24e96bf3d3962f810358a35bfe",
+      "bytes": 62325,
+      "width": 459,
+      "height": 266,
+      "alt": "Source illustrative pH scale; sample values vary with composition and concentration",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ee5c70d1a7df6063278f65ccd6281fdddbf3dc24e96bf3d3962f810358a35bfe.jpg"
+    },
+    {
+      "filename": "f7b07726eaf34c0a5e58b29915c4a1503baf7c19081af3662c21d698a37c6f6b.jpg",
+      "sha256": "f7b07726eaf34c0a5e58b29915c4a1503baf7c19081af3662c21d698a37c6f6b",
+      "bytes": 19065,
+      "width": 392,
+      "height": 191,
+      "alt": "ch3 q27 circuit",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f7b07726eaf34c0a5e58b29915c4a1503baf7c19081af3662c21d698a37c6f6b.jpg"
+    },
+    {
+      "filename": "60f9f86b81212fd2efff500afd4ce25602702c2a5a89baaefcb5a43ab34e0561.jpg",
+      "sha256": "60f9f86b81212fd2efff500afd4ce25602702c2a5a89baaefcb5a43ab34e0561",
+      "bytes": 28721,
+      "width": 319,
+      "height": 334,
+      "alt": "ch3 q42 tubes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/60f9f86b81212fd2efff500afd4ce25602702c2a5a89baaefcb5a43ab34e0561.jpg"
+    },
+    {
+      "filename": "df0f7c60d6ddf62c2e07c52947d85ea0e141289e5f827d7bf53bd91e43dea626.jpg",
+      "sha256": "df0f7c60d6ddf62c2e07c52947d85ea0e141289e5f827d7bf53bd91e43dea626",
+      "bytes": 21745,
+      "width": 289,
+      "height": 117,
+      "alt": "ch3 q55 aluminium",
+      "url": "https://projectaegis.fly.dev/source-assets/0/df0f7c60d6ddf62c2e07c52947d85ea0e141289e5f827d7bf53bd91e43dea626.jpg"
+    },
+    {
+      "filename": "c7c831a5bd5215b6528b735d9d2222b60224f02bec865e67c2755a51be97dc2d.jpg",
+      "sha256": "c7c831a5bd5215b6528b735d9d2222b60224f02bec865e67c2755a51be97dc2d",
+      "bytes": 42184,
+      "width": 1100,
+      "height": 330,
+      "alt": "ch3 q88 kcl corrected",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c7c831a5bd5215b6528b735d9d2222b60224f02bec865e67c2755a51be97dc2d.jpg"
+    },
+    {
+      "filename": "d2df51ffeb699efa8b84119e369d7f30edb947f882b219016c80ae53be6b11cc.jpg",
+      "sha256": "d2df51ffeb699efa8b84119e369d7f30edb947f882b219016c80ae53be6b11cc",
+      "bytes": 83243,
+      "width": 1350,
+      "height": 578,
+      "alt": "Neutral metal has two valence electrons; each of two halogens receives one electron and has an octet; final cation is 2+ and each anion is \u22121.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d2df51ffeb699efa8b84119e369d7f30edb947f882b219016c80ae53be6b11cc.jpg"
+    },
+    {
+      "filename": "c0d6d90d3e34713ebc28f9c469db31099445c8819a19081245e7cd7fb7dc8851.jpg",
+      "sha256": "c0d6d90d3e34713ebc28f9c469db31099445c8819a19081245e7cd7fb7dc8851",
+      "bytes": 80552,
+      "width": 1350,
+      "height": 578,
+      "alt": "Neutral metal has two valence electrons; each of two halogens receives one electron and has an octet; final cation is 2+ and each anion is \u22121.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c0d6d90d3e34713ebc28f9c469db31099445c8819a19081245e7cd7fb7dc8851.jpg"
+    },
+    {
+      "filename": "8f9869a65d4c7fed5cd7155e9c365a1a9777d2ebb1b19b48da0f6b3ccfe24109.jpg",
+      "sha256": "8f9869a65d4c7fed5cd7155e9c365a1a9777d2ebb1b19b48da0f6b3ccfe24109",
+      "bytes": 83034,
+      "width": 1350,
+      "height": 578,
+      "alt": "Neutral metal has two valence electrons; each of two halogens receives one electron and has an octet; final cation is 2+ and each anion is \u22121.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8f9869a65d4c7fed5cd7155e9c365a1a9777d2ebb1b19b48da0f6b3ccfe24109.jpg"
+    },
+    {
+      "filename": "a1daa6c22c2b4ded07990e5a32dbb756fb7a564a5a6ab084d8d89eeaa49c7731.jpg",
+      "sha256": "a1daa6c22c2b4ded07990e5a32dbb756fb7a564a5a6ab084d8d89eeaa49c7731",
+      "bytes": 127367,
+      "width": 1425,
+      "height": 1050,
+      "alt": "Five complete Lewis diagrams, ionic charges, octets, ammonia lone pair and nitrogen triple shared pair shown.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a1daa6c22c2b4ded07990e5a32dbb756fb7a564a5a6ab084d8d89eeaa49c7731.jpg"
+    },
+    {
+      "filename": "96290e97942445c4a9fffb37329750d51d7bced4f761cc7a2971f894e5791fb2.jpg",
+      "sha256": "96290e97942445c4a9fffb37329750d51d7bced4f761cc7a2971f894e5791fb2",
+      "bytes": 111613,
+      "width": 1275,
+      "height": 930,
+      "alt": "Correctly labelled copper refining cell with polarity, electrodes, electrolyte, half-reactions and impurity fate.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96290e97942445c4a9fffb37329750d51d7bced4f761cc7a2971f894e5791fb2.jpg"
+    },
+    {
+      "filename": "f43612357d3ce7e45ec021b12c9102c2ead6691a8bd0448c74fb303cd0880cef.jpg",
+      "sha256": "f43612357d3ce7e45ec021b12c9102c2ead6691a8bd0448c74fb303cd0880cef",
+      "bytes": 72384,
+      "width": 618,
+      "height": 248,
+      "alt": "Original two oxide photographs. Identity cannot be determined from appearance alone.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f43612357d3ce7e45ec021b12c9102c2ead6691a8bd0448c74fb303cd0880cef.jpg"
+    },
+    {
+      "filename": "95de62befd95c5d9e85473d051aa626c341e90c6c1cfae5a6377d148dfef9c2d.jpg",
+      "sha256": "95de62befd95c5d9e85473d051aa626c341e90c6c1cfae5a6377d148dfef9c2d",
+      "bytes": 68703,
+      "width": 641,
+      "height": 320,
+      "alt": "Original collage. Silicon and antimony are metalloids, despite the source Non-Metals heading.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/95de62befd95c5d9e85473d051aa626c341e90c6c1cfae5a6377d148dfef9c2d.jpg"
+    },
+    {
+      "filename": "9829457dc36d7d3d9b1612d8a716d2d67223516e5893e75884c1895d190118c8.jpg",
+      "sha256": "9829457dc36d7d3d9b1612d8a716d2d67223516e5893e75884c1895d190118c8",
+      "bytes": 40299,
+      "width": 442,
+      "height": 380,
+      "alt": "Original gold-plating diagram. Conceptual only, not a practical bath or surface-treatment protocol.",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9829457dc36d7d3d9b1612d8a716d2d67223516e5893e75884c1895d190118c8.jpg"
+    },
+    {
+      "filename": "bea90a853b58f0336c1541cde4541163682566c058b8666b9f26fa1f57ccdfd1.jpg",
+      "sha256": "bea90a853b58f0336c1541cde4541163682566c058b8666b9f26fa1f57ccdfd1",
+      "bytes": 41875,
+      "width": 615,
+      "height": 320,
+      "alt": "ch3 from ch1 q54 mno2 reaction",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bea90a853b58f0336c1541cde4541163682566c058b8666b9f26fa1f57ccdfd1.jpg"
+    }
+  ]
+}

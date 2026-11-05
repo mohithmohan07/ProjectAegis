@@ -9,6 +9,7 @@ on:
       - 'ops/concept-image-assets/2026-09-18/**'
       - 'ops/concept-image-assets/2026-11-05-science-recovery/**'
       - 'ops/concept-image-assets/2026-11-05-science-adapted/**'
+      - 'ops/concept-image-assets/2026-11-05-science-ch01-03/**'
       - 'ops/concept-image-bundles/2026-11-05-science-recovery/**'
       - 'backend/scripts/unpack_reviewed_images.py'
       - 'ops/concept-image-assets/2026-11-05-maths-ch04-onwards/**'
@@ -60,6 +61,8 @@ jobs:
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-11-05-science-recovery
           mv image-url-verification.json science-recovery-image-url-verification.json
           python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-11-05-science-adapted
+          mv image-url-verification.json science-adapted-image-url-verification.json
+          python backend/scripts/publish_concept_images.py --assets ops/concept-image-assets/2026-11-05-science-ch01-03
       - name: Save verification receipt
         uses: actions/upload-artifact@v4
         with:
