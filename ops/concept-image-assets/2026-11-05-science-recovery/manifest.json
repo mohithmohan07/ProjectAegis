@@ -1,0 +1,2553 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "filename": "b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916.jpg",
+      "sha256": "b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916",
+      "bytes": 83255,
+      "width": 1234,
+      "height": 301,
+      "alt": "Source Q152 complete seven-blank table",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b2ddadb9ecf639b286ecfa3bcb380595ce150a88f7a9cd342435a7ef82015916.jpg"
+    },
+    {
+      "filename": "584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10.jpg",
+      "sha256": "584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10",
+      "bytes": 76732,
+      "width": 617,
+      "height": 360,
+      "alt": "Developing fetus, placenta and umbilical vessels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/584ac353afefe1533fd1e69e96826cca56975a233e908fc5959051a009d03f10.jpg"
+    },
+    {
+      "filename": "bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2.jpg",
+      "sha256": "bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2",
+      "bytes": 84794,
+      "width": 569,
+      "height": 542,
+      "alt": "Banana plant with labelled suckers",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf3db0b72281b4205000db5ebdeb17be01f48cf9b5ada2d80bee8a24fa7402d2.jpg"
+    },
+    {
+      "filename": "3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018.jpg",
+      "sha256": "3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018",
+      "bytes": 50104,
+      "width": 279,
+      "height": 274,
+      "alt": "Single-cell organism showing multiple fission",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3ea87c903d9962dc8404ce20d8cb56395a842a2365b6ebfd7a33b2bc7c2f4018.jpg"
+    },
+    {
+      "filename": "6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068.jpg",
+      "sha256": "6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068",
+      "bytes": 16966,
+      "width": 263,
+      "height": 218,
+      "alt": "Gametes P and Q fusing into R and producing S T U V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6ea2ed75c48dc6f8eeab8c80be175faaedaaf526982d71e166137f29ef2b6068.jpg"
+    },
+    {
+      "filename": "2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38.jpg",
+      "sha256": "2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38",
+      "bytes": 60667,
+      "width": 708,
+      "height": 345,
+      "alt": "Fleming's left-hand rule and directions of current, magnetic field and force",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2da5957c3d4af50f07d2169995bd9d9570c28f118ba49cc49ac905996b28cc38.jpg"
+    },
+    {
+      "filename": "c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661.jpg",
+      "sha256": "c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661",
+      "bytes": 48728,
+      "width": 606,
+      "height": 222,
+      "alt": "Right-hand grip rule and circular magnetic field lines around a straight current-carrying wire",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c95cde7ddf9fc8434fb117a1c53cbb7a6c58b52ab9f490c4f9b21a8e8e26a661.jpg"
+    },
+    {
+      "filename": "7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d.jpg",
+      "sha256": "7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d",
+      "bytes": 19942,
+      "width": 399,
+      "height": 177,
+      "alt": "Uniform conductor labelled A = area, L = length, and rho = resistivity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d3e489d218230f46c640379997346353c4af1a01f050ac3f4f647071845d59d.jpg"
+    },
+    {
+      "filename": "b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da.jpg",
+      "sha256": "b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da",
+      "bytes": 40515,
+      "width": 654,
+      "height": 312,
+      "alt": "Electricity meter readings: Monday 53712 kWh and Tuesday 53725 kWh",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b70e93d11863299d950314c2e9555fdb3117535aa35c7c25f35808e3c8f8b3da.jpg"
+    },
+    {
+      "filename": "49efa1e76b4cc72b62fb43ee7cdc8bb4a9824e39d4996152d03f662bc25706ef.jpg",
+      "sha256": "49efa1e76b4cc72b62fb43ee7cdc8bb4a9824e39d4996152d03f662bc25706ef",
+      "bytes": 37065,
+      "width": 634,
+      "height": 159,
+      "alt": "Four stages I\u2013IV of binary fission in Amoeba",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49efa1e76b4cc72b62fb43ee7cdc8bb4a9824e39d4996152d03f662bc25706ef.jpg"
+    },
+    {
+      "filename": "7b93f23e1962a50039a91ed2b774901cb1b7bb0e8a38ee956df1e12fa2f32bf6.jpg",
+      "sha256": "7b93f23e1962a50039a91ed2b774901cb1b7bb0e8a38ee956df1e12fa2f32bf6",
+      "bytes": 28009,
+      "width": 285,
+      "height": 262,
+      "alt": "Body fragments developing into complete Planaria",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7b93f23e1962a50039a91ed2b774901cb1b7bb0e8a38ee956df1e12fa2f32bf6.jpg"
+    },
+    {
+      "filename": "e59dfb25219adf64f1c90b5115c5e59dc93c57841b4354609c977a681cef8ea7.jpg",
+      "sha256": "e59dfb25219adf64f1c90b5115c5e59dc93c57841b4354609c977a681cef8ea7",
+      "bytes": 40698,
+      "width": 629,
+      "height": 200,
+      "alt": "Four figures I\u2013IV showing cells with and without buds",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e59dfb25219adf64f1c90b5115c5e59dc93c57841b4354609c977a681cef8ea7.jpg"
+    },
+    {
+      "filename": "863f9a25a06e60d2ab32f9f1f29f10df839bc871ba4e0f98c32bf490e3659aa6.jpg",
+      "sha256": "863f9a25a06e60d2ab32f9f1f29f10df839bc871ba4e0f98c32bf490e3659aa6",
+      "bytes": 36046,
+      "width": 564,
+      "height": 181,
+      "alt": "Two microscope drawings labelled A and B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/863f9a25a06e60d2ab32f9f1f29f10df839bc871ba4e0f98c32bf490e3659aa6.jpg"
+    },
+    {
+      "filename": "0ef532d28150ab69beb8b8b55aea67b72483d2e80a4f5dac72706ef4ade98f2a.jpg",
+      "sha256": "0ef532d28150ab69beb8b8b55aea67b72483d2e80a4f5dac72706ef4ade98f2a",
+      "bytes": 53416,
+      "width": 296,
+      "height": 405,
+      "alt": "Pistil with parts A B and C marked",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0ef532d28150ab69beb8b8b55aea67b72483d2e80a4f5dac72706ef4ade98f2a.jpg"
+    },
+    {
+      "filename": "fbb116dfccd69ded5e9ce6a146ddca8d12d34cbaa9dd6353a098fd94e204cd7f.jpg",
+      "sha256": "fbb116dfccd69ded5e9ce6a146ddca8d12d34cbaa9dd6353a098fd94e204cd7f",
+      "bytes": 25017,
+      "width": 387,
+      "height": 181,
+      "alt": "Dicot seed embryo with labels A B C",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fbb116dfccd69ded5e9ce6a146ddca8d12d34cbaa9dd6353a098fd94e204cd7f.jpg"
+    },
+    {
+      "filename": "1948a7e09232fd36f90a3307f367d5bfbee13943ce6635fa4b7f0d7498334593.jpg",
+      "sha256": "1948a7e09232fd36f90a3307f367d5bfbee13943ce6635fa4b7f0d7498334593",
+      "bytes": 72203,
+      "width": 367,
+      "height": 344,
+      "alt": "Male reproductive organs labelled V W X Y",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1948a7e09232fd36f90a3307f367d5bfbee13943ce6635fa4b7f0d7498334593.jpg"
+    },
+    {
+      "filename": "4b965a00c9d991f49fb5e3b53f796ec876b86b6711e3393eb8fe1f311d8e24d2.jpg",
+      "sha256": "4b965a00c9d991f49fb5e3b53f796ec876b86b6711e3393eb8fe1f311d8e24d2",
+      "bytes": 39240,
+      "width": 489,
+      "height": 254,
+      "alt": "Cell diagram with labels 1\u20134",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4b965a00c9d991f49fb5e3b53f796ec876b86b6711e3393eb8fe1f311d8e24d2.jpg"
+    },
+    {
+      "filename": "89ba368a13b756b741106a09a439c4d694c8fb327b89eeba938d3ea613c3eccf.jpg",
+      "sha256": "89ba368a13b756b741106a09a439c4d694c8fb327b89eeba938d3ea613c3eccf",
+      "bytes": 79969,
+      "width": 314,
+      "height": 372,
+      "alt": "Leaf with labelled starch-present and starch-absent regions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/89ba368a13b756b741106a09a439c4d694c8fb327b89eeba938d3ea613c3eccf.jpg"
+    },
+    {
+      "filename": "ff6d23a2f6b0ae7dca14bd7e58daadf518732db6704149f83dd97cfb79220d77.jpg",
+      "sha256": "ff6d23a2f6b0ae7dca14bd7e58daadf518732db6704149f83dd97cfb79220d77",
+      "bytes": 93076,
+      "width": 707,
+      "height": 304,
+      "alt": "Potted plants under bell jars with potassium hydroxide in setup a",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ff6d23a2f6b0ae7dca14bd7e58daadf518732db6704149f83dd97cfb79220d77.jpg"
+    },
+    {
+      "filename": "ebd2e242de9a25fe4b7f40c95b364ad4bccddda541cde191242e1359978fb582.jpg",
+      "sha256": "ebd2e242de9a25fe4b7f40c95b364ad4bccddda541cde191242e1359978fb582",
+      "bytes": 50303,
+      "width": 330,
+      "height": 236,
+      "alt": "Leaf peel drawing showing guard cells and stomatal pore",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ebd2e242de9a25fe4b7f40c95b364ad4bccddda541cde191242e1359978fb582.jpg"
+    },
+    {
+      "filename": "a07cfe8325f4cef72326fad47102f81468332db57b5b8474e5858198b068c038.jpg",
+      "sha256": "a07cfe8325f4cef72326fad47102f81468332db57b5b8474e5858198b068c038",
+      "bytes": 40210,
+      "width": 347,
+      "height": 159,
+      "alt": "Displayed compound structure i",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a07cfe8325f4cef72326fad47102f81468332db57b5b8474e5858198b068c038.jpg"
+    },
+    {
+      "filename": "bf3391926eecbf22f823cb8aef6852cd38a2935f03b79806d5affab204ddd23a.jpg",
+      "sha256": "bf3391926eecbf22f823cb8aef6852cd38a2935f03b79806d5affab204ddd23a",
+      "bytes": 38517,
+      "width": 450,
+      "height": 150,
+      "alt": "Displayed compound structure iii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf3391926eecbf22f823cb8aef6852cd38a2935f03b79806d5affab204ddd23a.jpg"
+    },
+    {
+      "filename": "c71dad951a29e40247b234f81496684f5fe3518b3fa0a7372f67100c23446818.jpg",
+      "sha256": "c71dad951a29e40247b234f81496684f5fe3518b3fa0a7372f67100c23446818",
+      "bytes": 33586,
+      "width": 372,
+      "height": 156,
+      "alt": "Displayed compound structure iv",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c71dad951a29e40247b234f81496684f5fe3518b3fa0a7372f67100c23446818.jpg"
+    },
+    {
+      "filename": "d025288dd1908a8f7459e240929bd241fedf3827ef0a8ca75d006a872d308086.jpg",
+      "sha256": "d025288dd1908a8f7459e240929bd241fedf3827ef0a8ca75d006a872d308086",
+      "bytes": 153326,
+      "width": 714,
+      "height": 506,
+      "alt": "Flow diagram showing X and Y gametes and equally probable XX and XY offspring",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d025288dd1908a8f7459e240929bd241fedf3827ef0a8ca75d006a872d308086.jpg"
+    },
+    {
+      "filename": "f80a9f0bc791e89cb7f34aec0461cb08d3a7938fd7ce44789e28bd88fbee4808.jpg",
+      "sha256": "f80a9f0bc791e89cb7f34aec0461cb08d3a7938fd7ce44789e28bd88fbee4808",
+      "bytes": 57976,
+      "width": 590,
+      "height": 439,
+      "alt": "Mendel dihybrid cross with seven blank boxes",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f80a9f0bc791e89cb7f34aec0461cb08d3a7938fd7ce44789e28bd88fbee4808.jpg"
+    },
+    {
+      "filename": "16c6895f24cc60452a2c3351d86cfea922eb8779a4c73fda82def14c6c4720d8.jpg",
+      "sha256": "16c6895f24cc60452a2c3351d86cfea922eb8779a4c73fda82def14c6c4720d8",
+      "bytes": 79329,
+      "width": 721,
+      "height": 456,
+      "alt": "Completed dihybrid cross showing gametes Ry and rY F1 RrYy and F2 ratio 9 3 3 1",
+      "url": "https://projectaegis.fly.dev/source-assets/0/16c6895f24cc60452a2c3351d86cfea922eb8779a4c73fda82def14c6c4720d8.jpg"
+    },
+    {
+      "filename": "13fe7f0c66bc967ffbeebcd82d89f782b1480f6a0c32258b2bda961dd57f5c8c.jpg",
+      "sha256": "13fe7f0c66bc967ffbeebcd82d89f782b1480f6a0c32258b2bda961dd57f5c8c",
+      "bytes": 94230,
+      "width": 489,
+      "height": 589,
+      "alt": "Anatomical diagram with numbered parts 1\u201310",
+      "url": "https://projectaegis.fly.dev/source-assets/0/13fe7f0c66bc967ffbeebcd82d89f782b1480f6a0c32258b2bda961dd57f5c8c.jpg"
+    },
+    {
+      "filename": "c3cd56eec9d879a465f4154b41658b4eae021001c6d582286c252535fceedc76.jpg",
+      "sha256": "c3cd56eec9d879a465f4154b41658b4eae021001c6d582286c252535fceedc76",
+      "bytes": 92804,
+      "width": 620,
+      "height": 732,
+      "alt": "Labelled human excretory system including kidneys ureters bladder and urethra",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c3cd56eec9d879a465f4154b41658b4eae021001c6d582286c252535fceedc76.jpg"
+    },
+    {
+      "filename": "607967b1942efc108c94dcbebdf3fdaa5e37e09002aeb9b32a49c7d6e1bf8f88.jpg",
+      "sha256": "607967b1942efc108c94dcbebdf3fdaa5e37e09002aeb9b32a49c7d6e1bf8f88",
+      "bytes": 10875,
+      "width": 328,
+      "height": 231,
+      "alt": "Electron-dot structure of ethane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/607967b1942efc108c94dcbebdf3fdaa5e37e09002aeb9b32a49c7d6e1bf8f88.jpg"
+    },
+    {
+      "filename": "b6fdec8b3149877406ec7f5860c2bc454b502a40c9a4052b4c7a453779672079.jpg",
+      "sha256": "b6fdec8b3149877406ec7f5860c2bc454b502a40c9a4052b4c7a453779672079",
+      "bytes": 8507,
+      "width": 247,
+      "height": 156,
+      "alt": "Electron-dot structure of ethene",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b6fdec8b3149877406ec7f5860c2bc454b502a40c9a4052b4c7a453779672079.jpg"
+    },
+    {
+      "filename": "9a614c89eabb4402ff71600aaef39aa634310b3fcf4bc5aac2aae46226da59fb.jpg",
+      "sha256": "9a614c89eabb4402ff71600aaef39aa634310b3fcf4bc5aac2aae46226da59fb",
+      "bytes": 5838,
+      "width": 308,
+      "height": 84,
+      "alt": "Electron-dot structure of ethyne",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9a614c89eabb4402ff71600aaef39aa634310b3fcf4bc5aac2aae46226da59fb.jpg"
+    },
+    {
+      "filename": "72fd7eb1612ced76227998b8578ff76e0174e603d350a10281f95b82a4e29252.jpg",
+      "sha256": "72fd7eb1612ced76227998b8578ff76e0174e603d350a10281f95b82a4e29252",
+      "bytes": 93339,
+      "width": 437,
+      "height": 1057,
+      "alt": "Structures of pentane, 2-methylbutane and 2,2-dimethylpropane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/72fd7eb1612ced76227998b8578ff76e0174e603d350a10281f95b82a4e29252.jpg"
+    },
+    {
+      "filename": "b0d2237e742d0db1336b94ee3db051314d389c9483e7907dc97fe75cd38383e4.jpg",
+      "sha256": "b0d2237e742d0db1336b94ee3db051314d389c9483e7907dc97fe75cd38383e4",
+      "bytes": 25351,
+      "width": 380,
+      "height": 144,
+      "alt": "Structural formula of hexane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b0d2237e742d0db1336b94ee3db051314d389c9483e7907dc97fe75cd38383e4.jpg"
+    },
+    {
+      "filename": "32d88c99dae229d82e99d08d5dd56634a9ba4902e90270e05c484259e0357d97.jpg",
+      "sha256": "32d88c99dae229d82e99d08d5dd56634a9ba4902e90270e05c484259e0357d97",
+      "bytes": 23636,
+      "width": 339,
+      "height": 145,
+      "alt": "Structural formula of 2-methylpentane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/32d88c99dae229d82e99d08d5dd56634a9ba4902e90270e05c484259e0357d97.jpg"
+    },
+    {
+      "filename": "c9939bf0a391f783eb50f7cc889d643d6fe3051a66e5ee99a2d08f14d4c3684e.jpg",
+      "sha256": "c9939bf0a391f783eb50f7cc889d643d6fe3051a66e5ee99a2d08f14d4c3684e",
+      "bytes": 22588,
+      "width": 341,
+      "height": 146,
+      "alt": "Structural formula of 3-methylpentane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c9939bf0a391f783eb50f7cc889d643d6fe3051a66e5ee99a2d08f14d4c3684e.jpg"
+    },
+    {
+      "filename": "7ba2d2644aeee80f16c421600b21782129b9a791a9ce920026433d5a0d243710.jpg",
+      "sha256": "7ba2d2644aeee80f16c421600b21782129b9a791a9ce920026433d5a0d243710",
+      "bytes": 19400,
+      "width": 289,
+      "height": 161,
+      "alt": "Structural formula of 2,2-dimethylbutane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7ba2d2644aeee80f16c421600b21782129b9a791a9ce920026433d5a0d243710.jpg"
+    },
+    {
+      "filename": "6652838e6a18c0b688a1f363d90b5fa5a13f24588a295985ef096e8aedf096e0.jpg",
+      "sha256": "6652838e6a18c0b688a1f363d90b5fa5a13f24588a295985ef096e8aedf096e0",
+      "bytes": 19244,
+      "width": 291,
+      "height": 153,
+      "alt": "Structural formula of 2,3-dimethylbutane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6652838e6a18c0b688a1f363d90b5fa5a13f24588a295985ef096e8aedf096e0.jpg"
+    },
+    {
+      "filename": "62b113cd511ec6e82031dffccc2cdc5b1b673424d71d2fdbed522810da9dbef6.jpg",
+      "sha256": "62b113cd511ec6e82031dffccc2cdc5b1b673424d71d2fdbed522810da9dbef6",
+      "bytes": 14615,
+      "width": 274,
+      "height": 150,
+      "alt": "Electron-dot structure of ethanoic acid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/62b113cd511ec6e82031dffccc2cdc5b1b673424d71d2fdbed522810da9dbef6.jpg"
+    },
+    {
+      "filename": "d393e77d13ec75b6bc9911bd0af42d862b9bfe1e60aabfae825f52b687f7c05c.jpg",
+      "sha256": "d393e77d13ec75b6bc9911bd0af42d862b9bfe1e60aabfae825f52b687f7c05c",
+      "bytes": 6138,
+      "width": 171,
+      "height": 73,
+      "alt": "Electron-dot structure of hydrogen sulphide",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d393e77d13ec75b6bc9911bd0af42d862b9bfe1e60aabfae825f52b687f7c05c.jpg"
+    },
+    {
+      "filename": "fcfcc68747300e85cd4328a089cc115197516488c0aa194da29f430142af9859.jpg",
+      "sha256": "fcfcc68747300e85cd4328a089cc115197516488c0aa194da29f430142af9859",
+      "bytes": 72264,
+      "width": 586,
+      "height": 312,
+      "alt": "Electron-dot structure of propanone",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fcfcc68747300e85cd4328a089cc115197516488c0aa194da29f430142af9859.jpg"
+    },
+    {
+      "filename": "b58bc43fff856166f192365bd3738ae0dfc60e758116a7762a9992c2c704a40a.jpg",
+      "sha256": "b58bc43fff856166f192365bd3738ae0dfc60e758116a7762a9992c2c704a40a",
+      "bytes": 4015,
+      "width": 137,
+      "height": 71,
+      "alt": "Electron-dot structure of fluorine",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b58bc43fff856166f192365bd3738ae0dfc60e758116a7762a9992c2c704a40a.jpg"
+    },
+    {
+      "filename": "bd59d31076ef7d61e6780aca42584e49de1002f910912e14464bd791931567a2.jpg",
+      "sha256": "bd59d31076ef7d61e6780aca42584e49de1002f910912e14464bd791931567a2",
+      "bytes": 112251,
+      "width": 669,
+      "height": 302,
+      "alt": "Paired labelled diagrams of inhalation and exhalation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bd59d31076ef7d61e6780aca42584e49de1002f910912e14464bd791931567a2.jpg"
+    },
+    {
+      "filename": "e015284d6a45da516702751584df55a07ab82ef6cc0e0e0e38c30d5061cafc54.jpg",
+      "sha256": "e015284d6a45da516702751584df55a07ab82ef6cc0e0e0e38c30d5061cafc54",
+      "bytes": 105413,
+      "width": 482,
+      "height": 479,
+      "alt": "Human pulmonary and systemic blood circulation diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e015284d6a45da516702751584df55a07ab82ef6cc0e0e0e38c30d5061cafc54.jpg"
+    },
+    {
+      "filename": "fe893f4e5520799328f72fce1668fc96c3c0323da09ad23758fcf50f707b6fb1.jpg",
+      "sha256": "fe893f4e5520799328f72fce1668fc96c3c0323da09ad23758fcf50f707b6fb1",
+      "bytes": 127283,
+      "width": 616,
+      "height": 366,
+      "alt": "Labelled open and closed stomata showing swollen and shrunken guard cells",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fe893f4e5520799328f72fce1668fc96c3c0323da09ad23758fcf50f707b6fb1.jpg"
+    },
+    {
+      "filename": "a1643a1012c3f18a40b26720549a3d6a1750f4f6d471347d937b0b186b00d487.jpg",
+      "sha256": "a1643a1012c3f18a40b26720549a3d6a1750f4f6d471347d937b0b186b00d487",
+      "bytes": 78685,
+      "width": 504,
+      "height": 443,
+      "alt": "Graph of undigested fats proteins and carbohydrates along the digestive tract",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a1643a1012c3f18a40b26720549a3d6a1750f4f6d471347d937b0b186b00d487.jpg"
+    },
+    {
+      "filename": "3123f859707f3b78272fb4984d7bc304ab114e1c9378846da2cf29055cca6466.jpg",
+      "sha256": "3123f859707f3b78272fb4984d7bc304ab114e1c9378846da2cf29055cca6466",
+      "bytes": 17452,
+      "width": 266,
+      "height": 204,
+      "alt": "Cyclohexane structural option a",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3123f859707f3b78272fb4984d7bc304ab114e1c9378846da2cf29055cca6466.jpg"
+    },
+    {
+      "filename": "9a557cade6ead73aa82f165d7fe259648e9931abce7009dbf999040749260649.jpg",
+      "sha256": "9a557cade6ead73aa82f165d7fe259648e9931abce7009dbf999040749260649",
+      "bytes": 25824,
+      "width": 269,
+      "height": 234,
+      "alt": "Cyclohexane structural option b",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9a557cade6ead73aa82f165d7fe259648e9931abce7009dbf999040749260649.jpg"
+    },
+    {
+      "filename": "b69d0cf862d42540f87a37f385406112cf07d466fb0fda3b3095312c62abc785.jpg",
+      "sha256": "b69d0cf862d42540f87a37f385406112cf07d466fb0fda3b3095312c62abc785",
+      "bytes": 17367,
+      "width": 294,
+      "height": 152,
+      "alt": "Cyclohexane structural option c",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b69d0cf862d42540f87a37f385406112cf07d466fb0fda3b3095312c62abc785.jpg"
+    },
+    {
+      "filename": "719b1aef5ec9814518c8a76abd60987f832d3e2efc0f739862d7cfec4c409246.jpg",
+      "sha256": "719b1aef5ec9814518c8a76abd60987f832d3e2efc0f739862d7cfec4c409246",
+      "bytes": 19905,
+      "width": 284,
+      "height": 237,
+      "alt": "Cyclohexane structural option d",
+      "url": "https://projectaegis.fly.dev/source-assets/0/719b1aef5ec9814518c8a76abd60987f832d3e2efc0f739862d7cfec4c409246.jpg"
+    },
+    {
+      "filename": "1a6694efd407e273bf1636aa75b7242cbac84cf3309f509fdcf8fe91ef9b0ef6.jpg",
+      "sha256": "1a6694efd407e273bf1636aa75b7242cbac84cf3309f509fdcf8fe91ef9b0ef6",
+      "bytes": 23229,
+      "width": 391,
+      "height": 155,
+      "alt": "Structural option a for the C6H14 question",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1a6694efd407e273bf1636aa75b7242cbac84cf3309f509fdcf8fe91ef9b0ef6.jpg"
+    },
+    {
+      "filename": "d3f8939633b5435d9df1009f1386072767c5ae4f329caaac9249b5748559c0df.jpg",
+      "sha256": "d3f8939633b5435d9df1009f1386072767c5ae4f329caaac9249b5748559c0df",
+      "bytes": 20490,
+      "width": 297,
+      "height": 195,
+      "alt": "Structural option b for the C6H14 question",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d3f8939633b5435d9df1009f1386072767c5ae4f329caaac9249b5748559c0df.jpg"
+    },
+    {
+      "filename": "639bf3e97056914b13c943b31674eb96b46658eb57d79f7cca869e8f9bf77c93.jpg",
+      "sha256": "639bf3e97056914b13c943b31674eb96b46658eb57d79f7cca869e8f9bf77c93",
+      "bytes": 19213,
+      "width": 214,
+      "height": 266,
+      "alt": "Structural option c for the C6H14 question",
+      "url": "https://projectaegis.fly.dev/source-assets/0/639bf3e97056914b13c943b31674eb96b46658eb57d79f7cca869e8f9bf77c93.jpg"
+    },
+    {
+      "filename": "d974c460e11462384555beb0e35987cd7dd864be54fe07e94a5f94735f640278.jpg",
+      "sha256": "d974c460e11462384555beb0e35987cd7dd864be54fe07e94a5f94735f640278",
+      "bytes": 21772,
+      "width": 311,
+      "height": 219,
+      "alt": "Structural option d for the C6H14 question",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d974c460e11462384555beb0e35987cd7dd864be54fe07e94a5f94735f640278.jpg"
+    },
+    {
+      "filename": "00993824444dfc8b142e668fd2cc80f9f787d43b07d4bd562651e529c52307a6.jpg",
+      "sha256": "00993824444dfc8b142e668fd2cc80f9f787d43b07d4bd562651e529c52307a6",
+      "bytes": 5709,
+      "width": 151,
+      "height": 95,
+      "alt": "Displayed compound ii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/00993824444dfc8b142e668fd2cc80f9f787d43b07d4bd562651e529c52307a6.jpg"
+    },
+    {
+      "filename": "9633e96a38e9982e00d8e494ebe4d6397d0c2886f1a1dc1d964c9935d3ae385c.jpg",
+      "sha256": "9633e96a38e9982e00d8e494ebe4d6397d0c2886f1a1dc1d964c9935d3ae385c",
+      "bytes": 17836,
+      "width": 330,
+      "height": 154,
+      "alt": "Displayed compound iii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9633e96a38e9982e00d8e494ebe4d6397d0c2886f1a1dc1d964c9935d3ae385c.jpg"
+    },
+    {
+      "filename": "548ffa4367943daa599bd11fe02351dce166ef3e501f4b29948c246b0584d400.jpg",
+      "sha256": "548ffa4367943daa599bd11fe02351dce166ef3e501f4b29948c246b0584d400",
+      "bytes": 9385,
+      "width": 191,
+      "height": 107,
+      "alt": "Displayed compound i",
+      "url": "https://projectaegis.fly.dev/source-assets/0/548ffa4367943daa599bd11fe02351dce166ef3e501f4b29948c246b0584d400.jpg"
+    },
+    {
+      "filename": "dc0f4f27dd66ba5ea85c0d00761427105d8a3f6361b536132d274bdfe62848f5.jpg",
+      "sha256": "dc0f4f27dd66ba5ea85c0d00761427105d8a3f6361b536132d274bdfe62848f5",
+      "bytes": 21561,
+      "width": 341,
+      "height": 145,
+      "alt": "Displayed compound ii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dc0f4f27dd66ba5ea85c0d00761427105d8a3f6361b536132d274bdfe62848f5.jpg"
+    },
+    {
+      "filename": "1051bb4b3fd4b8b12e41e69aef138c2bb4592ae3526957a4130bbee4757f4382.jpg",
+      "sha256": "1051bb4b3fd4b8b12e41e69aef138c2bb4592ae3526957a4130bbee4757f4382",
+      "bytes": 15544,
+      "width": 246,
+      "height": 144,
+      "alt": "Displayed compound iii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1051bb4b3fd4b8b12e41e69aef138c2bb4592ae3526957a4130bbee4757f4382.jpg"
+    },
+    {
+      "filename": "7ebdd649c7a9b96f014f163d883805b820d90e16c4529b23bd01b1a0b662b076.jpg",
+      "sha256": "7ebdd649c7a9b96f014f163d883805b820d90e16c4529b23bd01b1a0b662b076",
+      "bytes": 13285,
+      "width": 294,
+      "height": 101,
+      "alt": "Displayed compound iv",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7ebdd649c7a9b96f014f163d883805b820d90e16c4529b23bd01b1a0b662b076.jpg"
+    },
+    {
+      "filename": "603552ea7625232077094d1855bb1737cfa2beccd31aa0630936d767020cf91a.jpg",
+      "sha256": "603552ea7625232077094d1855bb1737cfa2beccd31aa0630936d767020cf91a",
+      "bytes": 9042,
+      "width": 202,
+      "height": 124,
+      "alt": "Displayed compound v",
+      "url": "https://projectaegis.fly.dev/source-assets/0/603552ea7625232077094d1855bb1737cfa2beccd31aa0630936d767020cf91a.jpg"
+    },
+    {
+      "filename": "6241de3c69d2547f6b04f69472ae9fe4f390da6192e1331c060019278c9a95b7.jpg",
+      "sha256": "6241de3c69d2547f6b04f69472ae9fe4f390da6192e1331c060019278c9a95b7",
+      "bytes": 21906,
+      "width": 270,
+      "height": 162,
+      "alt": "Electron-dot structure of chlorine molecule",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6241de3c69d2547f6b04f69472ae9fe4f390da6192e1331c060019278c9a95b7.jpg"
+    },
+    {
+      "filename": "b7036f3524024be314474a4eac8aad6e0fefc4c462cd5af7710e66a635d21580.jpg",
+      "sha256": "b7036f3524024be314474a4eac8aad6e0fefc4c462cd5af7710e66a635d21580",
+      "bytes": 15254,
+      "width": 294,
+      "height": 164,
+      "alt": "Structural drawing for propanoic acid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b7036f3524024be314474a4eac8aad6e0fefc4c462cd5af7710e66a635d21580.jpg"
+    },
+    {
+      "filename": "48cc43770ffd914684bd9d757154c825f3ff7167178a492686f4ef34a6c5859e.jpg",
+      "sha256": "48cc43770ffd914684bd9d757154c825f3ff7167178a492686f4ef34a6c5859e",
+      "bytes": 15093,
+      "width": 269,
+      "height": 150,
+      "alt": "Structural drawing for 2-propanol",
+      "url": "https://projectaegis.fly.dev/source-assets/0/48cc43770ffd914684bd9d757154c825f3ff7167178a492686f4ef34a6c5859e.jpg"
+    },
+    {
+      "filename": "96fbcbf529746e59198014cb6dfa0cbe44dd1f2d2fc3a00582b3abac5ff2d4e1.jpg",
+      "sha256": "96fbcbf529746e59198014cb6dfa0cbe44dd1f2d2fc3a00582b3abac5ff2d4e1",
+      "bytes": 13488,
+      "width": 248,
+      "height": 151,
+      "alt": "Structural drawing for 1-iodopropane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96fbcbf529746e59198014cb6dfa0cbe44dd1f2d2fc3a00582b3abac5ff2d4e1.jpg"
+    },
+    {
+      "filename": "7883334fdd6de15440a0665ab90c5d71142d0768fa2328a00b4192fa82cef4b9.jpg",
+      "sha256": "7883334fdd6de15440a0665ab90c5d71142d0768fa2328a00b4192fa82cef4b9",
+      "bytes": 10801,
+      "width": 222,
+      "height": 166,
+      "alt": "Structural drawing for 3-chlorobutanone",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7883334fdd6de15440a0665ab90c5d71142d0768fa2328a00b4192fa82cef4b9.jpg"
+    },
+    {
+      "filename": "f316f8eb2ac1abdd1253e760b7d48fe8a5e0aa6d2a2c923d4f38d49d1885b4c9.jpg",
+      "sha256": "f316f8eb2ac1abdd1253e760b7d48fe8a5e0aa6d2a2c923d4f38d49d1885b4c9",
+      "bytes": 10101,
+      "width": 209,
+      "height": 151,
+      "alt": "Structural drawing for ethanoic acid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f316f8eb2ac1abdd1253e760b7d48fe8a5e0aa6d2a2c923d4f38d49d1885b4c9.jpg"
+    },
+    {
+      "filename": "040ec5c4441bcf4921788495140bd365c8c93a32ac2931c2be1da12953c690f8.jpg",
+      "sha256": "040ec5c4441bcf4921788495140bd365c8c93a32ac2931c2be1da12953c690f8",
+      "bytes": 70327,
+      "width": 732,
+      "height": 309,
+      "alt": "Structural drawing for bromopentane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/040ec5c4441bcf4921788495140bd365c8c93a32ac2931c2be1da12953c690f8.jpg"
+    },
+    {
+      "filename": "816a07ca2840ed0c13105f420f06e5e919d753b13e2fb38bc0662ccdaa86fd4a.jpg",
+      "sha256": "816a07ca2840ed0c13105f420f06e5e919d753b13e2fb38bc0662ccdaa86fd4a",
+      "bytes": 16752,
+      "width": 291,
+      "height": 151,
+      "alt": "Structural drawing for butanone",
+      "url": "https://projectaegis.fly.dev/source-assets/0/816a07ca2840ed0c13105f420f06e5e919d753b13e2fb38bc0662ccdaa86fd4a.jpg"
+    },
+    {
+      "filename": "02b9032b3af5e2808fd3512e387b0fe04ef774b0e4275db91d8bcf1d8b7b633f.jpg",
+      "sha256": "02b9032b3af5e2808fd3512e387b0fe04ef774b0e4275db91d8bcf1d8b7b633f",
+      "bytes": 24601,
+      "width": 386,
+      "height": 161,
+      "alt": "Structural drawing for hexanal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/02b9032b3af5e2808fd3512e387b0fe04ef774b0e4275db91d8bcf1d8b7b633f.jpg"
+    },
+    {
+      "filename": "9acc31bb359ffa0e32940816ace199921048b557a575f5970ee15820f172704f.jpg",
+      "sha256": "9acc31bb359ffa0e32940816ace199921048b557a575f5970ee15820f172704f",
+      "bytes": 30461,
+      "width": 571,
+      "height": 135,
+      "alt": "Structures of butane and 2-methylpropane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9acc31bb359ffa0e32940816ace199921048b557a575f5970ee15820f172704f.jpg"
+    },
+    {
+      "filename": "e3da5faff55a97aeb73e166d15d4a7e98adb568d96e3a18c151f4e72901caea5.jpg",
+      "sha256": "e3da5faff55a97aeb73e166d15d4a7e98adb568d96e3a18c151f4e72901caea5",
+      "bytes": 10410,
+      "width": 216,
+      "height": 153,
+      "alt": "Structural formula of ethanol",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e3da5faff55a97aeb73e166d15d4a7e98adb568d96e3a18c151f4e72901caea5.jpg"
+    },
+    {
+      "filename": "10bd20a37d3bdca9de983fdfae2e97a32def0d12ea108323b85dc1a665eb02e7.jpg",
+      "sha256": "10bd20a37d3bdca9de983fdfae2e97a32def0d12ea108323b85dc1a665eb02e7",
+      "bytes": 10223,
+      "width": 239,
+      "height": 161,
+      "alt": "Structural formula of ethanoic acid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/10bd20a37d3bdca9de983fdfae2e97a32def0d12ea108323b85dc1a665eb02e7.jpg"
+    },
+    {
+      "filename": "cfa805ebdce6e98583553da5e5ca6661d0d25e75b169c93bc251ff7e1bd5bd2c.jpg",
+      "sha256": "cfa805ebdce6e98583553da5e5ca6661d0d25e75b169c93bc251ff7e1bd5bd2c",
+      "bytes": 68487,
+      "width": 489,
+      "height": 309,
+      "alt": "Micelle with oil droplet in centre polar heads outside and hydrocarbon tails inward",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cfa805ebdce6e98583553da5e5ca6661d0d25e75b169c93bc251ff7e1bd5bd2c.jpg"
+    },
+    {
+      "filename": "5b035f40eb9ef17a463cc8ecba5f94917b9df2a06e5f6f13407d5a20fc0d3c38.jpg",
+      "sha256": "5b035f40eb9ef17a463cc8ecba5f94917b9df2a06e5f6f13407d5a20fc0d3c38",
+      "bytes": 124317,
+      "width": 1231,
+      "height": 294,
+      "alt": "Source compound formula table with blanks i to vii",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5b035f40eb9ef17a463cc8ecba5f94917b9df2a06e5f6f13407d5a20fc0d3c38.jpg"
+    },
+    {
+      "filename": "4843fe96f23ac3982e2edc041cd5445e9d3bba9e8ca1e084a14e7f93bf7f9df4.jpg",
+      "sha256": "4843fe96f23ac3982e2edc041cd5445e9d3bba9e8ca1e084a14e7f93bf7f9df4",
+      "bytes": 6660,
+      "width": 162,
+      "height": 148,
+      "alt": "Completed structural formula v Methane",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4843fe96f23ac3982e2edc041cd5445e9d3bba9e8ca1e084a14e7f93bf7f9df4.jpg"
+    },
+    {
+      "filename": "a3304c69b75d7be167e0a8e975c13c2085754fd7e67e212f9e71b8e878b15113.jpg",
+      "sha256": "a3304c69b75d7be167e0a8e975c13c2085754fd7e67e212f9e71b8e878b15113",
+      "bytes": 12580,
+      "width": 286,
+      "height": 147,
+      "alt": "Completed structural formula vi Propanone",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3304c69b75d7be167e0a8e975c13c2085754fd7e67e212f9e71b8e878b15113.jpg"
+    },
+    {
+      "filename": "e5e52645258371e3ae374caf3d47cbd46b87949c8972300f36440b9b7d2f7ad3.jpg",
+      "sha256": "e5e52645258371e3ae374caf3d47cbd46b87949c8972300f36440b9b7d2f7ad3",
+      "bytes": 9716,
+      "width": 193,
+      "height": 140,
+      "alt": "Completed structural formula vii Ethanal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e5e52645258371e3ae374caf3d47cbd46b87949c8972300f36440b9b7d2f7ad3.jpg"
+    },
+    {
+      "filename": "53f23b5efa2a18120a97d6c2719b5980d983ab2adab4f2c29841994195d9d831.jpg",
+      "sha256": "53f23b5efa2a18120a97d6c2719b5980d983ab2adab4f2c29841994195d9d831",
+      "bytes": 7236,
+      "width": 149,
+      "height": 147,
+      "alt": "First-member structure of alkane series",
+      "url": "https://projectaegis.fly.dev/source-assets/0/53f23b5efa2a18120a97d6c2719b5980d983ab2adab4f2c29841994195d9d831.jpg"
+    },
+    {
+      "filename": "a16eb2dee44cf8371322057d4a404e549e05349e8504c02fc00300128e106d8f.jpg",
+      "sha256": "a16eb2dee44cf8371322057d4a404e549e05349e8504c02fc00300128e106d8f",
+      "bytes": 10168,
+      "width": 191,
+      "height": 129,
+      "alt": "First-member structure of alkene series",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a16eb2dee44cf8371322057d4a404e549e05349e8504c02fc00300128e106d8f.jpg"
+    },
+    {
+      "filename": "3b249f6a99bf8e15e254679e4fe777dd65ed832108c1fd9d1aa9c9411b816817.jpg",
+      "sha256": "3b249f6a99bf8e15e254679e4fe777dd65ed832108c1fd9d1aa9c9411b816817",
+      "bytes": 5925,
+      "width": 217,
+      "height": 42,
+      "alt": "First-member structure of alkyne series",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3b249f6a99bf8e15e254679e4fe777dd65ed832108c1fd9d1aa9c9411b816817.jpg"
+    },
+    {
+      "filename": "b8441470a8275f555b3909884d503e748b3ed9c5c0b127720c1e6a53573ba359.jpg",
+      "sha256": "b8441470a8275f555b3909884d503e748b3ed9c5c0b127720c1e6a53573ba359",
+      "bytes": 37372,
+      "width": 354,
+      "height": 364,
+      "alt": "Electron-dot structure of methane with four shared electron pairs",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b8441470a8275f555b3909884d503e748b3ed9c5c0b127720c1e6a53573ba359.jpg"
+    },
+    {
+      "filename": "ddea556bf93814b8fa1d942b8e16a3b27faba731df31fa0cdb3c60f91ac0f0e6.jpg",
+      "sha256": "ddea556bf93814b8fa1d942b8e16a3b27faba731df31fa0cdb3c60f91ac0f0e6",
+      "bytes": 39467,
+      "width": 655,
+      "height": 254,
+      "alt": "Flowchart of a cross between yellow-seeded and green-seeded pea plants",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ddea556bf93814b8fa1d942b8e16a3b27faba731df31fa0cdb3c60f91ac0f0e6.jpg"
+    },
+    {
+      "filename": "cd08b75a6c30cc495b875cbbf5d5270154f0eb280cda2edf386529b3303a0d68.jpg",
+      "sha256": "cd08b75a6c30cc495b875cbbf5d5270154f0eb280cda2edf386529b3303a0d68",
+      "bytes": 6561,
+      "width": 137,
+      "height": 86,
+      "alt": "Electron-dot structure of ammonia",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cd08b75a6c30cc495b875cbbf5d5270154f0eb280cda2edf386529b3303a0d68.jpg"
+    },
+    {
+      "filename": "ac5c6440155ad1915ffc033c0c48ecdb3cfea13488b8b5d34cde39a451af2a6b.jpg",
+      "sha256": "ac5c6440155ad1915ffc033c0c48ecdb3cfea13488b8b5d34cde39a451af2a6b",
+      "bytes": 3830,
+      "width": 118,
+      "height": 39,
+      "alt": "Electron-dot structure of molecular nitrogen",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ac5c6440155ad1915ffc033c0c48ecdb3cfea13488b8b5d34cde39a451af2a6b.jpg"
+    },
+    {
+      "filename": "d3639a66ce5d0483e398effa4f3863a905dd0751a66df82209bea3c9f19115f1.jpg",
+      "sha256": "d3639a66ce5d0483e398effa4f3863a905dd0751a66df82209bea3c9f19115f1",
+      "bytes": 6552,
+      "width": 141,
+      "height": 128,
+      "alt": "Original four-square object pattern",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d3639a66ce5d0483e398effa4f3863a905dd0751a66df82209bea3c9f19115f1.jpg"
+    },
+    {
+      "filename": "c3e3b565a19bb8309d6c0b0ee65591976de535b2d9d288b67ad2cfc067990933.jpg",
+      "sha256": "c3e3b565a19bb8309d6c0b0ee65591976de535b2d9d288b67ad2cfc067990933",
+      "bytes": 36147,
+      "width": 534,
+      "height": 260,
+      "alt": "Source answer diagrams (a), (b), (c), and (d)",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c3e3b565a19bb8309d6c0b0ee65591976de535b2d9d288b67ad2cfc067990933.jpg"
+    },
+    {
+      "filename": "49c74fe790319a99069266a42673bde8ba15fb7720624203d6e62a8516c65887.jpg",
+      "sha256": "49c74fe790319a99069266a42673bde8ba15fb7720624203d6e62a8516c65887",
+      "bytes": 56713,
+      "width": 665,
+      "height": 214,
+      "alt": "Four tree-image alternatives labelled A, B, C, and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/49c74fe790319a99069266a42673bde8ba15fb7720624203d6e62a8516c65887.jpg"
+    },
+    {
+      "filename": "e9ca37380faa7143c199d7032b3d6e5f354e08ac575b44143620449755d25bb1.jpg",
+      "sha256": "e9ca37380faa7143c199d7032b3d6e5f354e08ac575b44143620449755d25bb1",
+      "bytes": 11589,
+      "width": 613,
+      "height": 186,
+      "alt": "Mirror M, object P between F and the mirror, and enlarged erect image Q behind the mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e9ca37380faa7143c199d7032b3d6e5f354e08ac575b44143620449755d25bb1.jpg"
+    },
+    {
+      "filename": "4eb990eb58dde15f22c6c7cfbc130a8bedfd209d0ba4da1d6edfe26febeb5f8a.jpg",
+      "sha256": "4eb990eb58dde15f22c6c7cfbc130a8bedfd209d0ba4da1d6edfe26febeb5f8a",
+      "bytes": 43013,
+      "width": 518,
+      "height": 393,
+      "alt": "Human-eye cross section with labels 1, 2, 3, and 4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4eb990eb58dde15f22c6c7cfbc130a8bedfd209d0ba4da1d6edfe26febeb5f8a.jpg"
+    },
+    {
+      "filename": "d5962db5481b1d67ca5afa71724e3d27cd70bfcced98469aae0ffc933aba7d81.jpg",
+      "sha256": "d5962db5481b1d67ca5afa71724e3d27cd70bfcced98469aae0ffc933aba7d81",
+      "bytes": 16033,
+      "width": 308,
+      "height": 283,
+      "alt": "Current I versus voltage V graph with lines R3 steepest, R1 intermediate, and R2 shallowest",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d5962db5481b1d67ca5afa71724e3d27cd70bfcced98469aae0ffc933aba7d81.jpg"
+    },
+    {
+      "filename": "0d95723abf2654735b39c1b75f75ae59c0c718f68e8aba87540ade756dfe4f05.jpg",
+      "sha256": "0d95723abf2654735b39c1b75f75ae59c0c718f68e8aba87540ade756dfe4f05",
+      "bytes": 40359,
+      "width": 645,
+      "height": 305,
+      "alt": "Monday and Tuesday electricity-meter readings",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0d95723abf2654735b39c1b75f75ae59c0c718f68e8aba87540ade756dfe4f05.jpg"
+    },
+    {
+      "filename": "31a20b0ad2e0fd7731c4e9a7be049631bdac3437badd4c9f054130aa83df1e22.jpg",
+      "sha256": "31a20b0ad2e0fd7731c4e9a7be049631bdac3437badd4c9f054130aa83df1e22",
+      "bytes": 42407,
+      "width": 592,
+      "height": 296,
+      "alt": "Bar magnet with ends A and B and magnetic field arrows",
+      "url": "https://projectaegis.fly.dev/source-assets/0/31a20b0ad2e0fd7731c4e9a7be049631bdac3437badd4c9f054130aa83df1e22.jpg"
+    },
+    {
+      "filename": "ec0601f84596327f9e5e5950eb243b887cc197c14ae98b75c401bcd67d5e923b.jpg",
+      "sha256": "ec0601f84596327f9e5e5950eb243b887cc197c14ae98b75c401bcd67d5e923b",
+      "bytes": 40041,
+      "width": 359,
+      "height": 375,
+      "alt": "Magnets A, B and C with different quantities of iron filings",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ec0601f84596327f9e5e5950eb243b887cc197c14ae98b75c401bcd67d5e923b.jpg"
+    },
+    {
+      "filename": "c0397ae1f6f95a93bf8b035ed38ce85d533210682af64e5bf08d9de60711de3b.jpg",
+      "sha256": "c0397ae1f6f95a93bf8b035ed38ce85d533210682af64e5bf08d9de60711de3b",
+      "bytes": 14455,
+      "width": 344,
+      "height": 260,
+      "alt": "Proton moves upward while the magnetic field points right",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c0397ae1f6f95a93bf8b035ed38ce85d533210682af64e5bf08d9de60711de3b.jpg"
+    },
+    {
+      "filename": "22ff183737a1b8710598463e4931756d3ee594011525d9945bd85e1122187d73.jpg",
+      "sha256": "22ff183737a1b8710598463e4931756d3ee594011525d9945bd85e1122187d73",
+      "bytes": 16838,
+      "width": 214,
+      "height": 266,
+      "alt": "Fleming left-hand diagram labelled at thumb, forefinger and middle finger",
+      "url": "https://projectaegis.fly.dev/source-assets/0/22ff183737a1b8710598463e4931756d3ee594011525d9945bd85e1122187d73.jpg"
+    },
+    {
+      "filename": "a0f768d33eab320652ce428f651b5ec682c761bc61026a80470bb8e144b6e9e5.jpg",
+      "sha256": "a0f768d33eab320652ce428f651b5ec682c761bc61026a80470bb8e144b6e9e5",
+      "bytes": 17100,
+      "width": 400,
+      "height": 282,
+      "alt": "Charged particle moves downward in a rightward magnetic field",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0f768d33eab320652ce428f651b5ec682c761bc61026a80470bb8e144b6e9e5.jpg"
+    },
+    {
+      "filename": "0ce74aa4bed9fdb92f542c61f97de506a7f0ed3f481f8f666434c746ba2e0f21.jpg",
+      "sha256": "0ce74aa4bed9fdb92f542c61f97de506a7f0ed3f481f8f666434c746ba2e0f21",
+      "bytes": 20398,
+      "width": 409,
+      "height": 241,
+      "alt": "Current-carrying wire between labelled N and S magnet poles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/0ce74aa4bed9fdb92f542c61f97de506a7f0ed3f481f8f666434c746ba2e0f21.jpg"
+    },
+    {
+      "filename": "f9512fe8a4aedf6a70cd8a115b4f982edd84a4fc481a49c3f713e10ae6ee92f6.jpg",
+      "sha256": "f9512fe8a4aedf6a70cd8a115b4f982edd84a4fc481a49c3f713e10ae6ee92f6",
+      "bytes": 18936,
+      "width": 397,
+      "height": 345,
+      "alt": "Electron moves down and proton moves up through a rightward uniform magnetic field",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f9512fe8a4aedf6a70cd8a115b4f982edd84a4fc481a49c3f713e10ae6ee92f6.jpg"
+    },
+    {
+      "filename": "3845bd253bcf556de2e23632f44c8a5a2980a64569abcdbc2baa3a6499f6f89b.jpg",
+      "sha256": "3845bd253bcf556de2e23632f44c8a5a2980a64569abcdbc2baa3a6499f6f89b",
+      "bytes": 8045,
+      "width": 389,
+      "height": 303,
+      "alt": "Current emerges from page at I; point P lies west of wire, with compass directions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3845bd253bcf556de2e23632f44c8a5a2980a64569abcdbc2baa3a6499f6f89b.jpg"
+    },
+    {
+      "filename": "df366e2d6bc374b402e29fd4be55a3e434dd4df2eab981d33344a3d3e2b1eff9.jpg",
+      "sha256": "df366e2d6bc374b402e29fd4be55a3e434dd4df2eab981d33344a3d3e2b1eff9",
+      "bytes": 72394,
+      "width": 587,
+      "height": 361,
+      "alt": "Graph of magnetic field decreasing with distance from a straight current-carrying wire",
+      "url": "https://projectaegis.fly.dev/source-assets/0/df366e2d6bc374b402e29fd4be55a3e434dd4df2eab981d33344a3d3e2b1eff9.jpg"
+    },
+    {
+      "filename": "e76b811cf27d4e1ba8cd828b46727d9790dc39e20e93186df31d7a84fc5494e9.jpg",
+      "sha256": "e76b811cf27d4e1ba8cd828b46727d9790dc39e20e93186df31d7a84fc5494e9",
+      "bytes": 23387,
+      "width": 304,
+      "height": 520,
+      "alt": "Three electron-entry directions relative to a rightward magnetic field",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e76b811cf27d4e1ba8cd828b46727d9790dc39e20e93186df31d7a84fc5494e9.jpg"
+    },
+    {
+      "filename": "cd3eef36727d1b3faf49a6852b8fba27c516fcc09373065c9ddc38d7691e6780.jpg",
+      "sha256": "cd3eef36727d1b3faf49a6852b8fba27c516fcc09373065c9ddc38d7691e6780",
+      "bytes": 16738,
+      "width": 414,
+      "height": 227,
+      "alt": "Force on conductor upward and current directed left",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cd3eef36727d1b3faf49a6852b8fba27c516fcc09373065c9ddc38d7691e6780.jpg"
+    },
+    {
+      "filename": "3fd1aa5e6edaa9d7474b9e0cf0d5a468d1776b896c84703b1ae5bb535e008ea8.jpg",
+      "sha256": "3fd1aa5e6edaa9d7474b9e0cf0d5a468d1776b896c84703b1ae5bb535e008ea8",
+      "bytes": 41296,
+      "width": 437,
+      "height": 250,
+      "alt": "Trophic energy diagram with T1 at base and T4 at top",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3fd1aa5e6edaa9d7474b9e0cf0d5a468d1776b896c84703b1ae5bb535e008ea8.jpg"
+    },
+    {
+      "filename": "18e1fbf697f7356126759c9e7967abf0c15fe270824f1ce9217102c63e555da8.jpg",
+      "sha256": "18e1fbf697f7356126759c9e7967abf0c15fe270824f1ce9217102c63e555da8",
+      "bytes": 48061,
+      "width": 656,
+      "height": 287,
+      "alt": "Sunlight and a chain of grass, grasshopper, frog and snake",
+      "url": "https://projectaegis.fly.dev/source-assets/0/18e1fbf697f7356126759c9e7967abf0c15fe270824f1ce9217102c63e555da8.jpg"
+    },
+    {
+      "filename": "7769b8b7c345d091b5eeba14298daef90b5f17b0d82ec18eb7c307755a7c1aae.jpg",
+      "sha256": "7769b8b7c345d091b5eeba14298daef90b5f17b0d82ec18eb7c307755a7c1aae",
+      "bytes": 105650,
+      "width": 664,
+      "height": 391,
+      "alt": "Source cartoon of pesticide use and runoff affecting aquatic organisms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7769b8b7c345d091b5eeba14298daef90b5f17b0d82ec18eb7c307755a7c1aae.jpg"
+    },
+    {
+      "filename": "9a7bafc172a89648436368f2c9d0b687b45db93b036be97793353370a9969f13.jpg",
+      "sha256": "9a7bafc172a89648436368f2c9d0b687b45db93b036be97793353370a9969f13",
+      "bytes": 29615,
+      "width": 514,
+      "height": 333,
+      "alt": "Trophic pyramid with producers, X, secondary consumer and Z",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9a7bafc172a89648436368f2c9d0b687b45db93b036be97793353370a9969f13.jpg"
+    },
+    {
+      "filename": "a5130b907c3ef715b20d9ec272f243005591a081051cc4007a2b919b53e43e93.jpg",
+      "sha256": "a5130b907c3ef715b20d9ec272f243005591a081051cc4007a2b919b53e43e93",
+      "bytes": 16270,
+      "width": 585,
+      "height": 176,
+      "alt": "Grass with 100 units, followed by goat and tiger with unknown energy values",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a5130b907c3ef715b20d9ec272f243005591a081051cc4007a2b919b53e43e93.jpg"
+    },
+    {
+      "filename": "910e374250a4c84aaf022d38374127cdf22125127d0f558eb6f80f70555ce0d9.jpg",
+      "sha256": "910e374250a4c84aaf022d38374127cdf22125127d0f558eb6f80f70555ce0d9",
+      "bytes": 23567,
+      "width": 467,
+      "height": 195,
+      "alt": "Current directions at electromagnet end X and end Y",
+      "url": "https://projectaegis.fly.dev/source-assets/0/910e374250a4c84aaf022d38374127cdf22125127d0f558eb6f80f70555ce0d9.jpg"
+    },
+    {
+      "filename": "b683d9cdd401aedbf92f6eeb4db0be4756e1f6c060d094ffa8c3e39f43994b70.jpg",
+      "sha256": "b683d9cdd401aedbf92f6eeb4db0be4756e1f6c060d094ffa8c3e39f43994b70",
+      "bytes": 18088,
+      "width": 273,
+      "height": 361,
+      "alt": "Upward current in wire AB with P to its right and Q to its left, at distances r1 and r2",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b683d9cdd401aedbf92f6eeb4db0be4756e1f6c060d094ffa8c3e39f43994b70.jpg"
+    },
+    {
+      "filename": "34d236456767d8e8f6c3009f7f27ef7adda8c750a4da5d73ecb7acb2d4323436.jpg",
+      "sha256": "34d236456767d8e8f6c3009f7f27ef7adda8c750a4da5d73ecb7acb2d4323436",
+      "bytes": 76494,
+      "width": 742,
+      "height": 479,
+      "alt": "Leaf to caterpillar to chameleon to snake to mongoose food chain",
+      "url": "https://projectaegis.fly.dev/source-assets/0/34d236456767d8e8f6c3009f7f27ef7adda8c750a4da5d73ecb7acb2d4323436.jpg"
+    },
+    {
+      "filename": "e87e9d2a50f81acc334590586f57e81cfa9e0819d9b260be220d49aa7775616a.jpg",
+      "sha256": "e87e9d2a50f81acc334590586f57e81cfa9e0819d9b260be220d49aa7775616a",
+      "bytes": 43774,
+      "width": 1127,
+      "height": 243,
+      "alt": "Energy transfers P and Q and losses R and S around producer, primary and secondary consumer levels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e87e9d2a50f81acc334590586f57e81cfa9e0819d9b260be220d49aa7775616a.jpg"
+    },
+    {
+      "filename": "45c1f512d6b859a97bf5eca41fab0c8f010715092b88999dd567f0b71128a7c1.jpg",
+      "sha256": "45c1f512d6b859a97bf5eca41fab0c8f010715092b88999dd567f0b71128a7c1",
+      "bytes": 24833,
+      "width": 712,
+      "height": 190,
+      "alt": "Three incident rays on concave and convex mirrors",
+      "url": "https://projectaegis.fly.dev/source-assets/0/45c1f512d6b859a97bf5eca41fab0c8f010715092b88999dd567f0b71128a7c1.jpg"
+    },
+    {
+      "filename": "85b6800de6ff7e07ab715239dd431afc2317e741f8dab8c9ef39a3653d7f8c04.jpg",
+      "sha256": "85b6800de6ff7e07ab715239dd431afc2317e741f8dab8c9ef39a3653d7f8c04",
+      "bytes": 25347,
+      "width": 718,
+      "height": 202,
+      "alt": "Reflected rays for the three source mirror cases",
+      "url": "https://projectaegis.fly.dev/source-assets/0/85b6800de6ff7e07ab715239dd431afc2317e741f8dab8c9ef39a3653d7f8c04.jpg"
+    },
+    {
+      "filename": "c7a718b84a6e6a38fc39beefc25c8e856ada8e126673ffd1ae77bd545586a5d0.jpg",
+      "sha256": "c7a718b84a6e6a38fc39beefc25c8e856ada8e126673ffd1ae77bd545586a5d0",
+      "bytes": 9768,
+      "width": 324,
+      "height": 162,
+      "alt": "Incident ray parallel to principal axis of a convex mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c7a718b84a6e6a38fc39beefc25c8e856ada8e126673ffd1ae77bd545586a5d0.jpg"
+    },
+    {
+      "filename": "432db3af95fc9b4d0ecf18bbc4ba43bb45af49141bdd5875a553a94db8614f09.jpg",
+      "sha256": "432db3af95fc9b4d0ecf18bbc4ba43bb45af49141bdd5875a553a94db8614f09",
+      "bytes": 13694,
+      "width": 275,
+      "height": 264,
+      "alt": "Convex reflection with backward extension through focus and equal angles at incidence point",
+      "url": "https://projectaegis.fly.dev/source-assets/0/432db3af95fc9b4d0ecf18bbc4ba43bb45af49141bdd5875a553a94db8614f09.jpg"
+    },
+    {
+      "filename": "1916e08c87211aaedc64a191c68f425325abd2f402ce0b95495ef798c0e21893.jpg",
+      "sha256": "1916e08c87211aaedc64a191c68f425325abd2f402ce0b95495ef798c0e21893",
+      "bytes": 13857,
+      "width": 368,
+      "height": 266,
+      "alt": "Object AB beyond centre C of a concave mirror with pole P and focus F",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1916e08c87211aaedc64a191c68f425325abd2f402ce0b95495ef798c0e21893.jpg"
+    },
+    {
+      "filename": "c77bd5e876dfb3e845cf8b61ffd75e18680870021a26dc48946363e50bbe459f.jpg",
+      "sha256": "c77bd5e876dfb3e845cf8b61ffd75e18680870021a26dc48946363e50bbe459f",
+      "bytes": 36487,
+      "width": 582,
+      "height": 368,
+      "alt": "Two-ray construction of a diminished inverted real image between C and F",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c77bd5e876dfb3e845cf8b61ffd75e18680870021a26dc48946363e50bbe459f.jpg"
+    },
+    {
+      "filename": "219f483b94a09e59a9df1a58a44523e719c66495338f037cde10310b5931c5e8.jpg",
+      "sha256": "219f483b94a09e59a9df1a58a44523e719c66495338f037cde10310b5931c5e8",
+      "bytes": 12277,
+      "width": 384,
+      "height": 230,
+      "alt": "Object AB between focus F and pole P of a concave mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/219f483b94a09e59a9df1a58a44523e719c66495338f037cde10310b5931c5e8.jpg"
+    },
+    {
+      "filename": "4d780aadb5b91a0d5b7a90e666aad2f0916ffc1c9ce4fb1df838259204e3b038.jpg",
+      "sha256": "4d780aadb5b91a0d5b7a90e666aad2f0916ffc1c9ce4fb1df838259204e3b038",
+      "bytes": 50970,
+      "width": 622,
+      "height": 358,
+      "alt": "Backward ray extensions form enlarged upright virtual image behind concave mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4d780aadb5b91a0d5b7a90e666aad2f0916ffc1c9ce4fb1df838259204e3b038.jpg"
+    },
+    {
+      "filename": "8c4654b7323b02caef745adbce82cfd1433ecc8a90ea23ce9f470b3370bdc256.jpg",
+      "sha256": "8c4654b7323b02caef745adbce82cfd1433ecc8a90ea23ce9f470b3370bdc256",
+      "bytes": 17410,
+      "width": 566,
+      "height": 231,
+      "alt": "Two oppositely oriented identical prisms P and Q, with incident yellow ray AB",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c4654b7323b02caef745adbce82cfd1433ecc8a90ea23ce9f470b3370bdc256.jpg"
+    },
+    {
+      "filename": "a74ffab0097915d77abc68fce032bc86818bd415db849fc96f31090b0a8e72d2.jpg",
+      "sha256": "a74ffab0097915d77abc68fce032bc86818bd415db849fc96f31090b0a8e72d2",
+      "bytes": 28864,
+      "width": 663,
+      "height": 238,
+      "alt": "Emergent ray CD after the opposite prism pair is parallel to incident ray AB",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a74ffab0097915d77abc68fce032bc86818bd415db849fc96f31090b0a8e72d2.jpg"
+    },
+    {
+      "filename": "8866d746f187f093f23ddc400fdb9b2677e52d5dc0cf2bbaead0e4b1fc8b0627.jpg",
+      "sha256": "8866d746f187f093f23ddc400fdb9b2677e52d5dc0cf2bbaead0e4b1fc8b0627",
+      "bytes": 39494,
+      "width": 613,
+      "height": 236,
+      "alt": "Concave corrective lens forms a virtual far-point image that the eye focuses on retina",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8866d746f187f093f23ddc400fdb9b2677e52d5dc0cf2bbaead0e4b1fc8b0627.jpg"
+    },
+    {
+      "filename": "08ef7a47e082528941f698a2963227d9e97cb565c77d62d7dedbfc816f3f3d54.jpg",
+      "sha256": "08ef7a47e082528941f698a2963227d9e97cb565c77d62d7dedbfc816f3f3d54",
+      "bytes": 33560,
+      "width": 661,
+      "height": 306,
+      "alt": "Eight numbered standard circuit symbols",
+      "url": "https://projectaegis.fly.dev/source-assets/0/08ef7a47e082528941f698a2963227d9e97cb565c77d62d7dedbfc816f3f3d54.jpg"
+    },
+    {
+      "filename": "6686897e5ecf99684c12c768f984774cbd684e7098621f9be95e3ed0289d08e5.jpg",
+      "sha256": "6686897e5ecf99684c12c768f984774cbd684e7098621f9be95e3ed0289d08e5",
+      "bytes": 21315,
+      "width": 400,
+      "height": 564,
+      "alt": "Two V-versus-I graphs: (i) straight through origin; (ii) curved",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6686897e5ecf99684c12c768f984774cbd684e7098621f9be95e3ed0289d08e5.jpg"
+    },
+    {
+      "filename": "54dadc2bf90035f011118b43537ca22ea81db0bf1c7a76f7fe100a730d0f6b09.jpg",
+      "sha256": "54dadc2bf90035f011118b43537ca22ea81db0bf1c7a76f7fe100a730d0f6b09",
+      "bytes": 41702,
+      "width": 619,
+      "height": 608,
+      "alt": "Four V-versus-I graphs labelled (a) through (d)",
+      "url": "https://projectaegis.fly.dev/source-assets/0/54dadc2bf90035f011118b43537ca22ea81db0bf1c7a76f7fe100a730d0f6b09.jpg"
+    },
+    {
+      "filename": "76d9e56f3daadbf996ee299e4746f763288181a502fe806a51a62c7d78be8a04.jpg",
+      "sha256": "76d9e56f3daadbf996ee299e4746f763288181a502fe806a51a62c7d78be8a04",
+      "bytes": 15782,
+      "width": 354,
+      "height": 239,
+      "alt": "I-versus-V straight lines for four conductors A, B, C and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/76d9e56f3daadbf996ee299e4746f763288181a502fe806a51a62c7d78be8a04.jpg"
+    },
+    {
+      "filename": "f66b7b5c631c9d7b83e1d41268e6874c8b099115e1bfc0de31b5f2917a605196.jpg",
+      "sha256": "f66b7b5c631c9d7b83e1d41268e6874c8b099115e1bfc0de31b5f2917a605196",
+      "bytes": 63185,
+      "width": 617,
+      "height": 451,
+      "alt": "Four alternatives for magnetic field direction around a wire carrying upward-moving electrons",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f66b7b5c631c9d7b83e1d41268e6874c8b099115e1bfc0de31b5f2917a605196.jpg"
+    },
+    {
+      "filename": "5eab893ec0d24db41f485194d0318c221352631cafe74e6980057476a932b359.jpg",
+      "sha256": "5eab893ec0d24db41f485194d0318c221352631cafe74e6980057476a932b359",
+      "bytes": 33937,
+      "width": 479,
+      "height": 208,
+      "alt": "Option (a): source bar-magnet field arrangement",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5eab893ec0d24db41f485194d0318c221352631cafe74e6980057476a932b359.jpg"
+    },
+    {
+      "filename": "30b25936ba06c32df730caae9fc59cd9fd0d92f863a60f5dbacfb872c41ee955.jpg",
+      "sha256": "30b25936ba06c32df730caae9fc59cd9fd0d92f863a60f5dbacfb872c41ee955",
+      "bytes": 54806,
+      "width": 511,
+      "height": 534,
+      "alt": "Source alternatives (b), (c), and (d) for bar-magnet field lines",
+      "url": "https://projectaegis.fly.dev/source-assets/0/30b25936ba06c32df730caae9fc59cd9fd0d92f863a60f5dbacfb872c41ee955.jpg"
+    },
+    {
+      "filename": "6648bacfe330c40a0137057d6270f0df532259e648f506952cbea5d2d61b70ac.jpg",
+      "sha256": "6648bacfe330c40a0137057d6270f0df532259e648f506952cbea5d2d61b70ac",
+      "bytes": 24228,
+      "width": 418,
+      "height": 244,
+      "alt": "Wire between N and S poles with four possible perpendicular direction indicators",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6648bacfe330c40a0137057d6270f0df532259e648f506952cbea5d2d61b70ac.jpg"
+    },
+    {
+      "filename": "7d441a2f06bfc7c2ac560f94cdf149fca53eeb93c3042ed59c4127dbde506d56.jpg",
+      "sha256": "7d441a2f06bfc7c2ac560f94cdf149fca53eeb93c3042ed59c4127dbde506d56",
+      "bytes": 40365,
+      "width": 520,
+      "height": 273,
+      "alt": "Four candidate closed magnetic-field patterns for a bar magnet",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d441a2f06bfc7c2ac560f94cdf149fca53eeb93c3042ed59c4127dbde506d56.jpg"
+    },
+    {
+      "filename": "d41a0bc32e0bc3647ec36c9f08c34ab424667ed849ffd268fe2f7dba6564cc9f.jpg",
+      "sha256": "d41a0bc32e0bc3647ec36c9f08c34ab424667ed849ffd268fe2f7dba6564cc9f",
+      "bytes": 123099,
+      "width": 709,
+      "height": 395,
+      "alt": "Source ecosystem illustration showing living and nonliving components",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d41a0bc32e0bc3647ec36c9f08c34ab424667ed849ffd268fe2f7dba6564cc9f.jpg"
+    },
+    {
+      "filename": "67bd9810a4cba8fcff2c837684b99262c58531a0a551d897dd4ba28f0a96eb89.jpg",
+      "sha256": "67bd9810a4cba8fcff2c837684b99262c58531a0a551d897dd4ba28f0a96eb89",
+      "bytes": 124603,
+      "width": 714,
+      "height": 797,
+      "alt": "Energy-flow diagram of producers, rabbit at block1, snake at block2 and eagle at block3",
+      "url": "https://projectaegis.fly.dev/source-assets/0/67bd9810a4cba8fcff2c837684b99262c58531a0a551d897dd4ba28f0a96eb89.jpg"
+    },
+    {
+      "filename": "7d6879e82002f30cc38d5d23485aa10526e9bad9c991af70754efbb2402baff2.jpg",
+      "sha256": "7d6879e82002f30cc38d5d23485aa10526e9bad9c991af70754efbb2402baff2",
+      "bytes": 12429,
+      "width": 463,
+      "height": 312,
+      "alt": "Source wire-current arrow between labelled N and S magnetic poles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d6879e82002f30cc38d5d23485aa10526e9bad9c991af70754efbb2402baff2.jpg"
+    },
+    {
+      "filename": "66b1dd0f7d88af738a5b602f026788db300270d1fba3fffbca31beb5f9a30043.jpg",
+      "sha256": "66b1dd0f7d88af738a5b602f026788db300270d1fba3fffbca31beb5f9a30043",
+      "bytes": 7223,
+      "width": 308,
+      "height": 154,
+      "alt": "Source wire-current arrow between labelled N and S magnetic poles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/66b1dd0f7d88af738a5b602f026788db300270d1fba3fffbca31beb5f9a30043.jpg"
+    },
+    {
+      "filename": "b8560ab7b525ce8789368784e2b2c1f8347bbd0f2ae8cab0ced6f3ba8fad1562.jpg",
+      "sha256": "b8560ab7b525ce8789368784e2b2c1f8347bbd0f2ae8cab0ced6f3ba8fad1562",
+      "bytes": 12894,
+      "width": 342,
+      "height": 237,
+      "alt": "Source wire-current arrow between labelled N and S magnetic poles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b8560ab7b525ce8789368784e2b2c1f8347bbd0f2ae8cab0ced6f3ba8fad1562.jpg"
+    },
+    {
+      "filename": "aa9a6bc1790aca1c889662bcfaf7f78d9b56d1bc2474d6c4576878c77aeccca1.jpg",
+      "sha256": "aa9a6bc1790aca1c889662bcfaf7f78d9b56d1bc2474d6c4576878c77aeccca1",
+      "bytes": 5633,
+      "width": 211,
+      "height": 116,
+      "alt": "Parallel equally spaced arrows representing a uniform magnetic field",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aa9a6bc1790aca1c889662bcfaf7f78d9b56d1bc2474d6c4576878c77aeccca1.jpg"
+    },
+    {
+      "filename": "399f8b91ce27c01d51fad92546e43f8a086ca0ebc4c436a3bdf7be2d3056e03f.jpg",
+      "sha256": "399f8b91ce27c01d51fad92546e43f8a086ca0ebc4c436a3bdf7be2d3056e03f",
+      "bytes": 23281,
+      "width": 442,
+      "height": 234,
+      "alt": "Closed magnetic field lines around a bar magnet, N to S outside",
+      "url": "https://projectaegis.fly.dev/source-assets/0/399f8b91ce27c01d51fad92546e43f8a086ca0ebc4c436a3bdf7be2d3056e03f.jpg"
+    },
+    {
+      "filename": "8c86066f7edc9defe72207f31089e94c97aae4b44080a679ba1746b6c255c352.jpg",
+      "sha256": "8c86066f7edc9defe72207f31089e94c97aae4b44080a679ba1746b6c255c352",
+      "bytes": 19759,
+      "width": 605,
+      "height": 121,
+      "alt": "Opposite poles P (N) and Q (S) facing across a gap",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8c86066f7edc9defe72207f31089e94c97aae4b44080a679ba1746b6c255c352.jpg"
+    },
+    {
+      "filename": "266d4ec7d12474ff7cc730647c234c3895deaf7d0572bae4f85f0e69b7bf581e.jpg",
+      "sha256": "266d4ec7d12474ff7cc730647c234c3895deaf7d0572bae4f85f0e69b7bf581e",
+      "bytes": 29896,
+      "width": 545,
+      "height": 245,
+      "alt": "Field lines connect facing N pole P to S pole Q",
+      "url": "https://projectaegis.fly.dev/source-assets/0/266d4ec7d12474ff7cc730647c234c3895deaf7d0572bae4f85f0e69b7bf581e.jpg"
+    },
+    {
+      "filename": "3fae8f6bd22a6063c1f7b865ce1e5ae9b8ec748f32fcf5799e6c95f09948dbfe.jpg",
+      "sha256": "3fae8f6bd22a6063c1f7b865ce1e5ae9b8ec748f32fcf5799e6c95f09948dbfe",
+      "bytes": 44054,
+      "width": 608,
+      "height": 348,
+      "alt": "Producer-to-tertiary-consumer energy diagram with successive ten-percent energy values",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3fae8f6bd22a6063c1f7b865ce1e5ae9b8ec748f32fcf5799e6c95f09948dbfe.jpg"
+    },
+    {
+      "filename": "a3cf016ac4d57cec93d0b6e09690b2c89eecc4fd2303ef66f54c69bf238acbe8.jpg",
+      "sha256": "a3cf016ac4d57cec93d0b6e09690b2c89eecc4fd2303ef66f54c69bf238acbe8",
+      "bytes": 85686,
+      "width": 507,
+      "height": 709,
+      "alt": "Three source food chains labelled a, b and c",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3cf016ac4d57cec93d0b6e09690b2c89eecc4fd2303ef66f54c69bf238acbe8.jpg"
+    },
+    {
+      "filename": "d720e30aaa685fec9c897c5fe95d6d369494666fd92ba739d7e04566598dbe16.jpg",
+      "sha256": "d720e30aaa685fec9c897c5fe95d6d369494666fd92ba739d7e04566598dbe16",
+      "bytes": 170217,
+      "width": 1413,
+      "height": 575,
+      "alt": "Original source flowchart; numerical energy values are not assessed because the source values are inconsistent",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d720e30aaa685fec9c897c5fe95d6d369494666fd92ba739d7e04566598dbe16.jpg"
+    },
+    {
+      "filename": "e8a3e69048c3f89b19a9827a05fe6f2412e141a3a8eba7d911895fe775be937f.jpg",
+      "sha256": "e8a3e69048c3f89b19a9827a05fe6f2412e141a3a8eba7d911895fe775be937f",
+      "bytes": 22514,
+      "width": 460,
+      "height": 254,
+      "alt": "Current-carrying loop crossing cardboard at P and Q",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e8a3e69048c3f89b19a9827a05fe6f2412e141a3a8eba7d911895fe775be937f.jpg"
+    },
+    {
+      "filename": "6fbe7c316a94b570aaa029b99bb6191f8415f1487e9932559b520c5a13f28cf8.jpg",
+      "sha256": "6fbe7c316a94b570aaa029b99bb6191f8415f1487e9932559b520c5a13f28cf8",
+      "bytes": 25059,
+      "width": 453,
+      "height": 264,
+      "alt": "Circular field lines at coil crossings and resultant field between them",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6fbe7c316a94b570aaa029b99bb6191f8415f1487e9932559b520c5a13f28cf8.jpg"
+    },
+    {
+      "filename": "652a459bc78c7cf8bfccc45a60a51ab2090e6d638ae11442e1728e2f5532a782.jpg",
+      "sha256": "652a459bc78c7cf8bfccc45a60a51ab2090e6d638ae11442e1728e2f5532a782",
+      "bytes": 5555,
+      "width": 221,
+      "height": 247,
+      "alt": "Straight wire carrying upward current through cardboard",
+      "url": "https://projectaegis.fly.dev/source-assets/0/652a459bc78c7cf8bfccc45a60a51ab2090e6d638ae11442e1728e2f5532a782.jpg"
+    },
+    {
+      "filename": "790f85fcb8010a301ba9472aa84d7342858af85cb70e1eaf314b08c6d7934dad.jpg",
+      "sha256": "790f85fcb8010a301ba9472aa84d7342858af85cb70e1eaf314b08c6d7934dad",
+      "bytes": 30513,
+      "width": 508,
+      "height": 296,
+      "alt": "Concentric anticlockwise magnetic lines for upward current",
+      "url": "https://projectaegis.fly.dev/source-assets/0/790f85fcb8010a301ba9472aa84d7342858af85cb70e1eaf314b08c6d7934dad.jpg"
+    },
+    {
+      "filename": "e8f0c8bad8b80becae75126a8d43a622c47cb56a598bc3f0649396e2df23ce36.jpg",
+      "sha256": "e8f0c8bad8b80becae75126a8d43a622c47cb56a598bc3f0649396e2df23ce36",
+      "bytes": 9843,
+      "width": 264,
+      "height": 234,
+      "alt": "XY vertical conductor carrying downward current through cardboard",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e8f0c8bad8b80becae75126a8d43a622c47cb56a598bc3f0649396e2df23ce36.jpg"
+    },
+    {
+      "filename": "40672d97d510c4fb7daf534ef458faf8f31bc6de9813ecd3d1bdf50d142b5ef9.jpg",
+      "sha256": "40672d97d510c4fb7daf534ef458faf8f31bc6de9813ecd3d1bdf50d142b5ef9",
+      "bytes": 18830,
+      "width": 282,
+      "height": 255,
+      "alt": "Clockwise concentric magnetic lines around downward current",
+      "url": "https://projectaegis.fly.dev/source-assets/0/40672d97d510c4fb7daf534ef458faf8f31bc6de9813ecd3d1bdf50d142b5ef9.jpg"
+    },
+    {
+      "filename": "f57e428240f5ddac0e0685eda013a3e00c60fa6251b0c91da0dd80bffff94f5a.jpg",
+      "sha256": "f57e428240f5ddac0e0685eda013a3e00c60fa6251b0c91da0dd80bffff94f5a",
+      "bytes": 20011,
+      "width": 340,
+      "height": 304,
+      "alt": "Food web A through G, with A feeding B and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f57e428240f5ddac0e0685eda013a3e00c60fa6251b0c91da0dd80bffff94f5a.jpg"
+    },
+    {
+      "filename": "160d96e04468ba43a2893e2d1a937a0ab34ec3e5fdb3776caa0f9d7444dbf286.jpg",
+      "sha256": "160d96e04468ba43a2893e2d1a937a0ab34ec3e5fdb3776caa0f9d7444dbf286",
+      "bytes": 42805,
+      "width": 423,
+      "height": 305,
+      "alt": "Magnetic field pattern of a current-carrying solenoid",
+      "url": "https://projectaegis.fly.dev/source-assets/0/160d96e04468ba43a2893e2d1a937a0ab34ec3e5fdb3776caa0f9d7444dbf286.jpg"
+    },
+    {
+      "filename": "3d53cf375fb11fc534eab8a21f68b8a9a0734708bb91cb9e42491a391213ea84.jpg",
+      "sha256": "3d53cf375fb11fc534eab8a21f68b8a9a0734708bb91cb9e42491a391213ea84",
+      "bytes": 58190,
+      "width": 492,
+      "height": 421,
+      "alt": "Solenoid field with inside direction and closed outside return paths",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3d53cf375fb11fc534eab8a21f68b8a9a0734708bb91cb9e42491a391213ea84.jpg"
+    },
+    {
+      "filename": "4bf5208069ae5834fe3d01d9442e770742148d347f9f3b45a5bbf14aeed95c10.jpg",
+      "sha256": "4bf5208069ae5834fe3d01d9442e770742148d347f9f3b45a5bbf14aeed95c10",
+      "bytes": 40256,
+      "width": 520,
+      "height": 301,
+      "alt": "Concentric magnetic field pattern around a straight current-carrying conductor",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4bf5208069ae5834fe3d01d9442e770742148d347f9f3b45a5bbf14aeed95c10.jpg"
+    },
+    {
+      "filename": "28c95b93d128b5924ddb1b5dfb6941bf1f6c79aeba296b99c03bb69f2e9ae00e.jpg",
+      "sha256": "28c95b93d128b5924ddb1b5dfb6941bf1f6c79aeba296b99c03bb69f2e9ae00e",
+      "bytes": 79804,
+      "width": 691,
+      "height": 416,
+      "alt": "Source reflex pathway with labels A B and C",
+      "url": "https://projectaegis.fly.dev/source-assets/0/28c95b93d128b5924ddb1b5dfb6941bf1f6c79aeba296b99c03bb69f2e9ae00e.jpg"
+    },
+    {
+      "filename": "895c9f50dcf42057128e56559635a3aa45f243f1b728a00fd2bf2556cbc6b4a2.jpg",
+      "sha256": "895c9f50dcf42057128e56559635a3aa45f243f1b728a00fd2bf2556cbc6b4a2",
+      "bytes": 49565,
+      "width": 711,
+      "height": 162,
+      "alt": "Three plant orientations labelled a b and c",
+      "url": "https://projectaegis.fly.dev/source-assets/0/895c9f50dcf42057128e56559635a3aa45f243f1b728a00fd2bf2556cbc6b4a2.jpg"
+    },
+    {
+      "filename": "9243b8ccb3823abdc3fcbaa18f3fd8e9b58cf5cf356fdf06f538e3df25959855.jpg",
+      "sha256": "9243b8ccb3823abdc3fcbaa18f3fd8e9b58cf5cf356fdf06f538e3df25959855",
+      "bytes": 72288,
+      "width": 671,
+      "height": 411,
+      "alt": "Two source plant drawings marked X and Y in figures a and b",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9243b8ccb3823abdc3fcbaa18f3fd8e9b58cf5cf356fdf06f538e3df25959855.jpg"
+    },
+    {
+      "filename": "2e987b60dd4e5f14ebbad517686e3536cd4e60723e57cae4568f84a04089d5df.jpg",
+      "sha256": "2e987b60dd4e5f14ebbad517686e3536cd4e60723e57cae4568f84a04089d5df",
+      "bytes": 102864,
+      "width": 426,
+      "height": 569,
+      "alt": "Labelled source neuron diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2e987b60dd4e5f14ebbad517686e3536cd4e60723e57cae4568f84a04089d5df.jpg"
+    },
+    {
+      "filename": "227f2846a3f0d3185bda2a436fd5dcb8a4e638ee3eaf37ddcfcc7f0096e7fd47.jpg",
+      "sha256": "227f2846a3f0d3185bda2a436fd5dcb8a4e638ee3eaf37ddcfcc7f0096e7fd47",
+      "bytes": 83177,
+      "width": 669,
+      "height": 391,
+      "alt": "Source nervous-system figure with labels a b c d and e",
+      "url": "https://projectaegis.fly.dev/source-assets/0/227f2846a3f0d3185bda2a436fd5dcb8a4e638ee3eaf37ddcfcc7f0096e7fd47.jpg"
+    },
+    {
+      "filename": "20c93312003ea1864bbfb8c252172ab7c335cecd47bb3a915d799d7e308aa4f6.jpg",
+      "sha256": "20c93312003ea1864bbfb8c252172ab7c335cecd47bb3a915d799d7e308aa4f6",
+      "bytes": 79290,
+      "width": 492,
+      "height": 292,
+      "alt": "Brain diagram with labels a b and c",
+      "url": "https://projectaegis.fly.dev/source-assets/0/20c93312003ea1864bbfb8c252172ab7c335cecd47bb3a915d799d7e308aa4f6.jpg"
+    },
+    {
+      "filename": "1db17ffd084ba0f35b4bcd8db5aa1e8ee43665257319f661bb64d9e26e984187.jpg",
+      "sha256": "1db17ffd084ba0f35b4bcd8db5aa1e8ee43665257319f661bb64d9e26e984187",
+      "bytes": 100351,
+      "width": 469,
+      "height": 476,
+      "alt": "Source diagram locating pituitary thyroid adrenal glands and pancreas",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1db17ffd084ba0f35b4bcd8db5aa1e8ee43665257319f661bb64d9e26e984187.jpg"
+    },
+    {
+      "filename": "6e230f4ba0a0e13b5ab8b5731c50324a0a2272c55b23db370e4ae12d603a1fb6.jpg",
+      "sha256": "6e230f4ba0a0e13b5ab8b5731c50324a0a2272c55b23db370e4ae12d603a1fb6",
+      "bytes": 37574,
+      "width": 489,
+      "height": 189,
+      "alt": "Source experimental plant positions showing response to gravity",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6e230f4ba0a0e13b5ab8b5731c50324a0a2272c55b23db370e4ae12d603a1fb6.jpg"
+    },
+    {
+      "filename": "39db9c8fef691716f2ec4f63e1849d3ce7bdd150b6532f15cbfcffe9708edd99.jpg",
+      "sha256": "39db9c8fef691716f2ec4f63e1849d3ce7bdd150b6532f15cbfcffe9708edd99",
+      "bytes": 46921,
+      "width": 336,
+      "height": 324,
+      "alt": "Source pistil diagram with stigma pollen tube and ovary",
+      "url": "https://projectaegis.fly.dev/source-assets/0/39db9c8fef691716f2ec4f63e1849d3ce7bdd150b6532f15cbfcffe9708edd99.jpg"
+    },
+    {
+      "filename": "5b87f56f6636df017360c8b1c80700e90df25ec359fa1d51a4befbad442242cf.jpg",
+      "sha256": "5b87f56f6636df017360c8b1c80700e90df25ec359fa1d51a4befbad442242cf",
+      "bytes": 80008,
+      "width": 452,
+      "height": 457,
+      "alt": "Source diagram illustrating pollen tube growth and fertilisation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5b87f56f6636df017360c8b1c80700e90df25ec359fa1d51a4befbad442242cf.jpg"
+    },
+    {
+      "filename": "9d6a4948a1465bbb51e733a4aaa8e45c5a9ef9bff6e2761352e1a842b708a653.jpg",
+      "sha256": "9d6a4948a1465bbb51e733a4aaa8e45c5a9ef9bff6e2761352e1a842b708a653",
+      "bytes": 72424,
+      "width": 510,
+      "height": 351,
+      "alt": "Flower diagram labelled A B C and D",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9d6a4948a1465bbb51e733a4aaa8e45c5a9ef9bff6e2761352e1a842b708a653.jpg"
+    },
+    {
+      "filename": "de9d40d93b5c9e3359b1b8bed3d2f30724347477be7845d555dac2a397fd98b8.jpg",
+      "sha256": "de9d40d93b5c9e3359b1b8bed3d2f30724347477be7845d555dac2a397fd98b8",
+      "bytes": 84137,
+      "width": 674,
+      "height": 381,
+      "alt": "Source anatomical diagram with labels 1 to 5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/de9d40d93b5c9e3359b1b8bed3d2f30724347477be7845d555dac2a397fd98b8.jpg"
+    },
+    {
+      "filename": "2a60e3549f8cd83b36190d7c5add13c8c3bb3e0203f4034e62981a8be16464e5.jpg",
+      "sha256": "2a60e3549f8cd83b36190d7c5add13c8c3bb3e0203f4034e62981a8be16464e5",
+      "bytes": 60262,
+      "width": 302,
+      "height": 444,
+      "alt": "Source pistil diagram marked A B and C",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2a60e3549f8cd83b36190d7c5add13c8c3bb3e0203f4034e62981a8be16464e5.jpg"
+    },
+    {
+      "filename": "c9e85604720dd12bc16c5854cf42e214b8d131770a107c8a9ab20d93bac4d4f6.jpg",
+      "sha256": "c9e85604720dd12bc16c5854cf42e214b8d131770a107c8a9ab20d93bac4d4f6",
+      "bytes": 51729,
+      "width": 621,
+      "height": 256,
+      "alt": "Source stages of division in a unicellular organism",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c9e85604720dd12bc16c5854cf42e214b8d131770a107c8a9ab20d93bac4d4f6.jpg"
+    },
+    {
+      "filename": "56f8e9b4284b0f6f0bda27f0b3663d57449eebd3de1bce35add5aaa50420ffa3.jpg",
+      "sha256": "56f8e9b4284b0f6f0bda27f0b3663d57449eebd3de1bce35add5aaa50420ffa3",
+      "bytes": 94222,
+      "width": 588,
+      "height": 284,
+      "alt": "Source sequential diagrams of budding in yeast",
+      "url": "https://projectaegis.fly.dev/source-assets/0/56f8e9b4284b0f6f0bda27f0b3663d57449eebd3de1bce35add5aaa50420ffa3.jpg"
+    },
+    {
+      "filename": "d0f32960cbda62697cc12bda1bd6b8b7912d3a40eb832446f6f794a3668c2ffc.jpg",
+      "sha256": "d0f32960cbda62697cc12bda1bd6b8b7912d3a40eb832446f6f794a3668c2ffc",
+      "bytes": 37736,
+      "width": 378,
+      "height": 224,
+      "alt": "Source organism with hyphae and spore-bearing structures",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d0f32960cbda62697cc12bda1bd6b8b7912d3a40eb832446f6f794a3668c2ffc.jpg"
+    },
+    {
+      "filename": "377af8e7457a132a9b3d93d639d9f857af69d01bae4165b80f7cfceccb70734a.jpg",
+      "sha256": "377af8e7457a132a9b3d93d639d9f857af69d01bae4165b80f7cfceccb70734a",
+      "bytes": 80292,
+      "width": 609,
+      "height": 307,
+      "alt": "Source flower diagram labelled with its four whorls",
+      "url": "https://projectaegis.fly.dev/source-assets/0/377af8e7457a132a9b3d93d639d9f857af69d01bae4165b80f7cfceccb70734a.jpg"
+    },
+    {
+      "filename": "bdc8062d0fdffe03303dcda09b77c4e126558f80e63913d76c6fab3f56b9d6ff.jpg",
+      "sha256": "bdc8062d0fdffe03303dcda09b77c4e126558f80e63913d76c6fab3f56b9d6ff",
+      "bytes": 129259,
+      "width": 672,
+      "height": 376,
+      "alt": "Source longitudinal section of a flower with labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bdc8062d0fdffe03303dcda09b77c4e126558f80e63913d76c6fab3f56b9d6ff.jpg"
+    },
+    {
+      "filename": "80f856741cd46d5801c9ab9da8253f618832268e9685ed9bc9f6de83a5da07f3.jpg",
+      "sha256": "80f856741cd46d5801c9ab9da8253f618832268e9685ed9bc9f6de83a5da07f3",
+      "bytes": 30403,
+      "width": 347,
+      "height": 208,
+      "alt": "Source gram-seed embryo diagram with cotyledons plumule and radicle",
+      "url": "https://projectaegis.fly.dev/source-assets/0/80f856741cd46d5801c9ab9da8253f618832268e9685ed9bc9f6de83a5da07f3.jpg"
+    },
+    {
+      "filename": "7e791c6e208cfc9182a6e331c65fb8ea50333afd5ec1d416fe575024268f3b7e.jpg",
+      "sha256": "7e791c6e208cfc9182a6e331c65fb8ea50333afd5ec1d416fe575024268f3b7e",
+      "bytes": 56645,
+      "width": 478,
+      "height": 342,
+      "alt": "Source anatomical diagram with labels A B C D and X",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7e791c6e208cfc9182a6e331c65fb8ea50333afd5ec1d416fe575024268f3b7e.jpg"
+    },
+    {
+      "filename": "8b56a5b10731e2d9a4d55a87bcf57a949a1aaf2d18bb7c9439a3f34c9fec4377.jpg",
+      "sha256": "8b56a5b10731e2d9a4d55a87bcf57a949a1aaf2d18bb7c9439a3f34c9fec4377",
+      "bytes": 30596,
+      "width": 319,
+      "height": 234,
+      "alt": "Source unlabelled anatomical diagram",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8b56a5b10731e2d9a4d55a87bcf57a949a1aaf2d18bb7c9439a3f34c9fec4377.jpg"
+    },
+    {
+      "filename": "1942cc5483bd7fe0af5889e094a53896eccc1ea409fd8d683fcb75d4aea77792.jpg",
+      "sha256": "1942cc5483bd7fe0af5889e094a53896eccc1ea409fd8d683fcb75d4aea77792",
+      "bytes": 74787,
+      "width": 609,
+      "height": 329,
+      "alt": "Source female reproductive system with ovary oviduct uterus and vagina labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1942cc5483bd7fe0af5889e094a53896eccc1ea409fd8d683fcb75d4aea77792.jpg"
+    },
+    {
+      "filename": "17c7c252a006b3ff2613c8a0b3753a6cc0a40d5eb5214f0b567546a8f1939b7c.jpg",
+      "sha256": "17c7c252a006b3ff2613c8a0b3753a6cc0a40d5eb5214f0b567546a8f1939b7c",
+      "bytes": 89657,
+      "width": 409,
+      "height": 296,
+      "alt": "Source photograph for figure A",
+      "url": "https://projectaegis.fly.dev/source-assets/0/17c7c252a006b3ff2613c8a0b3753a6cc0a40d5eb5214f0b567546a8f1939b7c.jpg"
+    },
+    {
+      "filename": "e9ab9b718756bc988adc26bcd93c10871c26424f2c8c6270c703922c4bda77ef.jpg",
+      "sha256": "e9ab9b718756bc988adc26bcd93c10871c26424f2c8c6270c703922c4bda77ef",
+      "bytes": 47376,
+      "width": 718,
+      "height": 264,
+      "alt": "Source photographs for figure B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e9ab9b718756bc988adc26bcd93c10871c26424f2c8c6270c703922c4bda77ef.jpg"
+    },
+    {
+      "filename": "40c1b94d02ba14e1f047ba7ba1cd2aa3e0346d9bd21b556ee68c3dff361f5d20.jpg",
+      "sha256": "40c1b94d02ba14e1f047ba7ba1cd2aa3e0346d9bd21b556ee68c3dff361f5d20",
+      "bytes": 75522,
+      "width": 577,
+      "height": 454,
+      "alt": "Source sequence showing regeneration of Planaria from body fragments",
+      "url": "https://projectaegis.fly.dev/source-assets/0/40c1b94d02ba14e1f047ba7ba1cd2aa3e0346d9bd21b556ee68c3dff361f5d20.jpg"
+    },
+    {
+      "filename": "1972f9d37b5f6185b7a7b1a338b27a58565ac8ae4466747bf76e1dd9f939fb0f.jpg",
+      "sha256": "1972f9d37b5f6185b7a7b1a338b27a58565ac8ae4466747bf76e1dd9f939fb0f",
+      "bytes": 106048,
+      "width": 979,
+      "height": 327,
+      "alt": "Source diagrams showing budding in yeast in sequence",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1972f9d37b5f6185b7a7b1a338b27a58565ac8ae4466747bf76e1dd9f939fb0f.jpg"
+    },
+    {
+      "filename": "79430506f10ca00082870962faad8d57f39c5b9790964ebc81a73fafcfa9b9c8.jpg",
+      "sha256": "79430506f10ca00082870962faad8d57f39c5b9790964ebc81a73fafcfa9b9c8",
+      "bytes": 57799,
+      "width": 436,
+      "height": 346,
+      "alt": "Source filament with fragments shown by arrows",
+      "url": "https://projectaegis.fly.dev/source-assets/0/79430506f10ca00082870962faad8d57f39c5b9790964ebc81a73fafcfa9b9c8.jpg"
+    },
+    {
+      "filename": "33fb0168c08f5ed1a238cb1f15a95257052e64f34cf2399b209bf22aa4eabd2a.jpg",
+      "sha256": "33fb0168c08f5ed1a238cb1f15a95257052e64f34cf2399b209bf22aa4eabd2a",
+      "bytes": 70229,
+      "width": 372,
+      "height": 412,
+      "alt": "Source floral diagram with labels A to H",
+      "url": "https://projectaegis.fly.dev/source-assets/0/33fb0168c08f5ed1a238cb1f15a95257052e64f34cf2399b209bf22aa4eabd2a.jpg"
+    },
+    {
+      "filename": "a06b89bd336b1a34e8132f96f810b1625cbd04ac9c02d8a4694941f8cba0de24.jpg",
+      "sha256": "a06b89bd336b1a34e8132f96f810b1625cbd04ac9c02d8a4694941f8cba0de24",
+      "bytes": 70753,
+      "width": 476,
+      "height": 263,
+      "alt": "Source microscope slides labelled I and II",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a06b89bd336b1a34e8132f96f810b1625cbd04ac9c02d8a4694941f8cba0de24.jpg"
+    },
+    {
+      "filename": "44bf810d5ad77fe447d550badf2bad18cffa155aa12e6a9d4e99dcfc5ae05964.jpg",
+      "sha256": "44bf810d5ad77fe447d550badf2bad18cffa155aa12e6a9d4e99dcfc5ae05964",
+      "bytes": 156399,
+      "width": 1329,
+      "height": 262,
+      "alt": "Source figures A B C and D showing four reproductive examples",
+      "url": "https://projectaegis.fly.dev/source-assets/0/44bf810d5ad77fe447d550badf2bad18cffa155aa12e6a9d4e99dcfc5ae05964.jpg"
+    },
+    {
+      "filename": "7cd26169eec2b370fe3bdf2b848ee3e8ea34cae6523db18259f9b605c4776afc.jpg",
+      "sha256": "7cd26169eec2b370fe3bdf2b848ee3e8ea34cae6523db18259f9b605c4776afc",
+      "bytes": 25300,
+      "width": 214,
+      "height": 229,
+      "alt": "Source Rhizopus diagram with spores indicated",
+      "url": "https://projectaegis.fly.dev/source-assets/0/7cd26169eec2b370fe3bdf2b848ee3e8ea34cae6523db18259f9b605c4776afc.jpg"
+    },
+    {
+      "filename": "9cbae452a4eaceb33f43d98b98852091675ab45d1d78463be618cb6718e07087.jpg",
+      "sha256": "9cbae452a4eaceb33f43d98b98852091675ab45d1d78463be618cb6718e07087",
+      "bytes": 88180,
+      "width": 645,
+      "height": 191,
+      "alt": "Source illustrative sequence above the paired comparison table",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9cbae452a4eaceb33f43d98b98852091675ab45d1d78463be618cb6718e07087.jpg"
+    },
+    {
+      "filename": "2a108a1a85845368e2fced882bacf75b5f4b160468dabe3ce0f0fc6f0e79bda1.jpg",
+      "sha256": "2a108a1a85845368e2fced882bacf75b5f4b160468dabe3ce0f0fc6f0e79bda1",
+      "bytes": 176156,
+      "width": 641,
+      "height": 427,
+      "alt": "Source comparison table with options a to d for multiple and binary fission",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2a108a1a85845368e2fced882bacf75b5f4b160468dabe3ce0f0fc6f0e79bda1.jpg"
+    },
+    {
+      "filename": "59f54a4f30ec8a5b7bc6b52461bfd278a6e376044b35e56aef617a0858e59b2e.jpg",
+      "sha256": "59f54a4f30ec8a5b7bc6b52461bfd278a6e376044b35e56aef617a0858e59b2e",
+      "bytes": 110013,
+      "width": 578,
+      "height": 333,
+      "alt": "Original source photograph of contraceptive methods",
+      "url": "https://projectaegis.fly.dev/source-assets/0/59f54a4f30ec8a5b7bc6b52461bfd278a6e376044b35e56aef617a0858e59b2e.jpg"
+    },
+    {
+      "filename": "f37c587fffe95d5faa70f7fbbfaf127a7bdab19e0539816723e07e699e6c1508.jpg",
+      "sha256": "f37c587fffe95d5faa70f7fbbfaf127a7bdab19e0539816723e07e699e6c1508",
+      "bytes": 26334,
+      "width": 402,
+      "height": 226,
+      "alt": "Ray passing from medium A into medium B with the boundary normal",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f37c587fffe95d5faa70f7fbbfaf127a7bdab19e0539816723e07e699e6c1508.jpg"
+    },
+    {
+      "filename": "153901052370069d1cf846e25f6b0530e579e086783fb6dba341fc9194e43bbf.jpg",
+      "sha256": "153901052370069d1cf846e25f6b0530e579e086783fb6dba341fc9194e43bbf",
+      "bytes": 61655,
+      "width": 622,
+      "height": 545,
+      "alt": "Four glass slab pin arrangements labelled I II III IV",
+      "url": "https://projectaegis.fly.dev/source-assets/0/153901052370069d1cf846e25f6b0530e579e086783fb6dba341fc9194e43bbf.jpg"
+    },
+    {
+      "filename": "85150895c98302e119b933cadfe6d1a6ba0857512a4b8ef2185c47fe6af195c4.jpg",
+      "sha256": "85150895c98302e119b933cadfe6d1a6ba0857512a4b8ef2185c47fe6af195c4",
+      "bytes": 5373,
+      "width": 85,
+      "height": 146,
+      "alt": "Original flag shape",
+      "url": "https://projectaegis.fly.dev/source-assets/0/85150895c98302e119b933cadfe6d1a6ba0857512a4b8ef2185c47fe6af195c4.jpg"
+    },
+    {
+      "filename": "3db13967ea0ca262d4bab6ceb119755bc7f78ec0301610139d3ce58e76485e20.jpg",
+      "sha256": "3db13967ea0ca262d4bab6ceb119755bc7f78ec0301610139d3ce58e76485e20",
+      "bytes": 29509,
+      "width": 475,
+      "height": 285,
+      "alt": "Four possible screen images labelled a b c d",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3db13967ea0ca262d4bab6ceb119755bc7f78ec0301610139d3ce58e76485e20.jpg"
+    },
+    {
+      "filename": "ab544e97ce58713b9241bf35b03859257c49d0542d288650b389e3e27f0187e1.jpg",
+      "sha256": "ab544e97ce58713b9241bf35b03859257c49d0542d288650b389e3e27f0187e1",
+      "bytes": 37503,
+      "width": 485,
+      "height": 382,
+      "alt": "Glass slab ray diagram with marked angles 1 2 3 and displacement4",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ab544e97ce58713b9241bf35b03859257c49d0542d288650b389e3e27f0187e1.jpg"
+    },
+    {
+      "filename": "866229391c541967eec14d8d8f4c2d8eafe2011071666a35e5cf3684331e9ab6.jpg",
+      "sha256": "866229391c541967eec14d8d8f4c2d8eafe2011071666a35e5cf3684331e9ab6",
+      "bytes": 23901,
+      "width": 366,
+      "height": 264,
+      "alt": "Convex mirror with object AB and marked P F C",
+      "url": "https://projectaegis.fly.dev/source-assets/0/866229391c541967eec14d8d8f4c2d8eafe2011071666a35e5cf3684331e9ab6.jpg"
+    },
+    {
+      "filename": "dfb79d3306de8a827f0273cc84134f3e844aedb16d13495c0a066f9502f207be.jpg",
+      "sha256": "dfb79d3306de8a827f0273cc84134f3e844aedb16d13495c0a066f9502f207be",
+      "bytes": 61139,
+      "width": 599,
+      "height": 378,
+      "alt": "Completed convex mirror ray construction with virtual image A prime B prime",
+      "url": "https://projectaegis.fly.dev/source-assets/0/dfb79d3306de8a827f0273cc84134f3e844aedb16d13495c0a066f9502f207be.jpg"
+    },
+    {
+      "filename": "66553c2fa69690cdb98ac4edd94f8340676dac82fb2f86e6b9b134262d82e5cb.jpg",
+      "sha256": "66553c2fa69690cdb98ac4edd94f8340676dac82fb2f86e6b9b134262d82e5cb",
+      "bytes": 62997,
+      "width": 696,
+      "height": 342,
+      "alt": "Concave mirror ray construction for an object between pole and focus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/66553c2fa69690cdb98ac4edd94f8340676dac82fb2f86e6b9b134262d82e5cb.jpg"
+    },
+    {
+      "filename": "af11c9d6146536791270d90164ce040985b012e91037bec26930c0ac8651f9f6.jpg",
+      "sha256": "af11c9d6146536791270d90164ce040985b012e91037bec26930c0ac8651f9f6",
+      "bytes": 49950,
+      "width": 546,
+      "height": 303,
+      "alt": "Parallel rays reflected to the principal focus of a concave mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/af11c9d6146536791270d90164ce040985b012e91037bec26930c0ac8651f9f6.jpg"
+    },
+    {
+      "filename": "d2f3bf6db9fd256f4a8d2bceacf39cba2a2ff293c685477485821b8138fb62ea.jpg",
+      "sha256": "d2f3bf6db9fd256f4a8d2bceacf39cba2a2ff293c685477485821b8138fb62ea",
+      "bytes": 66011,
+      "width": 704,
+      "height": 338,
+      "alt": "Parallel rays diverging from a convex mirror with backward extensions meeting at F",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d2f3bf6db9fd256f4a8d2bceacf39cba2a2ff293c685477485821b8138fb62ea.jpg"
+    },
+    {
+      "filename": "b4099054f3e9d10b909c84bb105ad270af86838585011c73a8a7af1a23424a7e.jpg",
+      "sha256": "b4099054f3e9d10b909c84bb105ad270af86838585011c73a8a7af1a23424a7e",
+      "bytes": 21580,
+      "width": 484,
+      "height": 260,
+      "alt": "Ray through an unknown lens L with F1 F2 O and object AB",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b4099054f3e9d10b909c84bb105ad270af86838585011c73a8a7af1a23424a7e.jpg"
+    },
+    {
+      "filename": "05ec5dbed4af69125f63cc73f13dd8399de05d0cf0bcbd94eda95c58350fcfed.jpg",
+      "sha256": "05ec5dbed4af69125f63cc73f13dd8399de05d0cf0bcbd94eda95c58350fcfed",
+      "bytes": 31153,
+      "width": 446,
+      "height": 214,
+      "alt": "Completed diverging lens ray diagram retaining the supplied focus labels",
+      "url": "https://projectaegis.fly.dev/source-assets/0/05ec5dbed4af69125f63cc73f13dd8399de05d0cf0bcbd94eda95c58350fcfed.jpg"
+    },
+    {
+      "filename": "eb59c476e903c2adcc9a160ddf474eb4beba2cd01f4a9b4855dfa933b9cefccb.jpg",
+      "sha256": "eb59c476e903c2adcc9a160ddf474eb4beba2cd01f4a9b4855dfa933b9cefccb",
+      "bytes": 25170,
+      "width": 649,
+      "height": 225,
+      "alt": "Convex lens with a parallel incident ray and labelled focal points",
+      "url": "https://projectaegis.fly.dev/source-assets/0/eb59c476e903c2adcc9a160ddf474eb4beba2cd01f4a9b4855dfa933b9cefccb.jpg"
+    },
+    {
+      "filename": "ecb92a5bc14877b36d54c5d0e329fedc6fd13b7a122d7ad4ec509c7dcffc1344.jpg",
+      "sha256": "ecb92a5bc14877b36d54c5d0e329fedc6fd13b7a122d7ad4ec509c7dcffc1344",
+      "bytes": 30185,
+      "width": 666,
+      "height": 228,
+      "alt": "Completed refracted ray passing through the far principal focus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/ecb92a5bc14877b36d54c5d0e329fedc6fd13b7a122d7ad4ec509c7dcffc1344.jpg"
+    },
+    {
+      "filename": "421a7ca086e956d2156db31d4a61b2b7175548ae56bb6cd8f8de0a4db3f9f283.jpg",
+      "sha256": "421a7ca086e956d2156db31d4a61b2b7175548ae56bb6cd8f8de0a4db3f9f283",
+      "bytes": 45895,
+      "width": 721,
+      "height": 339,
+      "alt": "Diverging lens ray diagram showing an erect diminished virtual image",
+      "url": "https://projectaegis.fly.dev/source-assets/0/421a7ca086e956d2156db31d4a61b2b7175548ae56bb6cd8f8de0a4db3f9f283.jpg"
+    },
+    {
+      "filename": "f1c5b969f8ab906621a934d06c7877f993101a9b1dc3da862662c4ffc3a69249.jpg",
+      "sha256": "f1c5b969f8ab906621a934d06c7877f993101a9b1dc3da862662c4ffc3a69249",
+      "bytes": 34118,
+      "width": 729,
+      "height": 218,
+      "alt": "Two convex lens object positions, left within F1 and right between F1 and2F1",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f1c5b969f8ab906621a934d06c7877f993101a9b1dc3da862662c4ffc3a69249.jpg"
+    },
+    {
+      "filename": "870452a782f7bbc51f2bc665829833ae52ebdc3da063ec414e40d4bcaf4a1e67.jpg",
+      "sha256": "870452a782f7bbc51f2bc665829833ae52ebdc3da063ec414e40d4bcaf4a1e67",
+      "bytes": 50344,
+      "width": 722,
+      "height": 289,
+      "alt": "Convex lens ray construction for the left object position",
+      "url": "https://projectaegis.fly.dev/source-assets/0/870452a782f7bbc51f2bc665829833ae52ebdc3da063ec414e40d4bcaf4a1e67.jpg"
+    },
+    {
+      "filename": "920c59a149de0781928ea0bd9db8628ee6cfd90d2197563cf61119bd8c92d6d3.jpg",
+      "sha256": "920c59a149de0781928ea0bd9db8628ee6cfd90d2197563cf61119bd8c92d6d3",
+      "bytes": 46160,
+      "width": 594,
+      "height": 257,
+      "alt": "Convex lens ray construction for the right object position",
+      "url": "https://projectaegis.fly.dev/source-assets/0/920c59a149de0781928ea0bd9db8628ee6cfd90d2197563cf61119bd8c92d6d3.jpg"
+    },
+    {
+      "filename": "d4a1a8c591fad914843340441c406c32b13eea92a2f035860d447aa9bacbcc09.jpg",
+      "sha256": "d4a1a8c591fad914843340441c406c32b13eea92a2f035860d447aa9bacbcc09",
+      "bytes": 43976,
+      "width": 581,
+      "height": 266,
+      "alt": "Convex lens object at 2F1 and equal-sized inverted image at 2F2",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d4a1a8c591fad914843340441c406c32b13eea92a2f035860d447aa9bacbcc09.jpg"
+    },
+    {
+      "filename": "5c4ff59a9d525de8ce066f349f43afe79c1454a30984c768b8be3a0c585fbc63.jpg",
+      "sha256": "5c4ff59a9d525de8ce066f349f43afe79c1454a30984c768b8be3a0c585fbc63",
+      "bytes": 32135,
+      "width": 412,
+      "height": 360,
+      "alt": "Incident ray AB entering a rectangular slab with candidate emergent rays LM LN LO",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c4ff59a9d525de8ce066f349f43afe79c1454a30984c768b8be3a0c585fbc63.jpg"
+    },
+    {
+      "filename": "1fe0f1c185fa3fe9605b083c6357e7b737e838020b29b67a7d6e91f5ec6883df.jpg",
+      "sha256": "1fe0f1c185fa3fe9605b083c6357e7b737e838020b29b67a7d6e91f5ec6883df",
+      "bytes": 71208,
+      "width": 569,
+      "height": 519,
+      "alt": "Glass slab path with incidence45 degrees and labelled refraction emergence and lateral displacement",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1fe0f1c185fa3fe9605b083c6357e7b737e838020b29b67a7d6e91f5ec6883df.jpg"
+    },
+    {
+      "filename": "96bb0ebae0d3b15a9f07bda8be41525daa0b962f672f8d005a017f4c1255237d.jpg",
+      "sha256": "96bb0ebae0d3b15a9f07bda8be41525daa0b962f672f8d005a017f4c1255237d",
+      "bytes": 55098,
+      "width": 309,
+      "height": 297,
+      "alt": "Concave mirror ray diagram for the shifted object at the 20 cm principal focus",
+      "url": "https://projectaegis.fly.dev/source-assets/0/96bb0ebae0d3b15a9f07bda8be41525daa0b962f672f8d005a017f4c1255237d.jpg"
+    },
+    {
+      "filename": "01098659439c6e49aa316dbb5b4790404b788c03429de57f8def3945b60bea41.jpg",
+      "sha256": "01098659439c6e49aa316dbb5b4790404b788c03429de57f8def3945b60bea41",
+      "bytes": 55298,
+      "width": 659,
+      "height": 398,
+      "alt": "Diverging lens with object 20 cm away image 10 cm away and height 2 cm",
+      "url": "https://projectaegis.fly.dev/source-assets/0/01098659439c6e49aa316dbb5b4790404b788c03429de57f8def3945b60bea41.jpg"
+    },
+    {
+      "filename": "3c8d74263120fc9f13046dd180dd19ecc4c576d4189e8e4839950c73245fb0df.jpg",
+      "sha256": "3c8d74263120fc9f13046dd180dd19ecc4c576d4189e8e4839950c73245fb0df",
+      "bytes": 41330,
+      "width": 597,
+      "height": 341,
+      "alt": "Two mirrors at 120 degrees with an incident ray making20 degrees to the first surface",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c8d74263120fc9f13046dd180dd19ecc4c576d4189e8e4839950c73245fb0df.jpg"
+    },
+    {
+      "filename": "cafee2bc4e3bcbc8cd1ee4073c375050e31fc09dc9cc3ea97cd7d9106448b30e.jpg",
+      "sha256": "cafee2bc4e3bcbc8cd1ee4073c375050e31fc09dc9cc3ea97cd7d9106448b30e",
+      "bytes": 58601,
+      "width": 606,
+      "height": 353,
+      "alt": "Completed double-reflection path with 20degree and40degree angles to the mirror surfaces",
+      "url": "https://projectaegis.fly.dev/source-assets/0/cafee2bc4e3bcbc8cd1ee4073c375050e31fc09dc9cc3ea97cd7d9106448b30e.jpg"
+    },
+    {
+      "filename": "789c9d70aad11684ed33dbdb9d30fc0c105bc3b47dc6807a77bdcfec39fc259f.jpg",
+      "sha256": "789c9d70aad11684ed33dbdb9d30fc0c105bc3b47dc6807a77bdcfec39fc259f",
+      "bytes": 62495,
+      "width": 650,
+      "height": 416,
+      "alt": "Concave mirror image construction for a 6 cm object 45 cm in front of a 30 cm focal-length mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/789c9d70aad11684ed33dbdb9d30fc0c105bc3b47dc6807a77bdcfec39fc259f.jpg"
+    },
+    {
+      "filename": "8f97219392b1989f2a86e5afb3511b85ee252314c2e026277821fa7befc1375e.jpg",
+      "sha256": "8f97219392b1989f2a86e5afb3511b85ee252314c2e026277821fa7befc1375e",
+      "bytes": 95625,
+      "width": 651,
+      "height": 388,
+      "alt": "Six measured object and image distances for a convex lens",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8f97219392b1989f2a86e5afb3511b85ee252314c2e026277821fa7befc1375e.jpg"
+    },
+    {
+      "filename": "60d180d592a190fcc7b06e213a5632cdbf1b6ef8ca38e4331808847216c1fe8c.jpg",
+      "sha256": "60d180d592a190fcc7b06e213a5632cdbf1b6ef8ca38e4331808847216c1fe8c",
+      "bytes": 153352,
+      "width": 722,
+      "height": 418,
+      "alt": "Concave mirror image-formation table with four blanks a b c d",
+      "url": "https://projectaegis.fly.dev/source-assets/0/60d180d592a190fcc7b06e213a5632cdbf1b6ef8ca38e4331808847216c1fe8c.jpg"
+    },
+    {
+      "filename": "a34bb902bf42e91099f768def1b79486ba57e20ce79c9c2576f90a7cace910e2.jpg",
+      "sha256": "a34bb902bf42e91099f768def1b79486ba57e20ce79c9c2576f90a7cace910e2",
+      "bytes": 63984,
+      "width": 648,
+      "height": 191,
+      "alt": "Three cases of object distance and focal length for concave mirrors",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a34bb902bf42e91099f768def1b79486ba57e20ce79c9c2576f90a7cace910e2.jpg"
+    },
+    {
+      "filename": "79aa280f604390ef1030beaa05c0733d184f4dc267bdf89a1e53883c6358eaba.jpg",
+      "sha256": "79aa280f604390ef1030beaa05c0733d184f4dc267bdf89a1e53883c6358eaba",
+      "bytes": 51552,
+      "width": 728,
+      "height": 406,
+      "alt": "Ray construction for the selected concave mirror case",
+      "url": "https://projectaegis.fly.dev/source-assets/0/79aa280f604390ef1030beaa05c0733d184f4dc267bdf89a1e53883c6358eaba.jpg"
+    },
+    {
+      "filename": "e295e55a7ef9bfcec72f79c5904e6aae2216d5c77f78be5b6d56948522d38122.jpg",
+      "sha256": "e295e55a7ef9bfcec72f79c5904e6aae2216d5c77f78be5b6d56948522d38122",
+      "bytes": 47483,
+      "width": 657,
+      "height": 286,
+      "alt": "Concave mirror image construction with object inside the 12 cm focal length",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e295e55a7ef9bfcec72f79c5904e6aae2216d5c77f78be5b6d56948522d38122.jpg"
+    },
+    {
+      "filename": "2d02d4693c4f60099bd1276a8ef17a887c5789c5005e5d49e1e221435658e42f.jpg",
+      "sha256": "2d02d4693c4f60099bd1276a8ef17a887c5789c5005e5d49e1e221435658e42f",
+      "bytes": 30341,
+      "width": 401,
+      "height": 269,
+      "alt": "Concave mirror image construction with object at centre of curvature",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2d02d4693c4f60099bd1276a8ef17a887c5789c5005e5d49e1e221435658e42f.jpg"
+    },
+    {
+      "filename": "e1a48feaea679f5df7dea6abeb06e28a71dc7ca23bbf3cd993b23a638cc83cd1.jpg",
+      "sha256": "e1a48feaea679f5df7dea6abeb06e28a71dc7ca23bbf3cd993b23a638cc83cd1",
+      "bytes": 48237,
+      "width": 529,
+      "height": 331,
+      "alt": "Diverging lens construction with 30 cm object distance and15 cm image distance",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e1a48feaea679f5df7dea6abeb06e28a71dc7ca23bbf3cd993b23a638cc83cd1.jpg"
+    },
+    {
+      "filename": "2589029e982e7ae32ce03add5273b01a27d383a6881da45d7b01b0cfc05e6486.jpg",
+      "sha256": "2589029e982e7ae32ce03add5273b01a27d383a6881da45d7b01b0cfc05e6486",
+      "bytes": 67703,
+      "width": 784,
+      "height": 297,
+      "alt": "Telescope diagram with curved mirror plane mirror and eyepiece",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2589029e982e7ae32ce03add5273b01a27d383a6881da45d7b01b0cfc05e6486.jpg"
+    },
+    {
+      "filename": "10548d5ee160679f83a705272cb5620d9d8c31abf9ae7878c3d4de7beb86a904.jpg",
+      "sha256": "10548d5ee160679f83a705272cb5620d9d8c31abf9ae7878c3d4de7beb86a904",
+      "bytes": 54578,
+      "width": 582,
+      "height": 384,
+      "alt": "Convex mirror ray construction showing a virtual erect diminished image",
+      "url": "https://projectaegis.fly.dev/source-assets/0/10548d5ee160679f83a705272cb5620d9d8c31abf9ae7878c3d4de7beb86a904.jpg"
+    },
+    {
+      "filename": "62c971bb73646724a49c75b8004eedc93e68a189c22111a76c3505d6c000cc07.jpg",
+      "sha256": "62c971bb73646724a49c75b8004eedc93e68a189c22111a76c3505d6c000cc07",
+      "bytes": 114066,
+      "width": 454,
+      "height": 332,
+      "alt": "Ray entering a liquid from air above a plane mirror",
+      "url": "https://projectaegis.fly.dev/source-assets/0/62c971bb73646724a49c75b8004eedc93e68a189c22111a76c3505d6c000cc07.jpg"
+    },
+    {
+      "filename": "fa65783a041f2634e80a328c8b1d6185d482d52f1e2cfb00697747553b117909.jpg",
+      "sha256": "fa65783a041f2634e80a328c8b1d6185d482d52f1e2cfb00697747553b117909",
+      "bytes": 231436,
+      "width": 1705,
+      "height": 913,
+      "alt": "Three-times real image: one valid example with f = 30 cm",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fa65783a041f2634e80a328c8b1d6185d482d52f1e2cfb00697747553b117909.jpg"
+    },
+    {
+      "filename": "8014141f7be02405a92d37d6e4b69319afc914b22a40c6dc2777e3f4f4dde9f6.jpg",
+      "sha256": "8014141f7be02405a92d37d6e4b69319afc914b22a40c6dc2777e3f4f4dde9f6",
+      "bytes": 206556,
+      "width": 1196,
+      "height": 913,
+      "alt": "Three-times virtual image: one valid example with f = 30 cm",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8014141f7be02405a92d37d6e4b69319afc914b22a40c6dc2777e3f4f4dde9f6.jpg"
+    },
+    {
+      "filename": "3c6dcc0984460e6e40adac890d5ec4a3361a0e666327794a6bae427d8c5695d8.jpg",
+      "sha256": "3c6dcc0984460e6e40adac890d5ec4a3361a0e666327794a6bae427d8c5695d8",
+      "bytes": 254556,
+      "width": 2176,
+      "height": 760,
+      "alt": "Concave lens: f = \u221230 cm, object distance = 60 cm",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c6dcc0984460e6e40adac890d5ec4a3361a0e666327794a6bae427d8c5695d8.jpg"
+    },
+    {
+      "filename": "8dcb5f49b3a1356baa9df096292085122d4ca5044ba57d6044371efdf11ff47f.jpg",
+      "sha256": "8dcb5f49b3a1356baa9df096292085122d4ca5044ba57d6044371efdf11ff47f",
+      "bytes": 200109,
+      "width": 2176,
+      "height": 482,
+      "alt": "Concave lens: f = \u221220 cm, object height = 4 cm",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8dcb5f49b3a1356baa9df096292085122d4ca5044ba57d6044371efdf11ff47f.jpg"
+    },
+    {
+      "filename": "2c1605918057b92eae1dbb3d8a6de6b8adce3943672f46dfd5f744d39567da02.jpg",
+      "sha256": "2c1605918057b92eae1dbb3d8a6de6b8adce3943672f46dfd5f744d39567da02",
+      "bytes": 252205,
+      "width": 2176,
+      "height": 742,
+      "alt": "Observation 2: one scale division is 10 cm; m = \u22120.5",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2c1605918057b92eae1dbb3d8a6de6b8adce3943672f46dfd5f744d39567da02.jpg"
+    },
+    {
+      "filename": "e2a2e3e8b90226118021efdf3e856afbd8e3a84485bc4a85747b0e4158dc4004.jpg",
+      "sha256": "e2a2e3e8b90226118021efdf3e856afbd8e3a84485bc4a85747b0e4158dc4004",
+      "bytes": 260587,
+      "width": 2176,
+      "height": 666,
+      "alt": "Concave lens: a valid example with signed u and v",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e2a2e3e8b90226118021efdf3e856afbd8e3a84485bc4a85747b0e4158dc4004.jpg"
+    },
+    {
+      "filename": "b368ae3ef7d1fde8986feb409281bc3535c16255e76f7761063df2ef17903514.jpg",
+      "sha256": "b368ae3ef7d1fde8986feb409281bc3535c16255e76f7761063df2ef17903514",
+      "bytes": 28230,
+      "width": 716,
+      "height": 331,
+      "alt": "White light through a prism with emergent rays A and B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b368ae3ef7d1fde8986feb409281bc3535c16255e76f7761063df2ef17903514.jpg"
+    },
+    {
+      "filename": "fb403aa2c1b367c5efd5fd151935793b3eba1ebad54732bfc45ba08d73cb7cbc.jpg",
+      "sha256": "fb403aa2c1b367c5efd5fd151935793b3eba1ebad54732bfc45ba08d73cb7cbc",
+      "bytes": 38276,
+      "width": 709,
+      "height": 375,
+      "alt": "Source prism ray diagram with incidence p, emergence y and deviation z",
+      "url": "https://projectaegis.fly.dev/source-assets/0/fb403aa2c1b367c5efd5fd151935793b3eba1ebad54732bfc45ba08d73cb7cbc.jpg"
+    },
+    {
+      "filename": "bcb68f16aa226fa169fbd27fcddfcb11cee5bbb73657008c5d3f94175186180a.jpg",
+      "sha256": "bcb68f16aa226fa169fbd27fcddfcb11cee5bbb73657008c5d3f94175186180a",
+      "bytes": 24417,
+      "width": 555,
+      "height": 261,
+      "alt": "Prism angle labels i, r, e, A and D in their exact printed positions",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bcb68f16aa226fa169fbd27fcddfcb11cee5bbb73657008c5d3f94175186180a.jpg"
+    },
+    {
+      "filename": "3067aecb21e442d023567515558af15842274fbc3dea39491a9b43e222f2d226.jpg",
+      "sha256": "3067aecb21e442d023567515558af15842274fbc3dea39491a9b43e222f2d226",
+      "bytes": 37085,
+      "width": 552,
+      "height": 412,
+      "alt": "Labelled prism path P-Q-R-S, prism angle A, incidence i, emergence e and deviation delta",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3067aecb21e442d023567515558af15842274fbc3dea39491a9b43e222f2d226.jpg"
+    },
+    {
+      "filename": "9f348e2d0beb455b2455d272acb9098763cd59f29713f513ceb7de881bb69252.jpg",
+      "sha256": "9f348e2d0beb455b2455d272acb9098763cd59f29713f513ceb7de881bb69252",
+      "bytes": 27206,
+      "width": 670,
+      "height": 222,
+      "alt": "Four prism orientations labelled i, ii, iii and iv",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9f348e2d0beb455b2455d272acb9098763cd59f29713f513ceb7de881bb69252.jpg"
+    },
+    {
+      "filename": "d5fb58a05befd29369e605d9972d66fffd9fe286aca20b44224885b5e5469489.jpg",
+      "sha256": "d5fb58a05befd29369e605d9972d66fffd9fe286aca20b44224885b5e5469489",
+      "bytes": 22707,
+      "width": 596,
+      "height": 306,
+      "alt": "Prisms E and F, with F inverted relative to E",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d5fb58a05befd29369e605d9972d66fffd9fe286aca20b44224885b5e5469489.jpg"
+    },
+    {
+      "filename": "1c6dd33e076554ecd36464bdf25d9623754f3ef443ed282b67786e6452d8d469.jpg",
+      "sha256": "1c6dd33e076554ecd36464bdf25d9623754f3ef443ed282b67786e6452d8d469",
+      "bytes": 85192,
+      "width": 1108,
+      "height": 465,
+      "alt": "Convex spectacle lens forms a virtual near-point image and focuses the eye image on retina",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1c6dd33e076554ecd36464bdf25d9623754f3ef443ed282b67786e6452d8d469.jpg"
+    },
+    {
+      "filename": "d8a8f946ade37b4b76d80c6f20677ca415f9997e25fdabca1167fbfc9d97f502.jpg",
+      "sha256": "d8a8f946ade37b4b76d80c6f20677ca415f9997e25fdabca1167fbfc9d97f502",
+      "bytes": 19894,
+      "width": 502,
+      "height": 291,
+      "alt": "Red, blue and green light incident on prism P with a screen",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8a8f946ade37b4b76d80c6f20677ca415f9997e25fdabca1167fbfc9d97f502.jpg"
+    },
+    {
+      "filename": "c6852bcbe4c3e53b91bb8662947f1533e4eabdddf43e805e33acac08b6f0012f.jpg",
+      "sha256": "c6852bcbe4c3e53b91bb8662947f1533e4eabdddf43e805e33acac08b6f0012f",
+      "bytes": 29012,
+      "width": 508,
+      "height": 289,
+      "alt": "Red, green and blue emergent rays ordered by increasing deviation",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c6852bcbe4c3e53b91bb8662947f1533e4eabdddf43e805e33acac08b6f0012f.jpg"
+    },
+    {
+      "filename": "bfde3d429073507352afc845234ed9c3d2c76c4b52a1807f4328b6731c968e4f.jpg",
+      "sha256": "bfde3d429073507352afc845234ed9c3d2c76c4b52a1807f4328b6731c968e4f",
+      "bytes": 31917,
+      "width": 608,
+      "height": 305,
+      "alt": "Source labelled prism path with incident, refracted and emergent rays and angles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bfde3d429073507352afc845234ed9c3d2c76c4b52a1807f4328b6731c968e4f.jpg"
+    },
+    {
+      "filename": "b1997423dd2f602f5da2c216a247fa03155adffde7649d306853694979281e26.jpg",
+      "sha256": "b1997423dd2f602f5da2c216a247fa03155adffde7649d306853694979281e26",
+      "bytes": 38038,
+      "width": 638,
+      "height": 303,
+      "alt": "White beam splits into a red-to-violet spectrum through glass prism",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b1997423dd2f602f5da2c216a247fa03155adffde7649d306853694979281e26.jpg"
+    },
+    {
+      "filename": "5c09773b91fb0989bb0cc0db5a71a3b4a391102fb15fe09b3c44406cc880ce0e.jpg",
+      "sha256": "5c09773b91fb0989bb0cc0db5a71a3b4a391102fb15fe09b3c44406cc880ce0e",
+      "bytes": 19993,
+      "width": 488,
+      "height": 227,
+      "alt": "Incident beam A and screen spectrum B, with red and violet endpoints",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c09773b91fb0989bb0cc0db5a71a3b4a391102fb15fe09b3c44406cc880ce0e.jpg"
+    },
+    {
+      "filename": "6430ba1279abe82d706db8732ec2521f01a9f28a86faa8d8fa60ea831e0ea65a.jpg",
+      "sha256": "6430ba1279abe82d706db8732ec2521f01a9f28a86faa8d8fa60ea831e0ea65a",
+      "bytes": 36592,
+      "width": 499,
+      "height": 435,
+      "alt": "Refraction and internal reflection in a raindrop with emerging red and violet rays",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6430ba1279abe82d706db8732ec2521f01a9f28a86faa8d8fa60ea831e0ea65a.jpg"
+    },
+    {
+      "filename": "b38c8badff930d914d99d2c8bb698e016dc46e88615be892eaf2d81f213d1a86.jpg",
+      "sha256": "b38c8badff930d914d99d2c8bb698e016dc46e88615be892eaf2d81f213d1a86",
+      "bytes": 38994,
+      "width": 635,
+      "height": 268,
+      "alt": "Laboratory scattering arrangement: light source, lenses, colloidal tank and screen",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b38c8badff930d914d99d2c8bb698e016dc46e88615be892eaf2d81f213d1a86.jpg"
+    },
+    {
+      "filename": "e411b129a775ff523135561be1490dcd1a73d0a171606414c583cae6ec6c8086.jpg",
+      "sha256": "e411b129a775ff523135561be1490dcd1a73d0a171606414c583cae6ec6c8086",
+      "bytes": 23035,
+      "width": 631,
+      "height": 174,
+      "alt": "Parallel rays converge in front of the retina in the illustrated eye",
+      "url": "https://projectaegis.fly.dev/source-assets/0/e411b129a775ff523135561be1490dcd1a73d0a171606414c583cae6ec6c8086.jpg"
+    },
+    {
+      "filename": "a3cbd9dab149560c0000ad74b57ef06136a4d386c56d36b2e538a64a0b9921d5.jpg",
+      "sha256": "a3cbd9dab149560c0000ad74b57ef06136a4d386c56d36b2e538a64a0b9921d5",
+      "bytes": 25501,
+      "width": 455,
+      "height": 285,
+      "alt": "Source prism diagram with correctly marked A and e and other misplaced angles",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a3cbd9dab149560c0000ad74b57ef06136a4d386c56d36b2e538a64a0b9921d5.jpg"
+    },
+    {
+      "filename": "b737514b8cdb5e8f6a5c15f14a1057911a22df88f54ea2529da49655c23b41c6.jpg",
+      "sha256": "b737514b8cdb5e8f6a5c15f14a1057911a22df88f54ea2529da49655c23b41c6",
+      "bytes": 43909,
+      "width": 716,
+      "height": 262,
+      "alt": "Dispersion by first prism and recombination by identical inverted second prism to a white spot",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b737514b8cdb5e8f6a5c15f14a1057911a22df88f54ea2529da49655c23b41c6.jpg"
+    },
+    {
+      "filename": "4ca470645133136754b184baf3a507b08fb89194d415d9155b6b8709e354f106.jpg",
+      "sha256": "4ca470645133136754b184baf3a507b08fb89194d415d9155b6b8709e354f106",
+      "bytes": 67347,
+      "width": 695,
+      "height": 414,
+      "alt": "Source labelled eye structure showing cornea, iris, pupil, lens, ciliary muscles, retina and optic nerve",
+      "url": "https://projectaegis.fly.dev/source-assets/0/4ca470645133136754b184baf3a507b08fb89194d415d9155b6b8709e354f106.jpg"
+    },
+    {
+      "filename": "69905551dfc875707b9132563c14bc74bd5851d34e73d09292a8e0dd53d87553.jpg",
+      "sha256": "69905551dfc875707b9132563c14bc74bd5851d34e73d09292a8e0dd53d87553",
+      "bytes": 20345,
+      "width": 495,
+      "height": 255,
+      "alt": "White beam through prism produces spectrum XY with Y upper and X lower",
+      "url": "https://projectaegis.fly.dev/source-assets/0/69905551dfc875707b9132563c14bc74bd5851d34e73d09292a8e0dd53d87553.jpg"
+    },
+    {
+      "filename": "14e938512e1a7ec8f7fdd13f37047d777d16ebd9f85febf2545eafdedeb3689b.jpg",
+      "sha256": "14e938512e1a7ec8f7fdd13f37047d777d16ebd9f85febf2545eafdedeb3689b",
+      "bytes": 152255,
+      "width": 2200,
+      "height": 1276,
+      "alt": "Comparison of distant-object thin lens and nearby-object thick lens focusing on the same retina",
+      "url": "https://projectaegis.fly.dev/source-assets/0/14e938512e1a7ec8f7fdd13f37047d777d16ebd9f85febf2545eafdedeb3689b.jpg"
+    },
+    {
+      "filename": "5cf1295fe8d14504e9744dfb8ed9610bbede66d67206ea907f2d1ad2399a54a5.jpg",
+      "sha256": "5cf1295fe8d14504e9744dfb8ed9610bbede66d67206ea907f2d1ad2399a54a5",
+      "bytes": 29150,
+      "width": 693,
+      "height": 248,
+      "alt": "Resistors2,3,6 ohms joined by bypass wires at X and Y",
+      "url": "https://projectaegis.fly.dev/source-assets/0/5cf1295fe8d14504e9744dfb8ed9610bbede66d67206ea907f2d1ad2399a54a5.jpg"
+    },
+    {
+      "filename": "2dadb8b34bcd31ab11ed7cafca3515b8b7195d919518ba860d12250283d29cfd.jpg",
+      "sha256": "2dadb8b34bcd31ab11ed7cafca3515b8b7195d919518ba860d12250283d29cfd",
+      "bytes": 13016,
+      "width": 329,
+      "height": 287,
+      "alt": "Current5A and supply200V across the resistance wire",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2dadb8b34bcd31ab11ed7cafca3515b8b7195d919518ba860d12250283d29cfd.jpg"
+    },
+    {
+      "filename": "6bea78bab6f4e06f95196147ea7251e99dc476455823969dafaa4fa98417a5e9.jpg",
+      "sha256": "6bea78bab6f4e06f95196147ea7251e99dc476455823969dafaa4fa98417a5e9",
+      "bytes": 78214,
+      "width": 673,
+      "height": 668,
+      "alt": "Resistance versus length rises linearly; resistance versus radius decreases nonlinearly",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6bea78bab6f4e06f95196147ea7251e99dc476455823969dafaa4fa98417a5e9.jpg"
+    },
+    {
+      "filename": "41d14bce1bd44bfd5bd799cf338d281b887439028256048e4768eb9c260f8c97.jpg",
+      "sha256": "41d14bce1bd44bfd5bd799cf338d281b887439028256048e4768eb9c260f8c97",
+      "bytes": 48561,
+      "width": 594,
+      "height": 301,
+      "alt": "V-versus-I lines A B C and I-versus-V lines D E F with numbered scales",
+      "url": "https://projectaegis.fly.dev/source-assets/0/41d14bce1bd44bfd5bd799cf338d281b887439028256048e4768eb9c260f8c97.jpg"
+    },
+    {
+      "filename": "55ae02ebfc95252c9908084e24ce9f2b59dbd7a81b7131d36f07e16dc61b46b0.jpg",
+      "sha256": "55ae02ebfc95252c9908084e24ce9f2b59dbd7a81b7131d36f07e16dc61b46b0",
+      "bytes": 24448,
+      "width": 645,
+      "height": 229,
+      "alt": "Two nonlinear current-versus-potential-difference curves",
+      "url": "https://projectaegis.fly.dev/source-assets/0/55ae02ebfc95252c9908084e24ce9f2b59dbd7a81b7131d36f07e16dc61b46b0.jpg"
+    },
+    {
+      "filename": "9055d96d332e181cda9a57b2b0bdf0924a29d63d1938f12709dfd3b3a18a7d5d.jpg",
+      "sha256": "9055d96d332e181cda9a57b2b0bdf0924a29d63d1938f12709dfd3b3a18a7d5d",
+      "bytes": 14329,
+      "width": 285,
+      "height": 275,
+      "alt": "V-I lines at temperatures T2 steeper than T1",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9055d96d332e181cda9a57b2b0bdf0924a29d63d1938f12709dfd3b3a18a7d5d.jpg"
+    },
+    {
+      "filename": "6d785d2dc9919fbef00cef66f047cd2c798915e37ce0b39688a85881965a1827.jpg",
+      "sha256": "6d785d2dc9919fbef00cef66f047cd2c798915e37ce0b39688a85881965a1827",
+      "bytes": 20780,
+      "width": 557,
+      "height": 211,
+      "alt": "Parallel paths6+4 ohms and8+x ohms between P Q",
+      "url": "https://projectaegis.fly.dev/source-assets/0/6d785d2dc9919fbef00cef66f047cd2c798915e37ce0b39688a85881965a1827.jpg"
+    },
+    {
+      "filename": "8ecd803455767f43f81e71ae8111a317b0202e3f1aa44ea4c0645cd337b74ddd.jpg",
+      "sha256": "8ecd803455767f43f81e71ae8111a317b0202e3f1aa44ea4c0645cd337b74ddd",
+      "bytes": 17161,
+      "width": 440,
+      "height": 294,
+      "alt": "Three resistors r in parallel across battery E",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8ecd803455767f43f81e71ae8111a317b0202e3f1aa44ea4c0645cd337b74ddd.jpg"
+    },
+    {
+      "filename": "44d2e1371f2c84db6b7954e9e229011f1acc91de8e0e1c4b97520cbf2553ce4c.jpg",
+      "sha256": "44d2e1371f2c84db6b7954e9e229011f1acc91de8e0e1c4b97520cbf2553ce4c",
+      "bytes": 18776,
+      "width": 411,
+      "height": 277,
+      "alt": "Four10ohm resistors in diamond supplied3V across adjacent vertices",
+      "url": "https://projectaegis.fly.dev/source-assets/0/44d2e1371f2c84db6b7954e9e229011f1acc91de8e0e1c4b97520cbf2553ce4c.jpg"
+    },
+    {
+      "filename": "300c734b6961e15b0704e49c8a37c755a3233a80d36d88ffa333aa6749f3dc1a.jpg",
+      "sha256": "300c734b6961e15b0704e49c8a37c755a3233a80d36d88ffa333aa6749f3dc1a",
+      "bytes": 14011,
+      "width": 347,
+      "height": 264,
+      "alt": "Two switched heaters X and Y in parallel across230V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/300c734b6961e15b0704e49c8a37c755a3233a80d36d88ffa333aa6749f3dc1a.jpg"
+    },
+    {
+      "filename": "638830d7a5bd4f04d88561e8a155c13fe09f57055c4e32cce07bc304f3d94dde.jpg",
+      "sha256": "638830d7a5bd4f04d88561e8a155c13fe09f57055c4e32cce07bc304f3d94dde",
+      "bytes": 26250,
+      "width": 532,
+      "height": 264,
+      "alt": "2ohm series resistor followed by12ohm and6ohm parallel branches across12V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/638830d7a5bd4f04d88561e8a155c13fe09f57055c4e32cce07bc304f3d94dde.jpg"
+    },
+    {
+      "filename": "683f706353f58bc3d9c4a14c4c04a7446cf4d8cd6449483298720dc9d5617f15.jpg",
+      "sha256": "683f706353f58bc3d9c4a14c4c04a7446cf4d8cd6449483298720dc9d5617f15",
+      "bytes": 13874,
+      "width": 294,
+      "height": 246,
+      "alt": "Four3ohm resistors on sides of square P Q R S",
+      "url": "https://projectaegis.fly.dev/source-assets/0/683f706353f58bc3d9c4a14c4c04a7446cf4d8cd6449483298720dc9d5617f15.jpg"
+    },
+    {
+      "filename": "9dd0b091f88be315c37cc5b0e53cfa8071d3f7eba75eee860b7412b40ba0c541.jpg",
+      "sha256": "9dd0b091f88be315c37cc5b0e53cfa8071d3f7eba75eee860b7412b40ba0c541",
+      "bytes": 29334,
+      "width": 730,
+      "height": 169,
+      "alt": "Two unconnected bulbs, battery and switch",
+      "url": "https://projectaegis.fly.dev/source-assets/0/9dd0b091f88be315c37cc5b0e53cfa8071d3f7eba75eee860b7412b40ba0c541.jpg"
+    },
+    {
+      "filename": "8aa4db11294102a9a6b500fb6ec7f60f4f2ab73f420e872c848afee69de9097e.jpg",
+      "sha256": "8aa4db11294102a9a6b500fb6ec7f60f4f2ab73f420e872c848afee69de9097e",
+      "bytes": 44394,
+      "width": 654,
+      "height": 359,
+      "alt": "Source example connecting two bulbs in parallel across battery and switch",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8aa4db11294102a9a6b500fb6ec7f60f4f2ab73f420e872c848afee69de9097e.jpg"
+    },
+    {
+      "filename": "d71d115def7b84db300b3f21a7804b55764181c2d1962917616ee4151db5cb3b.jpg",
+      "sha256": "d71d115def7b84db300b3f21a7804b55764181c2d1962917616ee4151db5cb3b",
+      "bytes": 40097,
+      "width": 596,
+      "height": 386,
+      "alt": "Ohm-law experiment schematic with adjustable battery supply, resistor, series ammeter and parallel voltmeter",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d71d115def7b84db300b3f21a7804b55764181c2d1962917616ee4151db5cb3b.jpg"
+    },
+    {
+      "filename": "1f7bc26fab48d3debadd4e8b335d58de44a1bb3edfc3acb1ef4ca7e539f81b40.jpg",
+      "sha256": "1f7bc26fab48d3debadd4e8b335d58de44a1bb3edfc3acb1ef4ca7e539f81b40",
+      "bytes": 13022,
+      "width": 308,
+      "height": 278,
+      "alt": "I-versus-V lines A shallow and B steep",
+      "url": "https://projectaegis.fly.dev/source-assets/0/1f7bc26fab48d3debadd4e8b335d58de44a1bb3edfc3acb1ef4ca7e539f81b40.jpg"
+    },
+    {
+      "filename": "07a095af7e31d9d4fc6090efdb410e180c4248c2a5210b587b24d7828b199322.jpg",
+      "sha256": "07a095af7e31d9d4fc6090efdb410e180c4248c2a5210b587b24d7828b199322",
+      "bytes": 40732,
+      "width": 544,
+      "height": 354,
+      "alt": "Nine resistors in arms A B C; A series with B and C in parallel",
+      "url": "https://projectaegis.fly.dev/source-assets/0/07a095af7e31d9d4fc6090efdb410e180c4248c2a5210b587b24d7828b199322.jpg"
+    },
+    {
+      "filename": "d12da157f72f13e4662a9d661545a40ab87335d0f027299588e7af201329b260.jpg",
+      "sha256": "d12da157f72f13e4662a9d661545a40ab87335d0f027299588e7af201329b260",
+      "bytes": 19270,
+      "width": 435,
+      "height": 243,
+      "alt": "Unknown E,10ohm F,5ohm G in parallel across6V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d12da157f72f13e4662a9d661545a40ab87335d0f027299588e7af201329b260.jpg"
+    },
+    {
+      "filename": "28a4801c833931c31fa720d248dbf2e4ce689d56d75ad35512d9d1861b77a14e.jpg",
+      "sha256": "28a4801c833931c31fa720d248dbf2e4ce689d56d75ad35512d9d1861b77a14e",
+      "bytes": 4696,
+      "width": 237,
+      "height": 89,
+      "alt": "Four1.5V cells connected in series aiding",
+      "url": "https://projectaegis.fly.dev/source-assets/0/28a4801c833931c31fa720d248dbf2e4ce689d56d75ad35512d9d1861b77a14e.jpg"
+    },
+    {
+      "filename": "11d20efd89284c14933df781da3c6cbd4d5c5407fdad879cff1e681406c76d40.jpg",
+      "sha256": "11d20efd89284c14933df781da3c6cbd4d5c5407fdad879cff1e681406c76d40",
+      "bytes": 15973,
+      "width": 525,
+      "height": 184,
+      "alt": "2ohm and4ohm series branch in parallel with6ohm resistor",
+      "url": "https://projectaegis.fly.dev/source-assets/0/11d20efd89284c14933df781da3c6cbd4d5c5407fdad879cff1e681406c76d40.jpg"
+    },
+    {
+      "filename": "bd6414bc41282823ac6d3c9d00ea5249a6e35b93c97b7f31196e251e2955ea6f.jpg",
+      "sha256": "bd6414bc41282823ac6d3c9d00ea5249a6e35b93c97b7f31196e251e2955ea6f",
+      "bytes": 29266,
+      "width": 610,
+      "height": 266,
+      "alt": "Milliammeter reading250mA and voltmeter reading2.4V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/bd6414bc41282823ac6d3c9d00ea5249a6e35b93c97b7f31196e251e2955ea6f.jpg"
+    },
+    {
+      "filename": "aeaedda87168b005cbdb9e2b15339e68197304e79f23a623819fe0e41ad4cd9e.jpg",
+      "sha256": "aeaedda87168b005cbdb9e2b15339e68197304e79f23a623819fe0e41ad4cd9e",
+      "bytes": 10192,
+      "width": 268,
+      "height": 195,
+      "alt": "Original detached V-I line segments A steeper than B",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aeaedda87168b005cbdb9e2b15339e68197304e79f23a623819fe0e41ad4cd9e.jpg"
+    },
+    {
+      "filename": "36b2eddebf6ade016a1963fc9039b2acd3ce237de8a7f610972286961fe49f05.jpg",
+      "sha256": "36b2eddebf6ade016a1963fc9039b2acd3ce237de8a7f610972286961fe49f05",
+      "bytes": 15797,
+      "width": 393,
+      "height": 192,
+      "alt": "1.5ohm parallel3ohm block in series with6ohm parallel12ohm block across9V",
+      "url": "https://projectaegis.fly.dev/source-assets/0/36b2eddebf6ade016a1963fc9039b2acd3ce237de8a7f610972286961fe49f05.jpg"
+    },
+    {
+      "filename": "f250d0cefedfcc635efc215ead52ed0e6271094b5ef3cbb9808febf615de6564.jpg",
+      "sha256": "f250d0cefedfcc635efc215ead52ed0e6271094b5ef3cbb9808febf615de6564",
+      "bytes": 38282,
+      "width": 492,
+      "height": 281,
+      "alt": "Home electricity meter67602 on1June and67912 on1July",
+      "url": "https://projectaegis.fly.dev/source-assets/0/f250d0cefedfcc635efc215ead52ed0e6271094b5ef3cbb9808febf615de6564.jpg"
+    },
+    {
+      "filename": "14bdaa12a19d19379f532597337d97967c27c7894627fdede4569d3274b21748.jpg",
+      "sha256": "14bdaa12a19d19379f532597337d97967c27c7894627fdede4569d3274b21748",
+      "bytes": 14511,
+      "width": 324,
+      "height": 280,
+      "alt": "V-I graph A steeper than B for series and parallel combinations",
+      "url": "https://projectaegis.fly.dev/source-assets/0/14bdaa12a19d19379f532597337d97967c27c7894627fdede4569d3274b21748.jpg"
+    },
+    {
+      "filename": "35db916534ea60c02dc2ea5f6cdf3431c1bdd90d46d5f88b96213144182523e3.jpg",
+      "sha256": "35db916534ea60c02dc2ea5f6cdf3431c1bdd90d46d5f88b96213144182523e3",
+      "bytes": 36973,
+      "width": 601,
+      "height": 271,
+      "alt": "4ohm direct branch;1.5ohm return with5ohm parallel5ohm section",
+      "url": "https://projectaegis.fly.dev/source-assets/0/35db916534ea60c02dc2ea5f6cdf3431c1bdd90d46d5f88b96213144182523e3.jpg"
+    },
+    {
+      "filename": "c2202ad0350fe58ceecccf181903d4773d7ce152f3bc653b83a38f3f9379c88f.jpg",
+      "sha256": "c2202ad0350fe58ceecccf181903d4773d7ce152f3bc653b83a38f3f9379c88f",
+      "bytes": 18010,
+      "width": 529,
+      "height": 195,
+      "alt": "Parallel branches1+x ohms and8+4 ohms",
+      "url": "https://projectaegis.fly.dev/source-assets/0/c2202ad0350fe58ceecccf181903d4773d7ce152f3bc653b83a38f3f9379c88f.jpg"
+    },
+    {
+      "filename": "910509bb37e7624c8875a04349fcf482e5c938df28bbaf2c8b39f23bbbd3c83e.jpg",
+      "sha256": "910509bb37e7624c8875a04349fcf482e5c938df28bbaf2c8b39f23bbbd3c83e",
+      "bytes": 18109,
+      "width": 330,
+      "height": 368,
+      "alt": "Three lamps with switches1,2,3 and two cells",
+      "url": "https://projectaegis.fly.dev/source-assets/0/910509bb37e7624c8875a04349fcf482e5c938df28bbaf2c8b39f23bbbd3c83e.jpg"
+    },
+    {
+      "filename": "88270eed531ebead75c8e21b13e3488edd713e2e23b8abb8270b9ba92edfea02.jpg",
+      "sha256": "88270eed531ebead75c8e21b13e3488edd713e2e23b8abb8270b9ba92edfea02",
+      "bytes": 4232,
+      "width": 208,
+      "height": 73,
+      "alt": "Resistor with sliding contact drawn above",
+      "url": "https://projectaegis.fly.dev/source-assets/0/88270eed531ebead75c8e21b13e3488edd713e2e23b8abb8270b9ba92edfea02.jpg"
+    },
+    {
+      "filename": "8ea46ce929dff6871bc309a6dc89d333261f2be68f1e2ff402342a6fde439c62.jpg",
+      "sha256": "8ea46ce929dff6871bc309a6dc89d333261f2be68f1e2ff402342a6fde439c62",
+      "bytes": 27257,
+      "width": 483,
+      "height": 291,
+      "alt": "Cell,closed switch,resistor,series ammeter and parallel voltmeter",
+      "url": "https://projectaegis.fly.dev/source-assets/0/8ea46ce929dff6871bc309a6dc89d333261f2be68f1e2ff402342a6fde439c62.jpg"
+    },
+    {
+      "filename": "aae6b373ae7de680535e99f19c9346c8e8c3b5f19e382aad4da8e6324c2a6c01.jpg",
+      "sha256": "aae6b373ae7de680535e99f19c9346c8e8c3b5f19e382aad4da8e6324c2a6c01",
+      "bytes": 35830,
+      "width": 633,
+      "height": 319,
+      "alt": "Eight standard source symbols provide acceptable examples for a request to name and draw any six",
+      "url": "https://projectaegis.fly.dev/source-assets/0/aae6b373ae7de680535e99f19c9346c8e8c3b5f19e382aad4da8e6324c2a6c01.jpg"
+    },
+    {
+      "filename": "2f3e87c192c729e930b7eb98adace18faf5b89f671bc3039dc5980a815ae04a6.jpg",
+      "sha256": "2f3e87c192c729e930b7eb98adace18faf5b89f671bc3039dc5980a815ae04a6",
+      "bytes": 49665,
+      "width": 638,
+      "height": 217,
+      "alt": "Resistivity table at20C: silver,copper,tungsten",
+      "url": "https://projectaegis.fly.dev/source-assets/0/2f3e87c192c729e930b7eb98adace18faf5b89f671bc3039dc5980a815ae04a6.jpg"
+    },
+    {
+      "filename": "edad80da715015246b93f92109d5c1ca1b163518256b52401bed93b0bf9d179a.jpg",
+      "sha256": "edad80da715015246b93f92109d5c1ca1b163518256b52401bed93b0bf9d179a",
+      "bytes": 31997,
+      "width": 617,
+      "height": 172,
+      "alt": "Continuation: iron,mercury,nichrome resistivities",
+      "url": "https://projectaegis.fly.dev/source-assets/0/edad80da715015246b93f92109d5c1ca1b163518256b52401bed93b0bf9d179a.jpg"
+    },
+    {
+      "filename": "208c53a86763ebf5c0f8549dfc8b92603c32edcbb7e9ca132886ef777175cd3e.jpg",
+      "sha256": "208c53a86763ebf5c0f8549dfc8b92603c32edcbb7e9ca132886ef777175cd3e",
+      "bytes": 73077,
+      "width": 2200,
+      "height": 616,
+      "alt": "Four authored I-versus-V alternatives; option D corrected to pass through origin as requested by reviewer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/208c53a86763ebf5c0f8549dfc8b92603c32edcbb7e9ca132886ef777175cd3e.jpg"
+    }
+  ]
+}
