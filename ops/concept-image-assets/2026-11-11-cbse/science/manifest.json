@@ -1,0 +1,297 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "filename": "179fa47cd29ec9cd31889ec5c6162b3a64cfe27dccd5e3a9fdf900bdcf257e69.jpg",
+      "sha256": "179fa47cd29ec9cd31889ec5c6162b3a64cfe27dccd5e3a9fdf900bdcf257e69",
+      "bytes": 31143,
+      "width": 1100,
+      "height": 249,
+      "url": "https://projectaegis.fly.dev/source-assets/0/179fa47cd29ec9cd31889ec5c6162b3a64cfe27dccd5e3a9fdf900bdcf257e69.jpg",
+      "alt": "pH values of solutions A, B, C and D",
+      "source": "phscale"
+    },
+    {
+      "filename": "ab77c83dc9bdf9975854ab520980d59e6c19626b466cfcf38cd65cc2fb873528.jpg",
+      "sha256": "ab77c83dc9bdf9975854ab520980d59e6c19626b466cfcf38cd65cc2fb873528",
+      "bytes": 55147,
+      "width": 816,
+      "height": 426,
+      "url": "https://projectaegis.fly.dev/source-assets/0/ab77c83dc9bdf9975854ab520980d59e6c19626b466cfcf38cd65cc2fb873528.jpg",
+      "alt": "Four proposed electron-dot diagrams for magnesium oxide",
+      "source": "mgodots"
+    },
+    {
+      "filename": "a52ada0460ae8eba4e0dcaee4281d287c893a3907e41316ee2f6fb6311485924.jpg",
+      "sha256": "a52ada0460ae8eba4e0dcaee4281d287c893a3907e41316ee2f6fb6311485924",
+      "bytes": 32987,
+      "width": 557,
+      "height": 379,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a52ada0460ae8eba4e0dcaee4281d287c893a3907e41316ee2f6fb6311485924.jpg",
+      "alt": "Zinc reacting with dilute sulphuric acid",
+      "source": "zn"
+    },
+    {
+      "filename": "2a2e3c771bd8a469b0e2be447339315e7dd6e00b869f713e5e4281a02e645bba.jpg",
+      "sha256": "2a2e3c771bd8a469b0e2be447339315e7dd6e00b869f713e5e4281a02e645bba",
+      "bytes": 40491,
+      "width": 781,
+      "height": 540,
+      "url": "https://projectaegis.fly.dev/source-assets/0/2a2e3c771bd8a469b0e2be447339315e7dd6e00b869f713e5e4281a02e645bba.jpg",
+      "alt": "Circuit: 10 and 15 ohm parallel group in series with 60 and 40 ohm group, 15 volt supply",
+      "source": "circuit2025"
+    },
+    {
+      "filename": "9c901a08ce8d74f504677a5ce259649b7a9979abebb739ae2a26aa6b4d89a1b4.jpg",
+      "sha256": "9c901a08ce8d74f504677a5ce259649b7a9979abebb739ae2a26aa6b4d89a1b4",
+      "bytes": 26434,
+      "width": 427,
+      "height": 403,
+      "url": "https://projectaegis.fly.dev/source-assets/0/9c901a08ce8d74f504677a5ce259649b7a9979abebb739ae2a26aa6b4d89a1b4.jpg",
+      "alt": "Displayed structural formulae I and II",
+      "source": "structures2025"
+    },
+    {
+      "filename": "1cdc16afa363d0fde3a1200b20667d8a4b256925b42d3433f68d519a2cc57f03.jpg",
+      "sha256": "1cdc16afa363d0fde3a1200b20667d8a4b256925b42d3433f68d519a2cc57f03",
+      "bytes": 88783,
+      "width": 356,
+      "height": 592,
+      "url": "https://projectaegis.fly.dev/source-assets/0/1cdc16afa363d0fde3a1200b20667d8a4b256925b42d3433f68d519a2cc57f03.jpg",
+      "alt": "Flower female reproductive part with labels A, B and C",
+      "source": "flower"
+    },
+    {
+      "filename": "3c0abc6d11c8845aee810219043c609d9e0265749a82e7d64c646eb4712079a2.jpg",
+      "sha256": "3c0abc6d11c8845aee810219043c609d9e0265749a82e7d64c646eb4712079a2",
+      "bytes": 43386,
+      "width": 970,
+      "height": 462,
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c0abc6d11c8845aee810219043c609d9e0265749a82e7d64c646eb4712079a2.jpg",
+      "alt": "Three resistor circuits with 12 volt supplies",
+      "source": "circuitpowers"
+    },
+    {
+      "filename": "0b326c0feabe29a252a74551f5256cda2b9e9464ddfe8934607fbc7d5f1082d9.jpg",
+      "sha256": "0b326c0feabe29a252a74551f5256cda2b9e9464ddfe8934607fbc7d5f1082d9",
+      "bytes": 39304,
+      "width": 632,
+      "height": 261,
+      "url": "https://projectaegis.fly.dev/source-assets/0/0b326c0feabe29a252a74551f5256cda2b9e9464ddfe8934607fbc7d5f1082d9.jpg",
+      "alt": "Stages of division in a unicellular organism",
+      "source": "fission"
+    },
+    {
+      "filename": "59f8aebf0428d58cd81549a8d14e5bdc32b4593e4f652523cfc58917da906765.jpg",
+      "sha256": "59f8aebf0428d58cd81549a8d14e5bdc32b4593e4f652523cfc58917da906765",
+      "bytes": 32584,
+      "width": 535,
+      "height": 251,
+      "url": "https://projectaegis.fly.dev/source-assets/0/59f8aebf0428d58cd81549a8d14e5bdc32b4593e4f652523cfc58917da906765.jpg",
+      "alt": "Ecological pyramid with four trophic levels",
+      "source": "pyramid"
+    },
+    {
+      "filename": "5ea501cb457d8b522357074bd804ba61996484d4d976eb88c88c8dabdb699c19.jpg",
+      "sha256": "5ea501cb457d8b522357074bd804ba61996484d4d976eb88c88c8dabdb699c19",
+      "bytes": 24904,
+      "width": 689,
+      "height": 383,
+      "url": "https://projectaegis.fly.dev/source-assets/0/5ea501cb457d8b522357074bd804ba61996484d4d976eb88c88c8dabdb699c19.jpg",
+      "alt": "Given ray diagram of a lens",
+      "source": "lensfigure"
+    },
+    {
+      "filename": "e0807b45108020647696737b534f5c37dd2f13f780d3caede1319c16dc14d04d.jpg",
+      "sha256": "e0807b45108020647696737b534f5c37dd2f13f780d3caede1319c16dc14d04d",
+      "bytes": 33293,
+      "width": 355,
+      "height": 297,
+      "url": "https://projectaegis.fly.dev/source-assets/0/e0807b45108020647696737b534f5c37dd2f13f780d3caede1319c16dc14d04d.jpg",
+      "alt": "Human heart with blood vessels marked 1 and 2",
+      "source": "heart"
+    },
+    {
+      "filename": "101fd2dc3858094a688c50528e059969ac90493e9f0413643df0556c65c95e52.jpg",
+      "sha256": "101fd2dc3858094a688c50528e059969ac90493e9f0413643df0556c65c95e52",
+      "bytes": 23791,
+      "width": 497,
+      "height": 320,
+      "url": "https://projectaegis.fly.dev/source-assets/0/101fd2dc3858094a688c50528e059969ac90493e9f0413643df0556c65c95e52.jpg",
+      "alt": "Resistor network with 10 volt battery",
+      "source": "circuit2026s2"
+    },
+    {
+      "filename": "1415ae275fae1ceac1e140945e9da6ebed04458bc2c41d83f9b7c5e89e911a42.jpg",
+      "sha256": "1415ae275fae1ceac1e140945e9da6ebed04458bc2c41d83f9b7c5e89e911a42",
+      "bytes": 24017,
+      "width": 604,
+      "height": 308,
+      "url": "https://projectaegis.fly.dev/source-assets/0/1415ae275fae1ceac1e140945e9da6ebed04458bc2c41d83f9b7c5e89e911a42.jpg",
+      "alt": "Original series circuit with 2 ohm and 4 ohm resistors",
+      "source": "parallelredraw_source"
+    },
+    {
+      "filename": "55940290917886030662e41d8775df868b6bacd76100562fa1829c6f2ffa76b5.jpg",
+      "sha256": "55940290917886030662e41d8775df868b6bacd76100562fa1829c6f2ffa76b5",
+      "bytes": 12497,
+      "width": 391,
+      "height": 301,
+      "url": "https://projectaegis.fly.dev/source-assets/0/55940290917886030662e41d8775df868b6bacd76100562fa1829c6f2ffa76b5.jpg",
+      "alt": "Current in wire AB and points X, Y, Z at increasing distances",
+      "source": "wirefield"
+    },
+    {
+      "filename": "822cfce57fd1832a4f6936782f3fc227b65affc722617c67ccbee45d82c478a2.jpg",
+      "sha256": "822cfce57fd1832a4f6936782f3fc227b65affc722617c67ccbee45d82c478a2",
+      "bytes": 62767,
+      "width": 536,
+      "height": 232,
+      "url": "https://projectaegis.fly.dev/source-assets/0/822cfce57fd1832a4f6936782f3fc227b65affc722617c67ccbee45d82c478a2.jpg",
+      "alt": "Labelled stages of budding in Hydra",
+      "source": "hydra"
+    },
+    {
+      "filename": "14e5184c38942777fe40cabf67103faebafee15e1dd1d5ce3e0e3bd72b6ef361.jpg",
+      "sha256": "14e5184c38942777fe40cabf67103faebafee15e1dd1d5ce3e0e3bd72b6ef361",
+      "bytes": 63727,
+      "width": 859,
+      "height": 902,
+      "url": "https://projectaegis.fly.dev/source-assets/0/14e5184c38942777fe40cabf67103faebafee15e1dd1d5ce3e0e3bd72b6ef361.jpg",
+      "alt": "Convex mirror image formation for object at infinity and finite distance",
+      "source": "convexmirror"
+    },
+    {
+      "filename": "a02f0a88e68f3611e88909bb805c1c294c725502981e0d9178926d61b9ae8528.jpg",
+      "sha256": "a02f0a88e68f3611e88909bb805c1c294c725502981e0d9178926d61b9ae8528",
+      "bytes": 34378,
+      "width": 859,
+      "height": 417,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a02f0a88e68f3611e88909bb805c1c294c725502981e0d9178926d61b9ae8528.jpg",
+      "alt": "Convex mirror image formation for finite object distance",
+      "source": "convexmirrorfinite"
+    },
+    {
+      "filename": "fd8d95199962f5bcc43b7a693fe21c3c8b02058e3cf9b2660f743125b6d2f2d0.jpg",
+      "sha256": "fd8d95199962f5bcc43b7a693fe21c3c8b02058e3cf9b2660f743125b6d2f2d0",
+      "bytes": 34878,
+      "width": 723,
+      "height": 385,
+      "url": "https://projectaegis.fly.dev/source-assets/0/fd8d95199962f5bcc43b7a693fe21c3c8b02058e3cf9b2660f743125b6d2f2d0.jpg",
+      "alt": "Refraction through a rectangular glass slab",
+      "source": "slab"
+    },
+    {
+      "filename": "72838a1b93ef8c6943a08672f5fa237b66deb84015af5f10f0c854bed1729997.jpg",
+      "sha256": "72838a1b93ef8c6943a08672f5fa237b66deb84015af5f10f0c854bed1729997",
+      "bytes": 50934,
+      "width": 607,
+      "height": 397,
+      "url": "https://projectaegis.fly.dev/source-assets/0/72838a1b93ef8c6943a08672f5fa237b66deb84015af5f10f0c854bed1729997.jpg",
+      "alt": "Electron-dot structure of ethanoic acid",
+      "source": "ethanoicdots"
+    },
+    {
+      "filename": "de0441fe229874e6911a0ecb1b7dac23c6b039d3c880d1cf27afa59de948cc8c.jpg",
+      "sha256": "de0441fe229874e6911a0ecb1b7dac23c6b039d3c880d1cf27afa59de948cc8c",
+      "bytes": 17886,
+      "width": 362,
+      "height": 296,
+      "url": "https://projectaegis.fly.dev/source-assets/0/de0441fe229874e6911a0ecb1b7dac23c6b039d3c880d1cf27afa59de948cc8c.jpg",
+      "alt": "Structural formula of cyclohexane",
+      "source": "ring"
+    },
+    {
+      "filename": "2091ba11d0cf3ab6efb347bc15f29aa0869a17cfd38b1d8415ae2d1b28acd2f5.jpg",
+      "sha256": "2091ba11d0cf3ab6efb347bc15f29aa0869a17cfd38b1d8415ae2d1b28acd2f5",
+      "bytes": 23808,
+      "width": 362,
+      "height": 215,
+      "url": "https://projectaegis.fly.dev/source-assets/0/2091ba11d0cf3ab6efb347bc15f29aa0869a17cfd38b1d8415ae2d1b28acd2f5.jpg",
+      "alt": "Electron-dot structure of chlorine molecule",
+      "source": "chlorinedots"
+    },
+    {
+      "filename": "1366ec4f496708993701549dcbc5a096f3777029500de1190ea12b4a4a83b86a.jpg",
+      "sha256": "1366ec4f496708993701549dcbc5a096f3777029500de1190ea12b4a4a83b86a",
+      "bytes": 22558,
+      "width": 781,
+      "height": 376,
+      "url": "https://projectaegis.fly.dev/source-assets/0/1366ec4f496708993701549dcbc5a096f3777029500de1190ea12b4a4a83b86a.jpg",
+      "alt": "Series circuit with 1.5 volt cell, key, 5 ohm and 10 ohm resistors",
+      "source": "voltseries"
+    },
+    {
+      "filename": "18b82b4c005454c11447533d48b7fd5b91b3c4b034682a04251e46460cd495e7.jpg",
+      "sha256": "18b82b4c005454c11447533d48b7fd5b91b3c4b034682a04251e46460cd495e7",
+      "bytes": 64683,
+      "width": 518,
+      "height": 504,
+      "url": "https://projectaegis.fly.dev/source-assets/0/18b82b4c005454c11447533d48b7fd5b91b3c4b034682a04251e46460cd495e7.jpg",
+      "alt": "Germinating pollen with stigma and pollen tube labels",
+      "source": "pollendiagram"
+    },
+    {
+      "filename": "48b8792974273b89c1247565514492d21d1789cd6ad8b32ef3a6ac7cb9f56d2b.jpg",
+      "sha256": "48b8792974273b89c1247565514492d21d1789cd6ad8b32ef3a6ac7cb9f56d2b",
+      "bytes": 30683,
+      "width": 477,
+      "height": 495,
+      "url": "https://projectaegis.fly.dev/source-assets/0/48b8792974273b89c1247565514492d21d1789cd6ad8b32ef3a6ac7cb9f56d2b.jpg",
+      "alt": "Hypermetropic eye and correction with a convex lens",
+      "source": "hyperdiagram"
+    },
+    {
+      "filename": "7112c2a17b35b6bafaa9b8ad7e04ef5d8ab9600d32c736ce065a543523a93201.jpg",
+      "sha256": "7112c2a17b35b6bafaa9b8ad7e04ef5d8ab9600d32c736ce065a543523a93201",
+      "bytes": 23144,
+      "width": 607,
+      "height": 221,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7112c2a17b35b6bafaa9b8ad7e04ef5d8ab9600d32c736ce065a543523a93201.jpg",
+      "alt": "Virtual diminished image formed by a concave lens",
+      "source": "concavelens"
+    },
+    {
+      "filename": "9003c45413a9b5fbc287fd2a285f3b722923a3a3e5c2ff408236572d981505ec.jpg",
+      "sha256": "9003c45413a9b5fbc287fd2a285f3b722923a3a3e5c2ff408236572d981505ec",
+      "bytes": 19074,
+      "width": 492,
+      "height": 299,
+      "url": "https://projectaegis.fly.dev/source-assets/0/9003c45413a9b5fbc287fd2a285f3b722923a3a3e5c2ff408236572d981505ec.jpg",
+      "alt": "Convex lens forming a virtual erect magnified image",
+      "source": "lensmag2"
+    },
+    {
+      "filename": "15c3d7d7a9e43b52b0dd539071fd3b2fc6cd13cdec93f9c2c0f8c1e82324ec7e.jpg",
+      "sha256": "15c3d7d7a9e43b52b0dd539071fd3b2fc6cd13cdec93f9c2c0f8c1e82324ec7e",
+      "bytes": 17797,
+      "width": 477,
+      "height": 197,
+      "url": "https://projectaegis.fly.dev/source-assets/0/15c3d7d7a9e43b52b0dd539071fd3b2fc6cd13cdec93f9c2c0f8c1e82324ec7e.jpg",
+      "alt": "Correction of hypermetropia with convex lens",
+      "source": "hypercorrect"
+    },
+    {
+      "filename": "0a24cd5a323c415d8c5d0ab15d975b463fa2ad246c48cca62ec6203a520119d2.jpg",
+      "sha256": "0a24cd5a323c415d8c5d0ab15d975b463fa2ad246c48cca62ec6203a520119d2",
+      "bytes": 34536,
+      "width": 449,
+      "height": 281,
+      "url": "https://projectaegis.fly.dev/source-assets/0/0a24cd5a323c415d8c5d0ab15d975b463fa2ad246c48cca62ec6203a520119d2.jpg",
+      "alt": "Parallel redrawing of 2 ohm and 4 ohm resistors with meters",
+      "source": "parallelredraw"
+    },
+    {
+      "filename": "35543d3801cea392d0c5434574b87fa0508bcd8060a20ef737d45ece9b960e58.jpg",
+      "sha256": "35543d3801cea392d0c5434574b87fa0508bcd8060a20ef737d45ece9b960e58",
+      "bytes": 14139,
+      "width": 406,
+      "height": 284,
+      "url": "https://projectaegis.fly.dev/source-assets/0/35543d3801cea392d0c5434574b87fa0508bcd8060a20ef737d45ece9b960e58.jpg",
+      "alt": "V-I graph through origin with slope construction",
+      "source": "ohmgraph"
+    }
+  ]
+}
