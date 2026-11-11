@@ -1,0 +1,307 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "filename": "a0cb8b3de84b6d9484b21fb80f16d953a47aff71566691f4c2a41bdca674a9a4.jpg",
+      "sha256": "a0cb8b3de84b6d9484b21fb80f16d953a47aff71566691f4c2a41bdca674a9a4",
+      "bytes": 30144,
+      "width": 546,
+      "height": 573,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0cb8b3de84b6d9484b21fb80f16d953a47aff71566691f4c2a41bdca674a9a4.jpg",
+      "alt": "Two parabola graphs with the same two x-intercepts",
+      "source": "25_graph_zeroes"
+    },
+    {
+      "filename": "600604c23dc0dbcc269421f48a72f13fe4d4df412e33a0462cf7b1821fbcb543.jpg",
+      "sha256": "600604c23dc0dbcc269421f48a72f13fe4d4df412e33a0462cf7b1821fbcb543",
+      "bytes": 42588,
+      "width": 693,
+      "height": 504,
+      "url": "https://projectaegis.fly.dev/source-assets/0/600604c23dc0dbcc269421f48a72f13fe4d4df412e33a0462cf7b1821fbcb543.jpg",
+      "alt": "Tangent PA, diameter AOB and angle POB of 115 degrees",
+      "source": "25_tangent115"
+    },
+    {
+      "filename": "d99b67494261f96ba40713c661cd10645ff298dca630879e34648ae2021d94bb.jpg",
+      "sha256": "d99b67494261f96ba40713c661cd10645ff298dca630879e34648ae2021d94bb",
+      "bytes": 35802,
+      "width": 543,
+      "height": 507,
+      "url": "https://projectaegis.fly.dev/source-assets/0/d99b67494261f96ba40713c661cd10645ff298dca630879e34648ae2021d94bb.jpg",
+      "alt": "Triangle QTR with P on QT, S on QR and equal angles at Q and R",
+      "source": "25_triangles"
+    },
+    {
+      "filename": "d6af43d5d129cfe1b95570f51eac26ec8d252af6fc4bce42f53736673ca77198.jpg",
+      "sha256": "d6af43d5d129cfe1b95570f51eac26ec8d252af6fc4bce42f53736673ca77198",
+      "bytes": 41411,
+      "width": 594,
+      "height": 414,
+      "url": "https://projectaegis.fly.dev/source-assets/0/d6af43d5d129cfe1b95570f51eac26ec8d252af6fc4bce42f53736673ca77198.jpg",
+      "alt": "Tangents PA and PB of length 10 m to circular ground with centre O",
+      "source": "25_ground"
+    },
+    {
+      "filename": "0ebbb4c484f07337d79046228a8d3b9f1954c8df7c126c2c90138666a8366689.jpg",
+      "sha256": "0ebbb4c484f07337d79046228a8d3b9f1954c8df7c126c2c90138666a8366689",
+      "bytes": 45297,
+      "width": 666,
+      "height": 486,
+      "url": "https://projectaegis.fly.dev/source-assets/0/0ebbb4c484f07337d79046228a8d3b9f1954c8df7c126c2c90138666a8366689.jpg",
+      "alt": "Circle with centre O, secant BPOA and tangent BCD at C",
+      "source": "25_tangentproof"
+    },
+    {
+      "filename": "8105f35441855bd9ab9cc58dc38fd8f7ad61d06a679ab6f183e8716b08d5badf.jpg",
+      "sha256": "8105f35441855bd9ab9cc58dc38fd8f7ad61d06a679ab6f183e8716b08d5badf",
+      "bytes": 199105,
+      "width": 822,
+      "height": 789,
+      "url": "https://projectaegis.fly.dev/source-assets/0/8105f35441855bd9ab9cc58dc38fd8f7ad61d06a679ab6f183e8716b08d5badf.jpg",
+      "alt": "Decorative charity-run illustration from the source paper",
+      "source": "25_charity"
+    },
+    {
+      "filename": "02d3c82173f710550f1c69340e4bb04b41d8fda83c23a7bebda3ee13e894c7c8.jpg",
+      "sha256": "02d3c82173f710550f1c69340e4bb04b41d8fda83c23a7bebda3ee13e894c7c8",
+      "bytes": 213759,
+      "width": 651,
+      "height": 645,
+      "url": "https://projectaegis.fly.dev/source-assets/0/02d3c82173f710550f1c69340e4bb04b41d8fda83c23a7bebda3ee13e894c7c8.jpg",
+      "alt": "Examples of decorative brooches from the source paper",
+      "source": "25_brooch_photo"
+    },
+    {
+      "filename": "4ec5bcce5c9365af678211c62925ba4648cd0810666a0f5f9e9f02577bcd7553.jpg",
+      "sha256": "4ec5bcce5c9365af678211c62925ba4648cd0810666a0f5f9e9f02577bcd7553",
+      "bytes": 66460,
+      "width": 405,
+      "height": 420,
+      "url": "https://projectaegis.fly.dev/source-assets/0/4ec5bcce5c9365af678211c62925ba4648cd0810666a0f5f9e9f02577bcd7553.jpg",
+      "alt": "Brooch circle divided into ten sectors with arc ACB marked",
+      "source": "25_brooch"
+    },
+    {
+      "filename": "201ba7a1a79f821c85f62c60d287f4ced8a4a531bb493f73560ea920734c3e78.jpg",
+      "sha256": "201ba7a1a79f821c85f62c60d287f4ced8a4a531bb493f73560ea920734c3e78",
+      "bytes": 144553,
+      "width": 600,
+      "height": 591,
+      "url": "https://projectaegis.fly.dev/source-assets/0/201ba7a1a79f821c85f62c60d287f4ced8a4a531bb493f73560ea920734c3e78.jpg",
+      "alt": "Lighthouse photograph from the source paper",
+      "source": "25_lighthouse_photo"
+    },
+    {
+      "filename": "4bc02dc3c49b568628084bae81ae9d9ec374c644577d810ed19cc91fdc09bd99.jpg",
+      "sha256": "4bc02dc3c49b568628084bae81ae9d9ec374c644577d810ed19cc91fdc09bd99",
+      "bytes": 52979,
+      "width": 585,
+      "height": 798,
+      "url": "https://projectaegis.fly.dev/source-assets/0/4bc02dc3c49b568628084bae81ae9d9ec374c644577d810ed19cc91fdc09bd99.jpg",
+      "alt": "Lighthouse geometry showing AB 40 m and angles of 60 and 45 degrees",
+      "source": "25_lighthouse"
+    },
+    {
+      "filename": "7a2546fda7c920e93cf8d988b9eb13e19ecc8b1ef9da1ab68344d883e41e0fa4.jpg",
+      "sha256": "7a2546fda7c920e93cf8d988b9eb13e19ecc8b1ef9da1ab68344d883e41e0fa4",
+      "bytes": 11155,
+      "width": 378,
+      "height": 192,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7a2546fda7c920e93cf8d988b9eb13e19ecc8b1ef9da1ab68344d883e41e0fa4.jpg",
+      "alt": "Polynomial graph entirely above the x-axis",
+      "source": "26_graph_zeroes"
+    },
+    {
+      "filename": "a1d96b39f32420b333cdf2b3f1ca50440b011e8bbed445ce7939d088747f95eb.jpg",
+      "sha256": "a1d96b39f32420b333cdf2b3f1ca50440b011e8bbed445ce7939d088747f95eb",
+      "bytes": 17898,
+      "width": 408,
+      "height": 267,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a1d96b39f32420b333cdf2b3f1ca50440b011e8bbed445ce7939d088747f95eb.jpg",
+      "alt": "Tangent PA, diameter AOB and angle POB of 125 degrees",
+      "source": "26_tangent125"
+    },
+    {
+      "filename": "813e724cdd69f4a49810261d68a03eb09a1d29f1c8a3aed40f1b0744e664f76d.jpg",
+      "sha256": "813e724cdd69f4a49810261d68a03eb09a1d29f1c8a3aed40f1b0744e664f76d",
+      "bytes": 23615,
+      "width": 759,
+      "height": 237,
+      "url": "https://projectaegis.fly.dev/source-assets/0/813e724cdd69f4a49810261d68a03eb09a1d29f1c8a3aed40f1b0744e664f76d.jpg",
+      "alt": "Similar triangles ABC and XYZ with AB 4, BC 6, XZ 6 and YZ 7.2 cm",
+      "source": "26_similarxy"
+    },
+    {
+      "filename": "c8f3693ed371650ec755ebf8184bb50e40c14932163b547a5011b1437cc5db81.jpg",
+      "sha256": "c8f3693ed371650ec755ebf8184bb50e40c14932163b547a5011b1437cc5db81",
+      "bytes": 10035,
+      "width": 237,
+      "height": 249,
+      "url": "https://projectaegis.fly.dev/source-assets/0/c8f3693ed371650ec755ebf8184bb50e40c14932163b547a5011b1437cc5db81.jpg",
+      "alt": "Circle inscribed in right triangle ABC, right-angled at B",
+      "source": "26_incircle"
+    },
+    {
+      "filename": "059faaf994572d0ad391700c101c795d273ed63d1fa6572291d095a969095dc5.jpg",
+      "sha256": "059faaf994572d0ad391700c101c795d273ed63d1fa6572291d095a969095dc5",
+      "bytes": 13126,
+      "width": 243,
+      "height": 270,
+      "url": "https://projectaegis.fly.dev/source-assets/0/059faaf994572d0ad391700c101c795d273ed63d1fa6572291d095a969095dc5.jpg",
+      "alt": "Excircle tangent to QR at S and extended PQ and PR at M and N",
+      "source": "26_excircle"
+    },
+    {
+      "filename": "f1e6586515c6e9e4914e8d5816d3d6253ffc922d20bd301df95a392df8964c98.jpg",
+      "sha256": "f1e6586515c6e9e4914e8d5816d3d6253ffc922d20bd301df95a392df8964c98",
+      "bytes": 19129,
+      "width": 573,
+      "height": 258,
+      "url": "https://projectaegis.fly.dev/source-assets/0/f1e6586515c6e9e4914e8d5816d3d6253ffc922d20bd301df95a392df8964c98.jpg",
+      "alt": "Similar triangles ABC and PQR with medians CM and RN",
+      "source": "26_medians"
+    },
+    {
+      "filename": "3e1b76946c28472a240f44ce23e55d81a94e048e83154c06bd5b8cb42eade3ce.jpg",
+      "sha256": "3e1b76946c28472a240f44ce23e55d81a94e048e83154c06bd5b8cb42eade3ce",
+      "bytes": 28168,
+      "width": 1098,
+      "height": 189,
+      "url": "https://projectaegis.fly.dev/source-assets/0/3e1b76946c28472a240f44ce23e55d81a94e048e83154c06bd5b8cb42eade3ce.jpg",
+      "alt": "Bucket and ten potatoes spaced 5 m then 3 m apart",
+      "source": "26_potato"
+    },
+    {
+      "filename": "0216ef13e531e42aca532bb8dedb6b244cf860423b6c76307174b9d97e6cfb53.jpg",
+      "sha256": "0216ef13e531e42aca532bb8dedb6b244cf860423b6c76307174b9d97e6cfb53",
+      "bytes": 29994,
+      "width": 456,
+      "height": 468,
+      "url": "https://projectaegis.fly.dev/source-assets/0/0216ef13e531e42aca532bb8dedb6b244cf860423b6c76307174b9d97e6cfb53.jpg",
+      "alt": "Two-section radio tower supported by wires to O, with OP 6 m",
+      "source": "26_tower"
+    },
+    {
+      "filename": "6c49086b174fd0077f9ab7ba656819aa1ae58e21d97bc2a844745cda91f5462b.jpg",
+      "sha256": "6c49086b174fd0077f9ab7ba656819aa1ae58e21d97bc2a844745cda91f5462b",
+      "bytes": 19569,
+      "width": 291,
+      "height": 291,
+      "url": "https://projectaegis.fly.dev/source-assets/0/6c49086b174fd0077f9ab7ba656819aa1ae58e21d97bc2a844745cda91f5462b.jpg",
+      "alt": "Brooch circle divided by five diameters into ten equal sectors",
+      "source": "26_brooch"
+    },
+    {
+      "filename": "fee83f17077dffb69d3cf904acf2bbe3506cf756ac09164971b330dc5fc5b8e6.jpg",
+      "sha256": "fee83f17077dffb69d3cf904acf2bbe3506cf756ac09164971b330dc5fc5b8e6",
+      "bytes": 42930,
+      "width": 1101,
+      "height": 261,
+      "url": "https://projectaegis.fly.dev/source-assets/0/fee83f17077dffb69d3cf904acf2bbe3506cf756ac09164971b330dc5fc5b8e6.jpg",
+      "alt": "Three triangles with included 60 degree angles and side lengths 6 and 4, 9 and 6, 4 and 3 cm",
+      "source": "26_three_triangles"
+    },
+    {
+      "filename": "5c5a94dfbf716a418385c02a8257bccdc417dbab45400929f58ad9be1a37497b.jpg",
+      "sha256": "5c5a94dfbf716a418385c02a8257bccdc417dbab45400929f58ad9be1a37497b",
+      "bytes": 14588,
+      "width": 309,
+      "height": 216,
+      "url": "https://projectaegis.fly.dev/source-assets/0/5c5a94dfbf716a418385c02a8257bccdc417dbab45400929f58ad9be1a37497b.jpg",
+      "alt": "Incircle of triangle LMN with reflex angle AOB of 240 degrees and tangent vertex N",
+      "source": "26_reflex240"
+    },
+    {
+      "filename": "9eb3383d09a1058a73dea43c3d81d7a7c490e51b511485be0d0228445f94a374.jpg",
+      "sha256": "9eb3383d09a1058a73dea43c3d81d7a7c490e51b511485be0d0228445f94a374",
+      "bytes": 12885,
+      "width": 267,
+      "height": 240,
+      "url": "https://projectaegis.fly.dev/source-assets/0/9eb3383d09a1058a73dea43c3d81d7a7c490e51b511485be0d0228445f94a374.jpg",
+      "alt": "Minor sector SOT of central angle 30 degrees",
+      "source": "26_sector30"
+    },
+    {
+      "filename": "e5609a8f791f95a66c83df30f9b5354d6b25820824d8287e810ae07d2c8d9d40.jpg",
+      "sha256": "e5609a8f791f95a66c83df30f9b5354d6b25820824d8287e810ae07d2c8d9d40",
+      "bytes": 13696,
+      "width": 279,
+      "height": 237,
+      "url": "https://projectaegis.fly.dev/source-assets/0/e5609a8f791f95a66c83df30f9b5354d6b25820824d8287e810ae07d2c8d9d40.jpg",
+      "alt": "Circle with centre O and arc XYZ subtending 45 degrees",
+      "source": "26_arc45"
+    },
+    {
+      "filename": "fafdf5df8bcb7f09c4d372354edb0b7b6a52ff3c73e2d044b015d1f409b954fd.jpg",
+      "sha256": "fafdf5df8bcb7f09c4d372354edb0b7b6a52ff3c73e2d044b015d1f409b954fd",
+      "bytes": 111024,
+      "width": 926,
+      "height": 943,
+      "url": "https://projectaegis.fly.dev/source-assets/0/fafdf5df8bcb7f09c4d372354edb0b7b6a52ff3c73e2d044b015d1f409b954fd.jpg",
+      "alt": "Worked-solution coordinate graph with labelled intersection points",
+      "source": "26_graph_triangle"
+    },
+    {
+      "filename": "ed3f34d6aaf43dad8d1a011a5827499043f37c2ee9f0741d5eefef720de4fae6.jpg",
+      "sha256": "ed3f34d6aaf43dad8d1a011a5827499043f37c2ee9f0741d5eefef720de4fae6",
+      "bytes": 150551,
+      "width": 1142,
+      "height": 943,
+      "url": "https://projectaegis.fly.dev/source-assets/0/ed3f34d6aaf43dad8d1a011a5827499043f37c2ee9f0741d5eefef720de4fae6.jpg",
+      "alt": "Worked-solution coordinate graph with labelled intersection points",
+      "source": "26_graph_donations"
+    },
+    {
+      "filename": "7821c3ba9faecd5671741347eec05225fd0b4750427cbe2b281cc23b776e6479.jpg",
+      "sha256": "7821c3ba9faecd5671741347eec05225fd0b4750427cbe2b281cc23b776e6479",
+      "bytes": 71672,
+      "width": 563,
+      "height": 952,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7821c3ba9faecd5671741347eec05225fd0b4750427cbe2b281cc23b776e6479.jpg",
+      "alt": "Worked-solution coordinate graph with labelled intersection points",
+      "source": "26_graph_xaxis"
+    },
+    {
+      "filename": "b20a6994b84729c1255300aeb4ac808ea811c5e64168034335ff65eb52008960.jpg",
+      "sha256": "b20a6994b84729c1255300aeb4ac808ea811c5e64168034335ff65eb52008960",
+      "bytes": 65757,
+      "width": 872,
+      "height": 722,
+      "url": "https://projectaegis.fly.dev/source-assets/0/b20a6994b84729c1255300aeb4ac808ea811c5e64168034335ff65eb52008960.jpg",
+      "alt": "Basic Proportionality Theorem: D on AB, E on AC, DE parallel BC, joins BE and CD",
+      "source": "proof_bpt"
+    },
+    {
+      "filename": "7cab64d152e819d8b85de61a504398d69afefdb7be9418e4c7e6fa38a29ff3b5.jpg",
+      "sha256": "7cab64d152e819d8b85de61a504398d69afefdb7be9418e4c7e6fa38a29ff3b5",
+      "bytes": 61552,
+      "width": 489,
+      "height": 459,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7cab64d152e819d8b85de61a504398d69afefdb7be9418e4c7e6fa38a29ff3b5.jpg",
+      "alt": "Circumscribed quadrilateral ABCD with centre O and contact radii",
+      "source": "25_proof_circumscribed"
+    },
+    {
+      "filename": "e2ab58f7e2d2561025022165cc7e0010b1559c184c8779c89b3f4a3f12fe1c71.jpg",
+      "sha256": "e2ab58f7e2d2561025022165cc7e0010b1559c184c8779c89b3f4a3f12fe1c71",
+      "bytes": 26330,
+      "width": 588,
+      "height": 294,
+      "url": "https://projectaegis.fly.dev/source-assets/0/e2ab58f7e2d2561025022165cc7e0010b1559c184c8779c89b3f4a3f12fe1c71.jpg",
+      "alt": "Parallelogram ABCD with diagonal BD and AE intersecting at F",
+      "source": "25_proof_parallelogram"
+    },
+    {
+      "filename": "564ee67c8ad59cc25df0ae29cfa82bbf916ec6c0c741fb4cc132e6ad92320747.jpg",
+      "sha256": "564ee67c8ad59cc25df0ae29cfa82bbf916ec6c0c741fb4cc132e6ad92320747",
+      "bytes": 16778,
+      "width": 459,
+      "height": 288,
+      "url": "https://projectaegis.fly.dev/source-assets/0/564ee67c8ad59cc25df0ae29cfa82bbf916ec6c0c741fb4cc132e6ad92320747.jpg",
+      "alt": "Triangle ABC with altitude AD perpendicular to BC",
+      "source": "25_proof_altitude"
+    }
+  ]
+}
