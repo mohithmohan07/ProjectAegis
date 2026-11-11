@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "filename": "b1948b182ef0c23ee126badef67cdb48235e8e3ade1409289e387f27513d4003.jpg",
+      "sha256": "b1948b182ef0c23ee126badef67cdb48235e8e3ade1409289e387f27513d4003",
+      "bytes": 36805,
+      "width": 219,
+      "height": 281,
+      "url": "https://projectaegis.fly.dev/source-assets/0/b1948b182ef0c23ee126badef67cdb48235e8e3ade1409289e387f27513d4003.jpg",
+      "alt": "sst_2026_painting",
+      "source": "sst_2026_painting"
+    },
+    {
+      "filename": "6e3d7cbed23f2094128e348bd21555a262a28c884db5a72c2e079f4445246e83.jpg",
+      "sha256": "6e3d7cbed23f2094128e348bd21555a262a28c884db5a72c2e079f4445246e83",
+      "bytes": 22021,
+      "width": 168,
+      "height": 245,
+      "url": "https://projectaegis.fly.dev/source-assets/0/6e3d7cbed23f2094128e348bd21555a262a28c884db5a72c2e079f4445246e83.jpg",
+      "alt": "sst_2026_woman",
+      "source": "sst_2026_woman"
+    },
+    {
+      "filename": "9e7ba4977ea9002901b597b866363cdff0c7aeef4b52fdd63fc3080c5a5c62d7.jpg",
+      "sha256": "9e7ba4977ea9002901b597b866363cdff0c7aeef4b52fdd63fc3080c5a5c62d7",
+      "bytes": 13458,
+      "width": 611,
+      "height": 51,
+      "url": "https://projectaegis.fly.dev/source-assets/0/9e7ba4977ea9002901b597b866363cdff0c7aeef4b52fdd63fc3080c5a5c62d7.jpg",
+      "alt": "sst_2026_soil_flowchart",
+      "source": "sst_2026_soil_flowchart"
+    },
+    {
+      "filename": "d1cf5c0e69832f1725b121a299aa9064d675a483802e1d858b4ec2c5cfc78886.jpg",
+      "sha256": "d1cf5c0e69832f1725b121a299aa9064d675a483802e1d858b4ec2c5cfc78886",
+      "bytes": 12731,
+      "width": 485,
+      "height": 124,
+      "url": "https://projectaegis.fly.dev/source-assets/0/d1cf5c0e69832f1725b121a299aa9064d675a483802e1d858b4ec2c5cfc78886.jpg",
+      "alt": "sst_2026_mineral_flowchart",
+      "source": "sst_2026_mineral_flowchart"
+    },
+    {
+      "filename": "bf22f35921ef08ffe9bf5e12c939303fb019fe00f8965cc4dab52b05b20fa99a.jpg",
+      "sha256": "bf22f35921ef08ffe9bf5e12c939303fb019fe00f8965cc4dab52b05b20fa99a",
+      "bytes": 83951,
+      "width": 555,
+      "height": 234,
+      "url": "https://projectaegis.fly.dev/source-assets/0/bf22f35921ef08ffe9bf5e12c939303fb019fe00f8965cc4dab52b05b20fa99a.jpg",
+      "alt": "sst_2025_workphoto",
+      "source": "sst_2025_workphoto"
+    },
+    {
+      "filename": "24eab748e1a4f020f4484290210510da0bb675713134f66521c2b59a2d5b89f3.jpg",
+      "sha256": "24eab748e1a4f020f4484290210510da0bb675713134f66521c2b59a2d5b89f3",
+      "bytes": 139107,
+      "width": 893,
+      "height": 1263,
+      "url": "https://projectaegis.fly.dev/source-assets/0/24eab748e1a4f020f4484290210510da0bb675713134f66521c2b59a2d5b89f3.jpg",
+      "alt": "sst_2025_map",
+      "source": "sst_2025_map"
+    },
+    {
+      "filename": "8a9f2928ca1fbb1f4e15bba39f6e8290de7e8a92025f935a91b5c7aec29ab860.jpg",
+      "sha256": "8a9f2928ca1fbb1f4e15bba39f6e8290de7e8a92025f935a91b5c7aec29ab860",
+      "bytes": 169606,
+      "width": 918,
+      "height": 1512,
+      "url": "https://projectaegis.fly.dev/source-assets/0/8a9f2928ca1fbb1f4e15bba39f6e8290de7e8a92025f935a91b5c7aec29ab860.jpg",
+      "alt": "sst_2026_map",
+      "source": "sst_2026_map"
+    },
+    {
+      "filename": "68a29bc2d6f7156cdeae64340bd23105f773da498d2a5dc446f3a048c48df6a6.jpg",
+      "sha256": "68a29bc2d6f7156cdeae64340bd23105f773da498d2a5dc446f3a048c48df6a6",
+      "bytes": 322437,
+      "width": 825,
+      "height": 1030,
+      "url": "https://projectaegis.fly.dev/source-assets/0/68a29bc2d6f7156cdeae64340bd23105f773da498d2a5dc446f3a048c48df6a6.jpg",
+      "alt": "sst_2025_answer_map",
+      "source": "sst_2025_answer_map"
+    },
+    {
+      "filename": "124360572ee23030908c1eb428ff8373a19203f862a0bb3efda797ed7df66e9c.jpg",
+      "sha256": "124360572ee23030908c1eb428ff8373a19203f862a0bb3efda797ed7df66e9c",
+      "bytes": 88998,
+      "width": 440,
+      "height": 610,
+      "url": "https://projectaegis.fly.dev/source-assets/0/124360572ee23030908c1eb428ff8373a19203f862a0bb3efda797ed7df66e9c.jpg",
+      "alt": "sst_2026_answer_map",
+      "source": "sst_2026_answer_map"
+    }
+  ]
+}

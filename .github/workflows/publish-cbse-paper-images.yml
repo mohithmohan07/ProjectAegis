@@ -1,0 +1,40 @@
+name: Publish reviewed CBSE paper images only
+
+on:
+  push:
+    branches: [codex/social-english-image-assets]
+    paths:
+      - '.github/workflows/publish-cbse-paper-images.yml'
+      - 'ops/concept-image-assets/2026-11-11-cbse/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  publish-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Publish content-addressed CBSE figures and verify public URLs
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          for manifest in ops/concept-image-assets/2026-11-11-cbse/*/manifest.json; do
+            directory="$(dirname "$manifest")"
+            subject="$(basename "$directory")"
+            python backend/scripts/publish_concept_images.py --assets "$directory"
+            mv image-url-verification.json "cbse-${subject}-image-url-verification.json"
+          done
+      - name: Save verification receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cbse-paper-image-url-verification
+          path: 'cbse-*-image-url-verification.json'
+          if-no-files-found: error
