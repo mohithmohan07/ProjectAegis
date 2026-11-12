@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "asset_id": "2f6d410828f1b946",
+      "filename": "683f2ac53d83ddf5a7aa3e4698b10f3d289e581f46e41f8d6658615b65b98871.jpg",
+      "sha256": "683f2ac53d83ddf5a7aa3e4698b10f3d289e581f46e41f8d6658615b65b98871",
+      "bytes": 71591,
+      "url": "https://projectaegis.fly.dev/source-assets/0/683f2ac53d83ddf5a7aa3e4698b10f3d289e581f46e41f8d6658615b65b98871.jpg"
+    },
+    {
+      "asset_id": "59387332f0542ffd",
+      "filename": "ff45fab7f8fcac0ac3bbd85103223789c486170bcd495e59e7b6b76bf4e19b20.jpg",
+      "sha256": "ff45fab7f8fcac0ac3bbd85103223789c486170bcd495e59e7b6b76bf4e19b20",
+      "bytes": 115691,
+      "url": "https://projectaegis.fly.dev/source-assets/0/ff45fab7f8fcac0ac3bbd85103223789c486170bcd495e59e7b6b76bf4e19b20.jpg"
+    },
+    {
+      "asset_id": "0aeae091528e31b3",
+      "filename": "96bee743485bed97ff541c5f51361f0899bdbca6446201989dfe82306b89fa7f.jpg",
+      "sha256": "96bee743485bed97ff541c5f51361f0899bdbca6446201989dfe82306b89fa7f",
+      "bytes": 117509,
+      "url": "https://projectaegis.fly.dev/source-assets/0/96bee743485bed97ff541c5f51361f0899bdbca6446201989dfe82306b89fa7f.jpg"
+    },
+    {
+      "asset_id": "a04e9f21d5c0fc99",
+      "filename": "d898039eb4e5f72aaa97d943a3d042fc040b5cb4e5eec324592fe2399bbb1e87.jpg",
+      "sha256": "d898039eb4e5f72aaa97d943a3d042fc040b5cb4e5eec324592fe2399bbb1e87",
+      "bytes": 78889,
+      "url": "https://projectaegis.fly.dev/source-assets/0/d898039eb4e5f72aaa97d943a3d042fc040b5cb4e5eec324592fe2399bbb1e87.jpg"
+    },
+    {
+      "asset_id": "324665ba4a234216",
+      "filename": "c355432784df785201faca0bd7c41659997b46f1076f90b7e88c09664dfffa1b.jpg",
+      "sha256": "c355432784df785201faca0bd7c41659997b46f1076f90b7e88c09664dfffa1b",
+      "bytes": 81761,
+      "url": "https://projectaegis.fly.dev/source-assets/0/c355432784df785201faca0bd7c41659997b46f1076f90b7e88c09664dfffa1b.jpg"
+    },
+    {
+      "asset_id": "64bcb252833c369f",
+      "filename": "43916dfbba0a3f35d308e99f08256433a7af606cc93b93f2892a6cc655b78b9f.jpg",
+      "sha256": "43916dfbba0a3f35d308e99f08256433a7af606cc93b93f2892a6cc655b78b9f",
+      "bytes": 70390,
+      "url": "https://projectaegis.fly.dev/source-assets/0/43916dfbba0a3f35d308e99f08256433a7af606cc93b93f2892a6cc655b78b9f.jpg"
+    },
+    {
+      "asset_id": "055d4f2e4e73c1e4",
+      "filename": "1bd86f86e57058234f335564e878f376e5b67ab20f9687f6d8b6b89de9e43992.jpg",
+      "sha256": "1bd86f86e57058234f335564e878f376e5b67ab20f9687f6d8b6b89de9e43992",
+      "bytes": 75142,
+      "url": "https://projectaegis.fly.dev/source-assets/0/1bd86f86e57058234f335564e878f376e5b67ab20f9687f6d8b6b89de9e43992.jpg"
+    },
+    {
+      "asset_id": "f696c8a73a1550f2",
+      "filename": "c31c1470360ac1be1ecdc96d3237543017207555aa7485c4cb9540cd9d0768e2.jpg",
+      "sha256": "c31c1470360ac1be1ecdc96d3237543017207555aa7485c4cb9540cd9d0768e2",
+      "bytes": 60398,
+      "url": "https://projectaegis.fly.dev/source-assets/0/c31c1470360ac1be1ecdc96d3237543017207555aa7485c4cb9540cd9d0768e2.jpg"
+    },
+    {
+      "asset_id": "aef7cf85814c1cd4",
+      "filename": "a2179a99cd37cc5aaa8650769999cd892310bad7d3e1643fd771a4bbfd415fae.jpg",
+      "sha256": "a2179a99cd37cc5aaa8650769999cd892310bad7d3e1643fd771a4bbfd415fae",
+      "bytes": 95464,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a2179a99cd37cc5aaa8650769999cd892310bad7d3e1643fd771a4bbfd415fae.jpg"
+    },
+    {
+      "asset_id": "eb53e845b95ef8bc",
+      "filename": "c916acd686ca00107417e48469ae5ff2456937ce16d021169ce1a870cf5ff207.jpg",
+      "sha256": "c916acd686ca00107417e48469ae5ff2456937ce16d021169ce1a870cf5ff207",
+      "bytes": 79830,
+      "url": "https://projectaegis.fly.dev/source-assets/0/c916acd686ca00107417e48469ae5ff2456937ce16d021169ce1a870cf5ff207.jpg"
+    },
+    {
+      "asset_id": "a898afa2ce292178",
+      "filename": "7020b127300e3bb6dfe8fe63db4ea5c74d4e570fca99916faecedc52441a685c.jpg",
+      "sha256": "7020b127300e3bb6dfe8fe63db4ea5c74d4e570fca99916faecedc52441a685c",
+      "bytes": 35498,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7020b127300e3bb6dfe8fe63db4ea5c74d4e570fca99916faecedc52441a685c.jpg"
+    },
+    {
+      "asset_id": "dfddd4ef228c1708",
+      "filename": "e025a0425cbc23fee72c5c7178411d6196e535117e9b0693079b0ad2ce165b1c.jpg",
+      "sha256": "e025a0425cbc23fee72c5c7178411d6196e535117e9b0693079b0ad2ce165b1c",
+      "bytes": 55097,
+      "url": "https://projectaegis.fly.dev/source-assets/0/e025a0425cbc23fee72c5c7178411d6196e535117e9b0693079b0ad2ce165b1c.jpg"
+    },
+    {
+      "asset_id": "b1a8197f2bdd2c78",
+      "filename": "a33c30711ae17c92aa4e08d4579d2c9669ae101de82d6382244d4fbb406e779a.jpg",
+      "sha256": "a33c30711ae17c92aa4e08d4579d2c9669ae101de82d6382244d4fbb406e779a",
+      "bytes": 55625,
+      "url": "https://projectaegis.fly.dev/source-assets/0/a33c30711ae17c92aa4e08d4579d2c9669ae101de82d6382244d4fbb406e779a.jpg"
+    },
+    {
+      "asset_id": "5d40f779c3f4a4d6",
+      "filename": "247091ac88a7db2d765771ff6d226ed228a50bf982b5a0c8eda9936fc5dfc884.jpg",
+      "sha256": "247091ac88a7db2d765771ff6d226ed228a50bf982b5a0c8eda9936fc5dfc884",
+      "bytes": 78353,
+      "url": "https://projectaegis.fly.dev/source-assets/0/247091ac88a7db2d765771ff6d226ed228a50bf982b5a0c8eda9936fc5dfc884.jpg"
+    },
+    {
+      "asset_id": "eb04da5286c9197e",
+      "filename": "3c5774ec0e2cbca6d3710a6ce7939efb8884585fe3392f444b396ff5956bafe8.jpg",
+      "sha256": "3c5774ec0e2cbca6d3710a6ce7939efb8884585fe3392f444b396ff5956bafe8",
+      "bytes": 57591,
+      "url": "https://projectaegis.fly.dev/source-assets/0/3c5774ec0e2cbca6d3710a6ce7939efb8884585fe3392f444b396ff5956bafe8.jpg"
+    },
+    {
+      "asset_id": "60b64c6933854a49",
+      "filename": "5055659fa30afbc831768236855fde163d0f2786c51c0a7c0139e60216d9fc16.jpg",
+      "sha256": "5055659fa30afbc831768236855fde163d0f2786c51c0a7c0139e60216d9fc16",
+      "bytes": 56573,
+      "url": "https://projectaegis.fly.dev/source-assets/0/5055659fa30afbc831768236855fde163d0f2786c51c0a7c0139e60216d9fc16.jpg"
+    },
+    {
+      "asset_id": "6deb1820684c6019",
+      "filename": "7d4d40542b9ca5b5d9fa7462ed6bd76694a852c2279702f03919db2105eecfbc.jpg",
+      "sha256": "7d4d40542b9ca5b5d9fa7462ed6bd76694a852c2279702f03919db2105eecfbc",
+      "bytes": 47629,
+      "url": "https://projectaegis.fly.dev/source-assets/0/7d4d40542b9ca5b5d9fa7462ed6bd76694a852c2279702f03919db2105eecfbc.jpg"
+    },
+    {
+      "asset_id": "5f194b09e79e4edc",
+      "filename": "ea66724ed05b2188884ab00349967948150c67e9339d4d2f332ae101ec109cef.jpg",
+      "sha256": "ea66724ed05b2188884ab00349967948150c67e9339d4d2f332ae101ec109cef",
+      "bytes": 56685,
+      "url": "https://projectaegis.fly.dev/source-assets/0/ea66724ed05b2188884ab00349967948150c67e9339d4d2f332ae101ec109cef.jpg"
+    },
+    {
+      "asset_id": "d080b65cf0ad8f50",
+      "filename": "86d3e568c36b5f68f09e3cbbb7dbc0830306c0f23eb302f221cc11f61ff2ae41.jpg",
+      "sha256": "86d3e568c36b5f68f09e3cbbb7dbc0830306c0f23eb302f221cc11f61ff2ae41",
+      "bytes": 67111,
+      "url": "https://projectaegis.fly.dev/source-assets/0/86d3e568c36b5f68f09e3cbbb7dbc0830306c0f23eb302f221cc11f61ff2ae41.jpg"
+    }
+  ]
+}
