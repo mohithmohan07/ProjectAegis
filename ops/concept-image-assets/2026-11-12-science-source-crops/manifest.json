@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "offline_authoring": true,
+  "job_id": 0,
+  "assets": [
+    {
+      "asset_id": "MgO_A",
+      "filename": "3e09ca4ad34d76ff32d4a6acdad30e29db63f7f4ddba97c64f975ebd832dca25.jpg",
+      "sha256": "3e09ca4ad34d76ff32d4a6acdad30e29db63f7f4ddba97c64f975ebd832dca25",
+      "bytes": 17705,
+      "width": 850,
+      "height": 130,
+      "alt": "Option A: magnesium oxide electron transfer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3e09ca4ad34d76ff32d4a6acdad30e29db63f7f4ddba97c64f975ebd832dca25.jpg",
+      "source": "Set_1_31-1-1.pdf",
+      "page": 7,
+      "crop_xywh_at_140dpi": [
+        172,
+        436,
+        425,
+        65
+      ],
+      "source_year": 2025,
+      "source_kind": "question_paper"
+    },
+    {
+      "asset_id": "MgO_B",
+      "filename": "641ee46b7c0729a180bb8042c865a2d6bd2668fa8054bdcbb2788d2fc6081f2d.jpg",
+      "sha256": "641ee46b7c0729a180bb8042c865a2d6bd2668fa8054bdcbb2788d2fc6081f2d",
+      "bytes": 15318,
+      "width": 850,
+      "height": 122,
+      "alt": "Option B: magnesium oxide electron transfer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/641ee46b7c0729a180bb8042c865a2d6bd2668fa8054bdcbb2788d2fc6081f2d.jpg",
+      "source": "Set_1_31-1-1.pdf",
+      "page": 7,
+      "crop_xywh_at_140dpi": [
+        172,
+        508,
+        425,
+        61
+      ],
+      "source_year": 2025,
+      "source_kind": "question_paper"
+    },
+    {
+      "asset_id": "MgO_C",
+      "filename": "a0e66f1c228d187bdb1b413c141303cea51ba536cad5d9d95c71100797b45e82.jpg",
+      "sha256": "a0e66f1c228d187bdb1b413c141303cea51ba536cad5d9d95c71100797b45e82",
+      "bytes": 22871,
+      "width": 850,
+      "height": 198,
+      "alt": "Option C: magnesium oxide electron transfer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a0e66f1c228d187bdb1b413c141303cea51ba536cad5d9d95c71100797b45e82.jpg",
+      "source": "Set_1_31-1-1.pdf",
+      "page": 7,
+      "crop_xywh_at_140dpi": [
+        172,
+        572,
+        425,
+        99
+      ],
+      "source_year": 2025,
+      "source_kind": "question_paper"
+    },
+    {
+      "asset_id": "MgO_D",
+      "filename": "3b907d744769d71302919089ccb9a3cc6d94a0fa383fe1ec4696b00b9c37e5da.jpg",
+      "sha256": "3b907d744769d71302919089ccb9a3cc6d94a0fa383fe1ec4696b00b9c37e5da",
+      "bytes": 18657,
+      "width": 850,
+      "height": 126,
+      "alt": "Option D: magnesium oxide electron transfer",
+      "url": "https://projectaegis.fly.dev/source-assets/0/3b907d744769d71302919089ccb9a3cc6d94a0fa383fe1ec4696b00b9c37e5da.jpg",
+      "source": "Set_1_31-1-1.pdf",
+      "page": 7,
+      "crop_xywh_at_140dpi": [
+        172,
+        677,
+        425,
+        63
+      ],
+      "source_year": 2025,
+      "source_kind": "question_paper"
+    },
+    {
+      "asset_id": "butene_isomers",
+      "filename": "d8a32cdbedbbd39dcd05219f91d4325395bced3e6508e1bd443ac67077b861d1.jpg",
+      "sha256": "d8a32cdbedbbd39dcd05219f91d4325395bced3e6508e1bd443ac67077b861d1",
+      "bytes": 50387,
+      "width": 1292,
+      "height": 380,
+      "alt": "Three full displayed isomeric structures of butene; any two",
+      "url": "https://projectaegis.fly.dev/source-assets/0/d8a32cdbedbbd39dcd05219f91d4325395bced3e6508e1bd443ac67077b861d1.jpg",
+      "source": "2025_Science_sets_1_2_3_MS.pdf",
+      "page": 8,
+      "crop_xywh_at_140dpi": [
+        210,
+        269,
+        646,
+        190
+      ],
+      "source_year": 2025,
+      "source_kind": "official_marking_scheme"
+    }
+  ]
+}
