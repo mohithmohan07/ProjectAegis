@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "assets": [
+    {
+      "asset_id": "convex_infinity",
+      "filename": "4d13bbb6781a5a14affe22c9ab829cbd504143db154b499d69b6acb4810082c6.jpg",
+      "sha256": "4d13bbb6781a5a14affe22c9ab829cbd504143db154b499d69b6acb4810082c6",
+      "bytes": 52121,
+      "url": "https://projectaegis.fly.dev/source-assets/0/4d13bbb6781a5a14affe22c9ab829cbd504143db154b499d69b6acb4810082c6.jpg",
+      "source": "2025_Science_sets_1_2_3_MS.pdf",
+      "page": 7,
+      "crop_xywh_at_1200px_height": [
+        200,
+        110,
+        410,
+        200
+      ]
+    },
+    {
+      "asset_id": "convex_finite",
+      "filename": "2c2e1330e083fe5b2cf25edc5eaba5e461e6392a14f1c0dc8f04ea34921bc148.jpg",
+      "sha256": "2c2e1330e083fe5b2cf25edc5eaba5e461e6392a14f1c0dc8f04ea34921bc148",
+      "bytes": 56234,
+      "url": "https://projectaegis.fly.dev/source-assets/0/2c2e1330e083fe5b2cf25edc5eaba5e461e6392a14f1c0dc8f04ea34921bc148.jpg",
+      "source": "2025_Science_sets_1_2_3_MS.pdf",
+      "page": 7,
+      "crop_xywh_at_1200px_height": [
+        235,
+        355,
+        375,
+        210
+      ]
+    },
+    {
+      "asset_id": "hyper_uncorrected",
+      "filename": "1bc00eaff69f1e7b8033f5c48e84a9a96bca4f3e5625dc0cf26a8e68bef21abd.jpg",
+      "sha256": "1bc00eaff69f1e7b8033f5c48e84a9a96bca4f3e5625dc0cf26a8e68bef21abd",
+      "bytes": 22186,
+      "url": "https://projectaegis.fly.dev/source-assets/0/1bc00eaff69f1e7b8033f5c48e84a9a96bca4f3e5625dc0cf26a8e68bef21abd.jpg",
+      "source": "2026_Science_sets_1_2_3_MS.pdf",
+      "page": 9,
+      "crop_xywh_at_1200px_height": [
+        233,
+        130,
+        263,
+        100
+      ]
+    },
+    {
+      "asset_id": "hyper_corrected",
+      "filename": "9d97e79b6e20cd0e611f82ffd6268c4ec5a17e6010548662c5cae756a3956c68.jpg",
+      "sha256": "9d97e79b6e20cd0e611f82ffd6268c4ec5a17e6010548662c5cae756a3956c68",
+      "bytes": 30433,
+      "url": "https://projectaegis.fly.dev/source-assets/0/9d97e79b6e20cd0e611f82ffd6268c4ec5a17e6010548662c5cae756a3956c68.jpg",
+      "source": "2026_Science_sets_1_2_3_MS.pdf",
+      "page": 9,
+      "crop_xywh_at_1200px_height": [
+        253,
+        300,
+        252,
+        110
+      ]
+    }
+  ]
+}
