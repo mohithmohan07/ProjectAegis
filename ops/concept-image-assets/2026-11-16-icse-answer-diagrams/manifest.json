@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "asset_id": "ICSE_SELINA_CH16_EX16A_Q19",
+      "filename": "b547ad48aaab8d65ec0271ae03fc91380a80fbec8e1cd80e19aef6db8bd666ba.jpg",
+      "sha256": "b547ad48aaab8d65ec0271ae03fc91380a80fbec8e1cd80e19aef6db8bd666ba",
+      "bytes": 255819,
+      "width": 1440,
+      "height": 1440,
+      "usage": "answer explanation only; never question stem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/b547ad48aaab8d65ec0271ae03fc91380a80fbec8e1cd80e19aef6db8bd666ba.jpg"
+    },
+    {
+      "asset_id": "ICSE_SELINA_CH16_EX16A_Q20",
+      "filename": "625f0d97d26acb56d5df81f0188ffe53b5aeaf930f7bf4d6e2deb7eb5b46d390.jpg",
+      "sha256": "625f0d97d26acb56d5df81f0188ffe53b5aeaf930f7bf4d6e2deb7eb5b46d390",
+      "bytes": 147279,
+      "width": 1440,
+      "height": 1080,
+      "usage": "answer explanation only; never question stem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/625f0d97d26acb56d5df81f0188ffe53b5aeaf930f7bf4d6e2deb7eb5b46d390.jpg"
+    },
+    {
+      "asset_id": "ICSE_SELINA_CH16_EX16A_Q10",
+      "filename": "985deea26f4df9999f7d929f060164969ce30f4f67d112863cf1e3991d5cf542.jpg",
+      "sha256": "985deea26f4df9999f7d929f060164969ce30f4f67d112863cf1e3991d5cf542",
+      "bytes": 163258,
+      "width": 1620,
+      "height": 1080,
+      "usage": "answer explanation only; never question stem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/985deea26f4df9999f7d929f060164969ce30f4f67d112863cf1e3991d5cf542.jpg"
+    },
+    {
+      "asset_id": "10ICMA_SOURCE_ADAPTED_05",
+      "filename": "074431450239d1ca0611e476f9a5b0eb3c9d16cea9ede9ca760334d1de8244ee.jpg",
+      "sha256": "074431450239d1ca0611e476f9a5b0eb3c9d16cea9ede9ca760334d1de8244ee",
+      "bytes": 264930,
+      "width": 1763,
+      "height": 1259,
+      "usage": "answer explanation only; never question stem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/074431450239d1ca0611e476f9a5b0eb3c9d16cea9ede9ca760334d1de8244ee.jpg"
+    },
+    {
+      "asset_id": "10ICMA_SOURCE_ADAPTED_09",
+      "filename": "a11e2dab32ca22f2679ad70be4de29cabf354fff3f6aefcd87f2977459ad16a9.jpg",
+      "sha256": "a11e2dab32ca22f2679ad70be4de29cabf354fff3f6aefcd87f2977459ad16a9",
+      "bytes": 216807,
+      "width": 1280,
+      "height": 1600,
+      "usage": "answer explanation only; never question stem",
+      "url": "https://projectaegis.fly.dev/source-assets/0/a11e2dab32ca22f2679ad70be4de29cabf354fff3f6aefcd87f2977459ad16a9.jpg"
+    }
+  ]
+}
