@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "job_id": 0,
+  "offline_authoring": true,
+  "assets": [
+    {
+      "asset_id": "Ch06_D22_corrected_SSS",
+      "filename": "35e1f53d616ee3b46544a951a148a20b7d8b7bdb74b72e95d469b37f378c2afd.jpg",
+      "sha256": "35e1f53d616ee3b46544a951a148a20b7d8b7bdb74b72e95d469b37f378c2afd",
+      "bytes": 154594,
+      "width": 1800,
+      "height": 1080,
+      "url": "https://projectaegis.fly.dev/source-assets/0/35e1f53d616ee3b46544a951a148a20b7d8b7bdb74b72e95d469b37f378c2afd.jpg"
+    },
+    {
+      "asset_id": "Ch12_D19_cylinder_two_cones",
+      "filename": "aabdba220d2152ccb5e864caa1916120be2895233aca2805aad2ea937fb2bd80.jpg",
+      "sha256": "aabdba220d2152ccb5e864caa1916120be2895233aca2805aad2ea937fb2bd80",
+      "bytes": 170389,
+      "width": 1980,
+      "height": 827,
+      "url": "https://projectaegis.fly.dev/source-assets/0/aabdba220d2152ccb5e864caa1916120be2895233aca2805aad2ea937fb2bd80.jpg"
+    },
+    {
+      "asset_id": "Ch12_D20_capsule",
+      "filename": "fe241cdc049243143a31656151fba1bce2da180128d5f52e415b55e3b55090fb.jpg",
+      "sha256": "fe241cdc049243143a31656151fba1bce2da180128d5f52e415b55e3b55090fb",
+      "bytes": 154422,
+      "width": 1620,
+      "height": 990,
+      "url": "https://projectaegis.fly.dev/source-assets/0/fe241cdc049243143a31656151fba1bce2da180128d5f52e415b55e3b55090fb.jpg"
+    },
+    {
+      "asset_id": "Ch12_D29_bucket_and_heap",
+      "filename": "8f8549e5869c53a7c6ed6dbed49748942c6e69b671d5e1d661a269c9c4b0347d.jpg",
+      "sha256": "8f8549e5869c53a7c6ed6dbed49748942c6e69b671d5e1d661a269c9c4b0347d",
+      "bytes": 208345,
+      "width": 1980,
+      "height": 1026,
+      "url": "https://projectaegis.fly.dev/source-assets/0/8f8549e5869c53a7c6ed6dbed49748942c6e69b671d5e1d661a269c9c4b0347d.jpg"
+    }
+  ]
+}
