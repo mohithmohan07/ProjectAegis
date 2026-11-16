@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "filename": "b73fa15bf1e5d1f312e63c64d0bd7646d3dd2e959bcbc880ec1a1bd1fb504aa6.jpg",
+      "sha256": "b73fa15bf1e5d1f312e63c64d0bd7646d3dd2e959bcbc880ec1a1bd1fb504aa6",
+      "bytes": 112346,
+      "media_type": "image/jpeg",
+      "provenance": {
+        "source_file": "NCERT_Grade09_English_BelieveInYourself.pdf",
+        "source_sha256": "f2d0642761511a8914850739401bae53830b8ce10e51f930fc8f84899614aea2",
+        "pdf_page_1based": 1,
+        "crop_bbox_points": [
+          403.308,
+          284.328,
+          588.744,
+          459.35999999999996
+        ],
+        "render_dpi": 300,
+        "alt": "A person at the foot of a tall staircase, looking upward.",
+        "source_occurrence": "Reflect and Respond I, shared picture for questions 1 and 2",
+        "placement": "Post Concept source example shared visual context",
+        "review": "Tight complete picture. Questions, answer hints, title and page decoration excluded."
+      }
+    }
+  ]
+}
