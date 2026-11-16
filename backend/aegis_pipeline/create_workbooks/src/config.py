@@ -9,7 +9,7 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from aegis_pipeline.openai_policy import configured_openai_model
+from aegis_pipeline.openai_policy import configured_workbook_model
 
 ROOT = Path(__file__).resolve().parents[1]
 # OUTPUT_DIR is for SAMPLES only (e.g. `--sample`). Real workbook runs publish to
@@ -66,7 +66,7 @@ for _name in ("OPENAI_API_KEY", "OPENAI_BASE_URL"):
 
 
 DEFAULT_CONFIG: dict = {
-    "openai_model": configured_openai_model(),
+    "openai_model": configured_workbook_model(),
     "openai_api_key_env": "OPENAI_API_KEY",
     "openai_base_url": os.getenv("OPENAI_BASE_URL"),
     "margin_mm": 18,

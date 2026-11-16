@@ -77,6 +77,8 @@ workbook/
     └── validate.py       # PyMuPDF post-build checks
 ```
 
-Default model: `gpt-5.6-luna`. Aegis applies the shared policy automatically:
+Default model: `gpt-6-luna` (workbook generation only). Override with
+`AEGIS_WORKBOOK_OPENAI_MODEL` or the CLI `--model`; `AEGIS_OPENAI_MODEL`
+does not override the workbook model. Aegis applies the shared policy automatically:
 every registered purpose, including workbook planning and authoring, requests
 `xhigh` (Q22), with a lower effort used only for bounded recovery.
