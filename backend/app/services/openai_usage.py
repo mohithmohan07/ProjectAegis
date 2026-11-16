@@ -49,6 +49,18 @@ class Pricing:
 # so an unrecognized model is visible in the run summary instead of silently
 # understating spend.
 _PRICING: tuple[tuple[str, Pricing], ...] = (
+    # GPT-6 Luna verified 2026-11-16; existing model schedules stay unchanged.
+    (
+        "gpt-6-luna",
+        Pricing(
+            Decimal("0.10"), Decimal("0.01"), Decimal("0.50"),
+            "https://developers.openai.com/api/docs/models/gpt-6-luna",
+            cache_write_multiplier=Decimal("1.25"),
+            long_context_threshold=272_000,
+            long_input_multiplier=Decimal("2"),
+            long_output_multiplier=Decimal("1.5"),
+        ),
+    ),
     (
         "gpt-5.4-mini",
         Pricing(

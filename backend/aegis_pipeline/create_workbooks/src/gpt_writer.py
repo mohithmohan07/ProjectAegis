@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from aegis_pipeline.openai_policy import (
-    DEFAULT_OPENAI_MODEL,
+    configured_workbook_model,
     OpenAIPurpose,
     chat_request_policy,
     ensure_json_mode_prompt,
@@ -62,7 +62,7 @@ class GPTWriter:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
         self.api_key = os.getenv(cfg.get("openai_api_key_env", "OPENAI_API_KEY"))
-        self.model = cfg.get("openai_model", DEFAULT_OPENAI_MODEL)
+        self.model = cfg.get("openai_model") or configured_workbook_model()
         self.base_url = cfg.get("openai_base_url")
         self.enabled = bool(self.api_key)
         self._client = None

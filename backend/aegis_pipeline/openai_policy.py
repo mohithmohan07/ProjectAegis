@@ -17,6 +17,7 @@ from typing import Final, Literal
 
 
 DEFAULT_OPENAI_MODEL: Final = "gpt-5.6-luna"
+DEFAULT_WORKBOOK_MODEL: Final = "gpt-6-luna"
 OPENAI_MODEL_ENV: Final = "AEGIS_OPENAI_MODEL"
 OPENAI_PROVIDER_MAX_TOKENS_ENV: Final = "AEGIS_OPENAI_PROVIDER_MAX_TOKENS"
 OPENAI_CONTEXT_WINDOW_ENV: Final = "AEGIS_OPENAI_CONTEXT_WINDOW_TOKENS"
@@ -40,6 +41,7 @@ class ModelTokenCapacity:
 # Prefix matching covers aliases and snapshots. Keep the most specific prefixes
 # first so ``gpt-5.6`` is not swallowed by the broader ``gpt-5`` entry.
 MODEL_TOKEN_CAPACITIES: Final[tuple[tuple[str, ModelTokenCapacity], ...]] = (
+    ("gpt-6-luna", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5.6", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5.5", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5.4-mini", ModelTokenCapacity(400_000, 128_000)),
@@ -351,6 +353,11 @@ def provider_max_tokens_enabled() -> bool:
     ).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def configured_workbook_model() -> str:
+    """Workbook-only default; never inherit the unrelated pipeline override."""
+    return os.getenv("AEGIS_WORKBOOK_OPENAI_MODEL", "").strip() or DEFAULT_WORKBOOK_MODEL
+
+
 def configured_openai_model() -> str:
     """Return the deployment override, or the Aegis default model."""
     return os.environ.get(OPENAI_MODEL_ENV, DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
@@ -432,7 +439,7 @@ def supports_reasoning_effort(model: str) -> bool:
     OpenAI-compatible endpoint. Those overrides keep working without receiving
     unsupported model-specific request parameters.
     """
-    return model.strip().lower().startswith(("gpt-5.6", "gpt-5.4-mini", "gemini-3.8-flash"))
+    return model.strip().lower().startswith(("gpt-6-luna", "gpt-5.6", "gpt-5.4-mini", "gemini-3.8-flash"))
 
 
 def chat_request_policy(
