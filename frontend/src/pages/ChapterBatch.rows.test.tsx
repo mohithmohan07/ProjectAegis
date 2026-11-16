@@ -330,3 +330,55 @@ test("Clear forgets a selection made on another page too", async () => {
   await screen.findByText("Shapes");
   expect(checkboxFor(container, 1).checked).toBe(false);
 });
+
+// --------------------------------------------------------------------------- //
+// A dead chapter must not read as a dead end
+// --------------------------------------------------------------------------- //
+
+function dead(chapterId: number, name: string): ChapterBatchRow {
+  return {
+    ...row(chapterId, name),
+    job_id: 90 + chapterId,
+    source_filename: `${name.toLowerCase()}.pdf`,
+    state: "dead",
+    state_label: "Cannot resume",
+    // What the server actually sends for a non-resumable chapter: the source
+    // may be replaced, and nothing else may be done at all.
+    can: can({ upload_source: true }),
+    queue: queue({
+      task_id: 300 + chapterId, kind: "step01", state: "failed",
+      blocked_kind: "non_resumable", failure_code: "non_resumable",
+    }),
+  };
+}
+
+test("a chapter that cannot resume still offers the one action it has", async () => {
+  // Its own error message tells the reader to upload the PDF again, and the
+  // server says `upload_source`. The table used to require `!job_id` for that
+  // control, which a dead chapter can never satisfy — it has the refused run —
+  // so every branch was false and the row rendered a dash. That put the dead
+  // end back in the table after the server had removed it, leaving the drawer
+  // as the only way through (owner report, 15 September 2026).
+  apiMock.chapterBatchList.mockResolvedValue({
+    ...PAGE, items: [dead(9, "Minerals and Energy Resources")], total: 1, total_pages: 1,
+  });
+  const { container } = renderPage();
+
+  expect(await screen.findByText("Minerals and Energy Resources")).toBeTruthy();
+  expect(container.querySelector("#chapter-9-upload-source")).not.toBeNull();
+  expect(screen.queryByText("—")).toBeNull();
+});
+
+test("a chapter with real work to do still leads with that work", async () => {
+  // The upload is the LAST resort, never the headline: a row that can be
+  // retried must still show Retry, or the fix above would bury every genuine
+  // next step behind a file picker.
+  apiMock.chapterBatchList.mockResolvedValue({
+    ...PAGE, items: [retryable(4, "Retryable")], total: 1, total_pages: 1,
+  });
+  const { container } = renderPage();
+
+  expect(await screen.findByText("Retryable")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  expect(container.querySelector("#chapter-4-upload-source")).toBeNull();
+});
